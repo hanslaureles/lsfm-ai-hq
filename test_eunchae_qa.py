@@ -99,6 +99,47 @@ class TestEunchaeQAHonestFailures(unittest.TestCase):
         self.assertIn("Force Approve & Finalize", actions)
         self.assertEqual(color, 0xED4245)
 
+    def test_audit_application_package_unscored_llm_output_fails_closed(self):
+        """Invariant 7: Missing/unparseable score from LLM review must fail closed, not default to 90%."""
+        dummy_pdf = Path("test_dummy_res.pdf")
+        dummy_pdf.write_bytes(b"x" * 5000)
+        try:
+            tailor_res = {
+                "score": 85,
+                "report": "Clean report without placeholders",
+                "filename": "tailored_sample.md",
+                "resume_pdf": str(dummy_pdf),
+                "cover_pdf": str(dummy_pdf)
+            }
+            with patch.object(eunchae_engine, "query_llm", return_value="Looks fine, no issues detected."):
+                res = eunchae_engine.audit_application_package(tailor_res, {}, {}, "Acme Corp", "Staff Engineer")
+                self.assertFalse(res["passed"], "Unscored review must never be marked as passed")
+                self.assertEqual(res["score"], 0, "Unscored review must fail with score=0")
+                self.assertEqual(res["verdict"], "🔴 QA UNSCORED ERROR")
+                self.assertIn("Unparseable or missing QA score", res.get("error", ""))
+        finally:
+            dummy_pdf.unlink(missing_ok=True)
+
+    def test_audit_application_package_out_of_range_score_fails_closed(self):
+        """An out-of-range score (e.g. 150%) must be treated as unparseable and fail closed."""
+        dummy_pdf = Path("test_dummy_res2.pdf")
+        dummy_pdf.write_bytes(b"x" * 5000)
+        try:
+            tailor_res = {
+                "score": 85,
+                "report": "Clean report without placeholders",
+                "filename": "tailored_sample.md",
+                "resume_pdf": str(dummy_pdf),
+                "cover_pdf": str(dummy_pdf)
+            }
+            with patch.object(eunchae_engine, "query_llm", return_value="QA Score: 150%"):
+                res = eunchae_engine.audit_application_package(tailor_res, {}, {}, "Acme Corp", "Staff Engineer")
+                self.assertFalse(res["passed"], "Out-of-range score must never be marked as passed")
+                self.assertEqual(res["score"], 0)
+                self.assertEqual(res["verdict"], "🔴 QA UNSCORED ERROR")
+        finally:
+            dummy_pdf.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

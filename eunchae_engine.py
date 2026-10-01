@@ -311,14 +311,27 @@ Assess the package with protective, sharp QA rigor and output:
             "error": str(e)
         }
 
-    # Extract score
-    score = 90
+    # Extract score (fail closed on missing, unparseable, or out-of-range score)
+    score = None
     score_match = re.search(r"(?:Score|QA Score)\s*[:=]?\s*(\d{1,3})%", qa_review_text)
     if score_match:
         try:
-            score = int(score_match.group(1))
+            parsed_score = int(score_match.group(1))
+            if 0 <= parsed_score <= 100:
+                score = parsed_score
         except Exception:
             pass
+
+    if score is None:
+        return {
+            "passed": False,
+            "score": 0,
+            "verdict": "🔴 QA UNSCORED ERROR",
+            "deterministic": det,
+            "review": f"⚠️ LLM QA review did not return a parseable numerical score (0-100%).\n\nRaw review text:\n{qa_review_text[:500]}",
+            "heuristics_checked": len(memories),
+            "error": "Unparseable or missing QA score from LLM review"
+        }
 
     if not det["passed"]:
         score = min(score, 65)
