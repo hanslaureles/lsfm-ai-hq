@@ -34,4 +34,4 @@ jobs:
         run: >
           python -m pytest -q -rs
           test_ciel_orchestrator.py test_ciel_security.py test_hq_smoke.py
-          test_llm_client.py test_pdf_engine.py bench/test_bench.py
+          test_llm_client.py test_pdf_engine.py test_eunchae_qa.py bench/test_bench.py
