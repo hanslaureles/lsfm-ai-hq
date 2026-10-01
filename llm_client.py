@@ -1,0 +1,378 @@
+import os
+import json
+import time
+import urllib.request
+import urllib.error
+import urllib.parse
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).parent
+MEMORY_DIR = BASE_DIR / "memory"
+MEMORY_DIR.mkdir(exist_ok=True)
+CONFIG_FILE = MEMORY_DIR / "brain_mode.json"
+
+DEFAULT_CONFIG = {
+    "mode": "cloud",  # Blueprint C default: 100% High-Craft Cloud Intelligence
+    "local_model": "qwen2.5-coder:7b",
+    "cloud_model": "qwen/qwen3.8-27b",
+    "agent_cloud_models": {
+        "sakura": "qwen/qwen3.8-27b",
+        "chaewon": "openai/gpt-oss-120b",
+        "yunjin": "gemini-3.6-flash",
+        "kazuha": "qwen/qwen3.8-27b",
+        "eunchae": "openai/gpt-oss-20b"
+    }
+}
+
+def load_brain_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            merged = DEFAULT_CONFIG.copy()
+            merged.update(data)
+            merged_agents = DEFAULT_CONFIG["agent_cloud_models"].copy()
+            if "agent_cloud_models" in data and isinstance(data["agent_cloud_models"], dict):
+                merged_agents.update(data["agent_cloud_models"])
+            merged["agent_cloud_models"] = merged_agents
+            return merged
+        except Exception:
+            pass
+    return DEFAULT_CONFIG.copy()
+
+def save_brain_config(cfg: dict):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+def get_brain_mode() -> str:
+    return load_brain_config().get("mode", "cloud").lower()
+
+def set_brain_mode(mode: str) -> str:
+    mode_clean = mode.lower().strip()
+    if mode_clean not in ["auto", "local", "cloud"]:
+        raise ValueError("Mode must be 'auto', 'local', or 'cloud'.")
+    cfg = load_brain_config()
+    cfg["mode"] = mode_clean
+    save_brain_config(cfg)
+    return mode_clean
+
+def ollama_base_url() -> str:
+    """
+    Ollama's base URL without the /v1 suffix. A "localhost" host is pinned to
+    127.0.0.1: Ollama listens on IPv4 only, and on Windows "localhost" resolves to
+    ::1 first, so every new connection waited ~2 s for the IPv6 attempt to fail
+    (2,034 ms vs 1 ms per request, measured 2026-10-01).
+    """
+    url = os.getenv("LOCAL_LLM_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[:-3]
+    parts = urllib.parse.urlsplit(url)
+    if parts.hostname == "localhost":
+        netloc = "127.0.0.1" + (f":{parts.port}" if parts.port else "")
+        url = urllib.parse.urlunsplit(parts._replace(netloc=netloc))
+    return url
+
+def check_ollama_status() -> tuple[bool, list[str]]:
+    """Checks if local Ollama daemon is reachable on 127.0.0.1:11434."""
+    req = urllib.request.Request(f"{ollama_base_url()}/api/tags", headers={"User-Agent": "JobCopilot/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=1.2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "") for m in data.get("models", [])]
+            return True, models
+    except Exception:
+        return False, []
+
+def get_brain_status() -> dict:
+    """Comprehensive diagnostic of the AI brain state with Blueprint C agent breakdown."""
+    mode = get_brain_mode()
+    ollama_up, local_models = check_ollama_status()
+    groq_configured = bool(os.getenv("GROQ_API_KEY", "").strip())
+    gemini_configured = bool(os.getenv("GEMINI_API_KEY", "").strip())
+    cfg = load_brain_config()
+    agent_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
+
+    if mode == "local":
+        active_provider = "Local Ollama (RX 6600 XT)" if ollama_up else "Local (Ollama Offline ⚠️)"
+        active_model = cfg.get("local_model", "qwen2.5-coder:7b")
+    elif mode == "cloud":
+        active_provider = "Multi-Tier Cloud Cluster (Groq LPUs + Gemini)"
+        active_model = cfg.get("cloud_model", "qwen/qwen3.8-27b")
+    else:  # auto
+        if ollama_up and local_models:
+            active_provider = "Local Ollama (Auto-detected)"
+            active_model = cfg.get("local_model", "qwen2.5-coder:7b")
+        else:
+            active_provider = "Multi-Tier Cloud Cluster (Auto-fallback)"
+            active_model = cfg.get("cloud_model", "qwen/qwen3.8-27b")
+
+    return {
+        "mode": mode,
+        "architecture": "Specialized Multi-Model Cloud",
+        "blueprint": "Specialized Multi-Model Cloud",
+        "active_provider": active_provider,
+        "active_model": active_model,
+        "local_model": cfg.get("local_model", "qwen2.5-coder:7b"),
+        "agent_cloud_models": agent_map,
+        "ollama_online": ollama_up,
+        "local_models_available": local_models,
+        "groq_ready": groq_configured,
+        "gemini_ready": gemini_configured,
+        "hardware_target": "PowerColor RX 6600 XT (8GB VRAM) / i5-12400F"
+    }
+
+GROQ_FALLBACK_MODELS = [
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b"
+]
+
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.7-flash"
+]
+
+def call_groq(prompt: str, system_instruction: str = "", model: str = None, temperature: float = 0.4) -> str:
+    groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
+    if not groq_key:
+        raise ValueError("GROQ_API_KEY not configured")
+
+    if not model:
+        cfg = load_brain_config()
+        model = cfg.get("cloud_model", "qwen/qwen3.8-27b")
+
+    candidate_models = [model]
+    for m in GROQ_FALLBACK_MODELS:
+        if m not in candidate_models:
+            candidate_models.append(m)
+
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+
+    last_error = None
+    for cand_model in candidate_models:
+        for attempt in range(2):
+            req = urllib.request.Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                },
+                data=json.dumps({
+                    "model": cand_model,
+                    "messages": messages,
+                    "temperature": temperature
+                }).encode("utf-8")
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["choices"][0]["message"]["content"].strip()
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code == 429:
+                    retry_after = e.headers.get("Retry-After")
+                    wait_time = float(retry_after) if retry_after and retry_after.isdigit() else (2.0 + attempt * 2.0)
+                    if wait_time <= 4.0 and attempt == 0:
+                        print(f"[Groq 429] {cand_model} transient rate limit, waiting {wait_time:.1f}s...")
+                        time.sleep(wait_time + 0.2)
+                        continue
+                    else:
+                        print(f"[Groq 429] {cand_model} rate limited, switching to next Groq model...")
+                        break
+                else:
+                    print(f"[Groq Error] {cand_model}: {e}")
+                    break
+            except Exception as e:
+                last_error = e
+                print(f"[Groq Exception] {cand_model}: {e}")
+                break
+
+    raise RuntimeError(f"All Groq models failed: {last_error}")
+
+def call_local_ollama(prompt: str, system_instruction: str = "", model: str = None) -> str:
+    if not model:
+        cfg = load_brain_config()
+        model = cfg.get("local_model", "qwen2.5-coder:7b")
+
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+
+    req = urllib.request.Request(
+        f"{ollama_base_url()}/v1/chat/completions",
+        headers={"Content-Type": "application/json"},
+        data=json.dumps({"model": model, "messages": messages}).encode("utf-8")
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"].strip()
+
+def call_gemini(prompt: str, system_instruction: str = "", model_name: str = None, temperature: float = 0.4) -> str:
+    import google.generativeai as genai
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY not configured")
+
+    genai.configure(api_key=gemini_key)
+    generation_config = {
+        "temperature": temperature,
+        "top_p": 0.95,
+        "max_output_tokens": 4096,
+    }
+
+    candidate_models = []
+    if model_name:
+        candidate_models.append(model_name)
+    for m in GEMINI_FALLBACK_MODELS:
+        if m not in candidate_models:
+            candidate_models.append(m)
+
+    full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
+    last_error = None
+
+    for cand_model in candidate_models:
+        for attempt in range(2):
+            try:
+                model = genai.GenerativeModel(model_name=cand_model, generation_config=generation_config)
+                res = model.generate_content(full_prompt)
+                return res.text.strip()
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "429" in err_str or "quota" in err_str.lower() or "ResourceExhausted" in err_str:
+                    import re
+                    m_delay = re.search(r"Please retry in ([\d\.]+)s", err_str)
+                    wait_time = float(m_delay.group(1)) if m_delay else 3.0
+                    if wait_time <= 4.0 and attempt == 0:
+                        print(f"[Gemini 429] {cand_model} transient rate limit, waiting {wait_time:.1f}s...")
+                        time.sleep(wait_time + 0.5)
+                        continue
+                    else:
+                        print(f"[Gemini 429] {cand_model} quota reached, switching to backup model...")
+                        break
+                else:
+                    print(f"[Gemini Error] {cand_model}: {err_str[:80]}")
+                    break
+
+    raise RuntimeError(f"All Gemini models failed: {last_error}")
+
+def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.4, agent: str = None) -> str:
+    """
+    Intelligent multi-provider LLM query dispatcher with per-agent model specialization.
+    - 'cloud': Highest quality outputs:
+        * Sakura: qwen/qwen3.8-27b (Groq, 27B parameter strategic orchestration)
+        * Chaewon: openai/gpt-oss-120b (Groq, 120B parameter persuasive career/resume conversion)
+        * Yunjin: gemini-3.6-flash (Google DeepMind, elite literary Design Director UX critiques)
+        * Kazuha: qwen/qwen3.8-27b (Groq, sub-second clean frontend code & token systems)
+        * Eunchae: openai/gpt-oss-20b (Groq, ultra-high throughput QA defect auditing & heartbeat)
+    - 'local': Uses local Ollama on RX 6600 XT with zero model swapping.
+    - 'auto': Uses local Ollama if running, otherwise seamlessly routes to specialized cloud models.
+    """
+    mode = get_brain_mode()
+    cfg = load_brain_config()
+    errors = []
+
+    # Auto-detect agent from caller stack or prompt context if not explicitly provided
+    agent_key = (agent or "").lower().strip()
+    if not agent_key:
+        try:
+            import sys
+            frame = sys._getframe(1)
+            while frame:
+                fname = frame.f_code.co_filename.replace("\\", "/").lower().split("/")[-1]
+                if "scout" in fname or "chaewon" in fname:
+                    agent_key = "chaewon"
+                    break
+                elif "yunjin" in fname:
+                    agent_key = "yunjin"
+                    break
+                elif "kazuha" in fname:
+                    agent_key = "kazuha"
+                    break
+                elif "eunchae" in fname:
+                    agent_key = "eunchae"
+                    break
+                elif "sakura" in fname or "gmail" in fname:
+                    agent_key = "sakura"
+                    break
+                frame = frame.f_back
+        except Exception:
+            pass
+
+    if not agent_key:
+        snippet = (system_instruction + "\n" + prompt[:400]).lower()
+        if "sakura" in snippet:
+            agent_key = "sakura"
+        elif "chaewon" in snippet:
+            agent_key = "chaewon"
+        elif "yunjin" in snippet:
+            agent_key = "yunjin"
+        elif "kazuha" in snippet:
+            agent_key = "kazuha"
+        elif "eunchae" in snippet:
+            agent_key = "eunchae"
+
+    agent_cloud_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
+    target_cloud_model = agent_cloud_map.get(agent_key, cfg.get("cloud_model", "qwen/qwen3.8-27b"))
+    target_local_model = cfg.get("local_model", "qwen2.5-coder:7b")
+
+    # 1. LOCAL MODE
+    if mode == "local":
+        ollama_up, models = check_ollama_status()
+        if not ollama_up:
+            raise RuntimeError("⚠️ Brain mode is set to 'local', but Ollama is not running on localhost:11434! Please launch Ollama or type '!mode cloud' in Discord.")
+        return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model)
+
+    # Helper for specialized cloud dispatch
+    def _dispatch_cloud():
+        # If target model is a Gemini model (like for Yunjin)
+        if target_cloud_model.startswith("gemini"):
+            if os.getenv("GEMINI_API_KEY", "").strip():
+                try:
+                    return call_gemini(prompt, system_instruction=system_instruction, model_name=target_cloud_model, temperature=temperature)
+                except Exception as ge:
+                    errors.append(f"Gemini ({target_cloud_model}): {ge}")
+            # Fallback to Groq
+            try:
+                return call_groq(prompt, system_instruction=system_instruction, model="qwen/qwen3.8-27b", temperature=temperature)
+            except Exception as e:
+                errors.append(f"Groq Cloud fallback: {e}")
+        else:
+            # Target model is a Groq model (Sakura, Chaewon, Kazuha, Eunchae)
+            try:
+                return call_groq(prompt, system_instruction=system_instruction, model=target_cloud_model, temperature=temperature)
+            except Exception as e:
+                errors.append(f"Groq Cloud ({target_cloud_model}): {e}")
+            # Fallback to Gemini
+            if os.getenv("GEMINI_API_KEY", "").strip():
+                try:
+                    return call_gemini(prompt, system_instruction=system_instruction, model_name="gemini-3.6-flash", temperature=temperature)
+                except Exception as ge:
+                    errors.append(f"Gemini fallback: {ge}")
+
+        raise RuntimeError(f"Cloud providers failed: {'; '.join(errors)}")
+
+    # 2. CLOUD MODE
+    if mode == "cloud":
+        return _dispatch_cloud()
+
+    # 3. AUTO MODE (Smart detection)
+    else:
+        ollama_up, local_models = check_ollama_status()
+        if ollama_up and local_models:
+            try:
+                return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model)
+            except Exception as e:
+                errors.append(f"Local Ollama: {e}")
+
+        return _dispatch_cloud()
+

@@ -1,0 +1,30 @@
+# Environment & API Keys
+.env
+*.env
+credentials.json
+token.json
+client_secret*.json
+
+# Runtime Vector Database
+*.sqlite
+*.sqlite3
+*.db
+rag_vault.sqlite
+memory/rag_vault.sqlite
+
+# Generated Applications & Resumes
+applications/
+
+# Python cache & temp
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temp and logs
+*.log
+*.temp.html
+test_render.*
+
+# Large model weights (keep out of git; use LFS or external storage)
+rvc_models/

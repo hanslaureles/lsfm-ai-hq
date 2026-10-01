@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Compile every module
+        run: python -m py_compile *.py scripts/*.py bench/*.py
+
+      # Hermetic: engines, LLMs, TTS and Obsidian are stubbed, so no secrets are
+      # needed. scripts/test_*.py are excluded on purpose: they hit live Gmail
+      # and Discord with real credentials. The .env and vault checks in
+      # test_hq_smoke.py skip here and run on the workstation.
+      - name: Tests
+        run: >
+          python -m pytest -q -rs
+          test_ciel_orchestrator.py test_ciel_security.py test_hq_smoke.py
+          test_llm_client.py test_pdf_engine.py bench/test_bench.py

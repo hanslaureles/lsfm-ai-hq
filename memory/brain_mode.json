@@ -1,0 +1,12 @@
+{
+  "mode": "cloud",
+  "local_model": "qwen2.5-coder:7b",
+  "cloud_model": "qwen/qwen3.8-27b",
+  "agent_cloud_models": {
+    "sakura": "qwen/qwen3.8-27b",
+    "chaewon": "openai/gpt-oss-120b",
+    "yunjin": "gemini-3.6-flash",
+    "kazuha": "qwen/qwen3.8-27b",
+    "eunchae": "openai/gpt-oss-20b"
+  }
+}
