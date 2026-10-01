@@ -7,6 +7,7 @@ reworded or masked as 'QA PASSED'.
 import importlib.util
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -101,9 +102,9 @@ class TestEunchaeQAHonestFailures(unittest.TestCase):
 
     def test_audit_application_package_unscored_llm_output_fails_closed(self):
         """Invariant 7: Missing/unparseable score from LLM review must fail closed, not default to 90%."""
-        dummy_pdf = Path("test_dummy_res.pdf")
-        dummy_pdf.write_bytes(b"x" * 5000)
-        try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_pdf = Path(tmp_dir) / "test_dummy_res.pdf"
+            dummy_pdf.write_bytes(b"x" * 5000)
             tailor_res = {
                 "score": 85,
                 "report": "Clean report without placeholders",
@@ -117,14 +118,12 @@ class TestEunchaeQAHonestFailures(unittest.TestCase):
                 self.assertEqual(res["score"], 0, "Unscored review must fail with score=0")
                 self.assertEqual(res["verdict"], "🔴 QA UNSCORED ERROR")
                 self.assertIn("Unparseable or missing QA score", res.get("error", ""))
-        finally:
-            dummy_pdf.unlink(missing_ok=True)
 
     def test_audit_application_package_out_of_range_score_fails_closed(self):
         """An out-of-range score (e.g. 150%) must be treated as unparseable and fail closed."""
-        dummy_pdf = Path("test_dummy_res2.pdf")
-        dummy_pdf.write_bytes(b"x" * 5000)
-        try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_pdf = Path(tmp_dir) / "test_dummy_res2.pdf"
+            dummy_pdf.write_bytes(b"x" * 5000)
             tailor_res = {
                 "score": 85,
                 "report": "Clean report without placeholders",
@@ -137,8 +136,6 @@ class TestEunchaeQAHonestFailures(unittest.TestCase):
                 self.assertFalse(res["passed"], "Out-of-range score must never be marked as passed")
                 self.assertEqual(res["score"], 0)
                 self.assertEqual(res["verdict"], "🔴 QA UNSCORED ERROR")
-        finally:
-            dummy_pdf.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
