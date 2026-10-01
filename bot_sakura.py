@@ -195,6 +195,60 @@ async def on_ready():
         scheduled_rollup_loop.start()
 
 
+def handle_qa_audit_failure(exc: Exception) -> dict:
+    """Format an honest failure result when the QA audit crashes (Invariant 7)."""
+    err_str = f"{type(exc).__name__}: {exc}"
+    return {
+        "passed": False,
+        "score": 0,
+        "verdict": "🔴 QA AUDIT ERROR",
+        "review": f"QA audit crashed before completion: {err_str}",
+        "deterministic": {
+            "passed": False,
+            "defects": [f"Audit exception: {err_str}"],
+            "warnings": [],
+            "checks": {"audit_executed": False}
+        },
+        "heuristics_checked": 0,
+        "error": err_str
+    }
+
+
+def format_proposal_qa_status(
+    qa_res: dict,
+    default_score_color: int,
+    handoffs_channel_mention: str = "#agent-handoffs"
+) -> tuple[str, str, int]:
+    """
+    Format QA summary line, operator next action instructions, and proposal embed color
+    based on QA audit outcome (Invariant 7).
+    Returns (qa_summary_line, action_instructions, proposal_color).
+    """
+    qa_passed = bool(qa_res.get("passed", False))
+    qa_score = qa_res.get("score", 0)
+    verdict = qa_res.get("verdict", "UNKNOWN")
+
+    if qa_passed:
+        qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — Verified against squad failure memory\n"
+        action_instructions = (
+            f"👉 **Next Action for Hans:**\n"
+            f"• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
+            f"• Click **❌** below to **Discard / Shelve** this application"
+        )
+        proposal_color = default_score_color
+    else:
+        qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — ⚠️ QA defects flagged or audit failed; review issues before approving\n"
+        action_instructions = (
+            f"👉 **Next Action for Hans:**\n"
+            f"• ⚠️ **QA WARNING**: Application package did not pass QA audit. Review issues in {handoffs_channel_mention}.\n"
+            f"• Click **✅** below to **Force Approve & Finalize** (overrides QA audit warning)\n"
+            f"• Click **❌** below to **Discard / Shelve** this application"
+        )
+        proposal_color = 0xED4245 if qa_score < 50 else 0xFEE75C
+
+    return qa_summary_line, action_instructions, proposal_color
+
+
 async def handle_apply_orchestration(target_message, job_input: str = "", attachments = None):
     """
     Core squad collaboration pipeline:
@@ -367,13 +421,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
             role
         )
     except Exception as e:
-        qa_res = {
-            "passed": True,
-            "score": 88,
-            "verdict": "🟢 QA PASSED",
-            "review": f"QA verification completed. ({e})",
-            "deterministic": {"defects": [], "warnings": []}
-        }
+        qa_res = handle_qa_audit_failure(e)
 
     qa_color = 0x57F287 if qa_res["score"] >= 90 else (0xFEE75C if qa_res["score"] >= 75 else 0xED4245)
     eunchae_qa_embed = discord.Embed(
@@ -395,20 +443,24 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     if tailor_res.get("cover_pdf") and Path(tailor_res["cover_pdf"]).exists():
         pdf_line += f"✉️ **Cover Letter PDF:** `{Path(tailor_res['cover_pdf']).name}`\n"
 
+    qa_line, action_instructions, proposal_color = format_proposal_qa_status(
+        qa_res=qa_res,
+        default_score_color=score_color,
+        handoffs_channel_mention=f"<#{handoffs_ch.id}>"
+    )
+
     proposal_embed = discord.Embed(
         title=f"📋 MASTER APPLICATION PROPOSAL: {role} @ {company}",
         description=f"The squad has completed the multi-agent tailoring pipeline for **{company}**!\n\n"
                     f"⭐ **Chaewon (Career):** **{score}% Match** — Tailored resume bullets & custom cover letter generated\n"
                     f"🎨 **Yunjin (Portfolio):** Lead with **{rec_projects}**\n"
                     f"💻 **Kazuha (Frontend):** CS degree rigor & design-token architecture talking points locked\n"
-                    f"🛡️ **Eunchae (QA):** **{qa_res['verdict']} ({qa_res['score']}%)** — Verified against squad failure memory\n"
+                    f"{qa_line}"
                     f"{pdf_line}"
                     f"📁 **Package File:** `{tailor_res['filename']}`\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👉 **Next Action for Hans:**\n"
-                    f"• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
-                    f"• Click **❌** below to **Discard / Shelve** this application",
-        color=score_color
+                    f"{action_instructions}",
+        color=proposal_color
     )
     proposal_embed.set_footer(text="Sakura • Chief of Staff • React below to Approve or Discard")
 

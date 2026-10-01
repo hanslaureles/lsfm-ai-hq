@@ -296,7 +296,20 @@ Assess the package with protective, sharp QA rigor and output:
 4. **MAKNAE QA VERDICT**:
    - 2-3 energetic, sharp sentences giving the green light or explaining what must be fixed.
 """
-    qa_review_text = query_llm(prompt, temperature=0.3)
+    try:
+        qa_review_text = query_llm(prompt, temperature=0.3)
+    except Exception as e:
+        det_passed = det.get("passed", False)
+        verdict = "🔴 QA DEFECT BLOCKED" if not det_passed else "🟡 QA UNINSPECTED (LLM ERROR)"
+        return {
+            "passed": False,
+            "score": 50 if det_passed else 25,
+            "verdict": verdict,
+            "deterministic": det,
+            "review": f"⚠️ LLM QA review failed ({type(e).__name__}: {e}). Completed deterministic safety checks only.",
+            "heuristics_checked": len(memories),
+            "error": str(e)
+        }
 
     # Extract score
     score = 90
