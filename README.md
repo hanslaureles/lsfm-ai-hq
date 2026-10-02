@@ -30,7 +30,7 @@ Scheduled work: Sakura posts a briefing once a day after 08:00; Yunjin runs a we
 
 ### Models
 
-- **Cloud (default):** Groq `qwen/qwen3.8-27b`, falling back to Gemini `gemini-3.6-flash` when Groq fails. Per-agent cloud models are set in `memory/brain_mode.json`; on a 429, `call_groq` waits briefly once, then moves to the next Groq model.
+- **Cloud (default):** each agent has its own cloud model, set in `memory/brain_mode.json`: Sakura and Kazuha use Groq `qwen/qwen3.8-27b`, Chaewon `openai/gpt-oss-120b`, Eunchae `openai/gpt-oss-20b`, and Yunjin Gemini `gemini-3.6-flash`. A Groq agent falls back to Gemini `gemini-3.6-flash` when Groq fails; Yunjin runs the reverse, Gemini first and then Groq `qwen/qwen3.8-27b`. On a 429, `call_groq` waits briefly once, then moves to the next Groq model.
 - **Local (optional):** Ollama `qwen2.5-coder:7b`, switched on with `!mode local` or `!mode auto`.
 - **RAG (`rag_engine.py`):** `gemini-embedding-001` embeddings (3,072 dimensions) and BM25 keyword scores, fused with Reciprocal Rank Fusion, stored in SQLite.
 

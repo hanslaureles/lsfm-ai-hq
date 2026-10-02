@@ -4,6 +4,7 @@ Run: python -m pytest -q test_llm_client.py
 """
 
 import importlib.util
+import json
 import os
 import unittest
 from pathlib import Path
@@ -60,6 +61,82 @@ class TestOllamaBaseUrl(unittest.TestCase):
             llm_client.check_ollama_status()
             llm_client.call_local_ollama("hi", model="m")
         self.assertEqual(seen, ["http://127.0.0.1:11434/api/tags", "http://127.0.0.1:11434/v1/chat/completions"])
+
+
+class SSE:
+    """A streamed response: iterates SSE lines; optionally dies after `fail_after` lines."""
+
+    def __init__(self, pieces, fail_after=None):
+        lines = [b": keep-alive\n"]
+        lines += [f"data: {json.dumps({'choices': [{'delta': {'content': p}}]})}\n".encode() for p in pieces]
+        lines += [b"data: [DONE]\n"]
+        self.lines, self.fail_after = lines, fail_after
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        for i, line in enumerate(self.lines):
+            if self.fail_after is not None and i > self.fail_after:
+                raise ConnectionResetError("socket closed mid-stream")
+            yield line
+
+
+class TestGroqStreaming(unittest.TestCase):
+
+    def call(self, responses):
+        bodies = []
+
+        def fake_urlopen(req, timeout=None):
+            bodies.append(json.loads(req.data))
+            return responses.pop(0)
+
+        pieces = []
+        with mock.patch.dict(os.environ, {"GROQ_API_KEY": "test"}), \
+                mock.patch.object(llm_client.urllib.request, "urlopen", fake_urlopen):
+            try:
+                return llm_client.call_groq("hi", model="m1", on_delta=pieces.append), pieces, bodies
+            except RuntimeError as e:
+                return e, pieces, bodies
+
+    def test_pieces_arrive_in_order_and_join_to_the_reply(self):
+        reply, pieces, bodies = self.call([SSE(['{"japanese_voice": "', "「告。」", '"}'])])
+        self.assertEqual(pieces, ['{"japanese_voice": "', "「告。」", '"}'])
+        self.assertEqual(reply, '{"japanese_voice": "「告。」"}')
+        self.assertIs(bodies[0]["stream"], True)
+
+    def test_failure_before_any_piece_falls_back_to_the_next_model(self):
+        reply, pieces, bodies = self.call([SSE(["x"], fail_after=0), SSE(["ok"])])
+        self.assertEqual(reply, "ok")
+        self.assertEqual(pieces, ["ok"])
+        self.assertEqual(bodies[0]["model"], "m1")
+        self.assertNotEqual(bodies[1]["model"], "m1")
+
+    def test_failure_after_a_piece_raises_instead_of_replaying(self):
+        err, pieces, bodies = self.call([SSE(["Report: one. ", "two."], fail_after=1), SSE(["Report: again."])])
+        self.assertIsInstance(err, RuntimeError)
+        self.assertIn("partial output", str(err))
+        self.assertEqual(pieces, ["Report: one. "])
+        self.assertEqual(len(bodies), 1)  # no second request
+
+    def test_without_on_delta_nothing_streams(self):
+        class Resp(SSE):
+            def read(self):
+                return b'{"choices": [{"message": {"content": " plain "}}]}'
+
+        bodies = []
+
+        def fake_urlopen(req, timeout=None):
+            bodies.append(json.loads(req.data))
+            return Resp([])
+
+        with mock.patch.dict(os.environ, {"GROQ_API_KEY": "test"}), \
+                mock.patch.object(llm_client.urllib.request, "urlopen", fake_urlopen):
+            self.assertEqual(llm_client.call_groq("hi", model="m1"), "plain")
+        self.assertNotIn("stream", bodies[0])
 
 
 if __name__ == "__main__":

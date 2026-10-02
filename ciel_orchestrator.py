@@ -27,7 +27,8 @@ if str(BASE_DIR) not in sys.path:
 
 from llm_client import query_llm, call_groq, get_brain_status
 from obsidian_client import ObsidianClient
-from voice_engine import text_to_speech, text_to_speech_bilingual
+from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
+from speech_stream import VoiceStream, split_sentences
 
 # Import specialist tool engines safely
 try:
@@ -97,6 +98,82 @@ async def run_blocking(fn, *args, timeout: float, label: str, **kwargs):
         return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kwargs), timeout)
     except TimeoutError:
         raise TimeoutError(f"{label} timed out after {timeout:g} s") from None
+
+
+class SpeechClips:
+    """
+    Speaks the synthesis reply sentence by sentence while the LLM is still writing
+    it. Each complete sentence of japanese_voice, then english_voice, becomes one
+    clip. Clips are synthesized as soon as their sentence is complete (up to
+    CLIP_CONCURRENCY at once, so a long English sentence doesn't wait behind the
+    Japanese ones) and announced strictly in order with a ciel_audio_chunk
+    event, so the HUD starts playing the first while the rest is generated.
+    finish() joins the clips into the mission's mp3 (replay, REST).
+    Lives on the event loop: the LLM thread reaches feed() via call_soon_threadsafe.
+    Clip names are ciel_response_<mission_id>_<seq>.mp3, and mission_id is already
+    validated as 32 lowercase hex, so nothing from the LLM reaches a filename.
+    """
+
+    CLIP_CONCURRENCY = 3  # Edge TTS requests in flight per mission
+
+    def __init__(self, emit, mission_id: str):
+        self.emit, self.mission_id = emit, mission_id
+        self.stream = VoiceStream()
+        self.queue = asyncio.Queue()  # clip jobs in speaking order, then None
+        self.slots = asyncio.Semaphore(self.CLIP_CONCURRENCY)
+        self.langs = []   # lang of every queued sentence
+        self.jobs = []
+        self.files = []
+        self.worker = asyncio.create_task(self._work())
+
+    @property
+    def started(self) -> bool:
+        return bool(self.langs)
+
+    def _put(self, lang: str, text: str):
+        gap_before = lang == "en" and bool(self.langs) and self.langs[-1] == "ja"
+        name = f"ciel_response_{self.mission_id}_{len(self.langs):02d}.mp3"
+        self.langs.append(lang)
+        job = asyncio.create_task(self._make(text, lang, name, gap_before))
+        self.jobs.append(job)
+        self.queue.put_nowait((job, lang, name))
+
+    async def _make(self, text: str, lang: str, name: str, gap_before: bool):
+        async with self.slots:
+            await speak_clip(text, lang, name, gap_before=gap_before)
+
+    def feed(self, piece: str):
+        if not self.worker.done():  # after a clip failure or cancel, the mission is ending
+            for lang, text in self.stream.feed(piece):
+                self._put(lang, text)
+
+    def add_unstreamed(self, lang: str, text: str):
+        """Queues a voice field the stream never opened (e.g. english_voice missing, display text stands in)."""
+        if lang not in self.stream.used:
+            for sentence in split_sentences(text, final=True)[0]:
+                self._put(lang, sentence)
+
+    async def _work(self):
+        while (item := await self.queue.get()) is not None:
+            job, lang, name = item
+            await job  # in order: a later clip that finishes first waits its turn
+            seq = len(self.files)
+            self.files.append(name)
+            if seq == 0:
+                await self.emit("ciel_state", {"state": "speaking", "message": "Speaking while the report is written..."})
+            await self.emit("ciel_audio_chunk", {"seq": seq, "lang": lang, "audio_url": f"/audio/{name}"})
+
+    async def finish(self, output_filename: str):
+        self.queue.put_nowait(None)
+        await self.worker  # re-raises a clip failure, so the mission reports it
+        await concat_clips(self.files, output_filename)
+
+    def cancel(self):
+        for task in [self.worker, *self.jobs]:
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                task.exception()  # mark retrieved; the mission already reports its failure
 
 
 CIEL_SYSTEM_PROMPT = """You are Ciel (The Divine Wisdom Core) from Tensura — a supreme analytical intelligence and omniscient technical partner for Hans Aaron Laureles.
@@ -675,8 +752,9 @@ Respond ONLY with valid JSON.
                 ja_speech = f"「告。」業務鑑定を完了しました。優先提言：{top['title']}。直ちに実行可能です。"
                 en_speech = f"Notice: Operational appraisal complete. Key recommendation: {top['title']}. Standing ready to execute."
             else:
-                ja_speech = "「告。」業務鑑定を完了しました。全監視システムは完全に正常です。"
-                en_speech = "Notice: Operational appraisal complete. All workspace sentinels are 100% nominal."
+                # Empty only when all four checks ran (a failed check returns a suggestion).
+                ja_speech = "「告。」業務鑑定を完了しました。四つの監視チェックはすべて実行され、指摘事項はありません。"
+                en_speech = "Notice: Operational appraisal complete. All four checks ran and flagged nothing."
 
             final_reply = appraisal_text
             await text_to_speech_bilingual(ja_text=ja_speech, en_text=en_speech, output_filename=audio_filename)
@@ -856,10 +934,18 @@ Return a JSON object with:
 
 Respond ONLY with valid JSON.
 """
-        raw_reply = await run_blocking(
-            call_groq, synthesis_prompt, system_instruction=CIEL_SYSTEM_PROMPT, model="qwen/qwen3.8-27b",
-            timeout=SYNTHESIS_TIMEOUT_S, label="Synthesis LLM",
-        )
+        # The reply streams in; each finished spoken sentence is voiced right away.
+        clips = SpeechClips(emit, mission_id)
+        loop = asyncio.get_running_loop()
+        try:
+            raw_reply = await run_blocking(
+                call_groq, synthesis_prompt, system_instruction=CIEL_SYSTEM_PROMPT, model="qwen/qwen3.8-27b",
+                on_delta=lambda piece: loop.call_soon_threadsafe(clips.feed, piece),
+                timeout=SYNTHESIS_TIMEOUT_S, label="Synthesis LLM",
+            )
+        except BaseException:
+            clips.cancel()
+            raise
 
         ja_speech = ""
         en_speech = ""
@@ -884,13 +970,25 @@ Respond ONLY with valid JSON.
 
         elapsed_ms = round((time.time() - start_time) * 1000, 1)
 
-        # 4. Generate Bilingual Voice Audio (Japanese first -> English second with telepathic DSP)
-        await emit("ciel_state", {"state": "speaking", "message": "Synthesizing bilingual vocal report..."})
-        audio_path = await text_to_speech_bilingual(
-            ja_text=ja_speech,
-            en_text=en_speech,
-            output_filename=audio_filename
-        )
+        # 4. Bilingual voice (Japanese first -> English second with telepathic DSP).
+        # Streamed: finish the clips (plus any voice field the stream never opened)
+        # and join them. Nothing streamed (no voice fields in the reply as it
+        # arrived): synthesize the whole reply at once, as before.
+        if clips.started:
+            try:
+                clips.add_unstreamed("ja", ja_speech)
+                clips.add_unstreamed("en", en_speech)
+                await clips.finish(audio_filename)
+            finally:
+                clips.cancel()
+        else:
+            clips.cancel()
+            await emit("ciel_state", {"state": "speaking", "message": "Synthesizing bilingual vocal report..."})
+            await text_to_speech_bilingual(
+                ja_text=ja_speech,
+                en_text=en_speech,
+                output_filename=audio_filename
+            )
 
         # 5. Record this turn into Working Memory
         self._remember({

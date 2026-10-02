@@ -11,6 +11,7 @@ import ssl
 import time
 import socket
 import json
+import threading
 import urllib.request
 import urllib.parse
 from datetime import datetime
@@ -36,6 +37,8 @@ DEFAULT_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", str(Path(__file__).resolve
 SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+
+_APPEND_LOCK = threading.Lock()
 
 
 class ObsidianClient:
@@ -92,6 +95,21 @@ class ObsidianClient:
         except Exception as e:
             return {"status": 0, "error": str(e)}
 
+    def _vault_rel(self, filepath: str) -> str:
+        """
+        Normalized vault-relative path (posix), or ValueError if it escapes the vault.
+        Ciel's read/append-note tools pass router (LLM) output here, so "../" and
+        drive paths must not reach the disk or the REST API. A leading slash means
+        "from the vault root", as before.
+        """
+        clean = filepath.strip("/\\")
+        root = self.vault_path.resolve()
+        target = (root / clean).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError(f"path escapes the Obsidian vault: {filepath!r}")
+        rel = target.relative_to(root).as_posix()
+        return "" if rel == "." else rel
+
     def ping(self) -> bool:
         """Check if Obsidian Local REST API is responding."""
         if not self.is_rest_api_online():
@@ -101,7 +119,7 @@ class ObsidianClient:
 
     def get_file(self, filepath: str) -> str:
         """Fetch raw markdown contents of any file in the vault (via REST or disk fallback)."""
-        clean_path = filepath.strip("/\\")
+        clean_path = self._vault_rel(filepath)
         # Try REST API first if online
         if self.is_rest_api_online():
             try:
@@ -122,7 +140,7 @@ class ObsidianClient:
 
     def put_file(self, filepath: str, content: str) -> bool:
         """Create or completely overwrite a file in the vault (via REST or disk fallback)."""
-        clean_path = filepath.strip("/\\")
+        clean_path = self._vault_rel(filepath)
         # Try REST API first if online
         if self.is_rest_api_online():
             try:
@@ -152,7 +170,7 @@ class ObsidianClient:
 
     def append_file(self, filepath: str, content: str) -> bool:
         """Append content to a file in the vault (via REST or disk fallback)."""
-        clean_path = filepath.strip("/\\")
+        clean_path = self._vault_rel(filepath)
         # Try REST API first if online
         if self.is_rest_api_online():
             try:
@@ -173,11 +191,13 @@ class ObsidianClient:
             try:
                 disk_file = self.vault_path / clean_path
                 disk_file.parent.mkdir(parents=True, exist_ok=True)
-                if disk_file.exists():
-                    existing = disk_file.read_text(encoding="utf-8")
-                    disk_file.write_text(existing + content, encoding="utf-8")
-                else:
-                    disk_file.write_text(content, encoding="utf-8")
+                # All bots share one process, so two agents logging at once must not
+                # overwrite each other's entry. The lock is needed on top of append
+                # mode: the Windows CRT seeks to EOF and writes as two steps.
+                # ponytail: in-process lock only; separate scripts writing the same
+                # note can still race. Add a lockfile if that ever shows up.
+                with _APPEND_LOCK, open(disk_file, "a", encoding="utf-8") as f:
+                    f.write(content)
                 return True
             except Exception as e:
                 print(f"⚠️ [ObsidianClient] Disk append error: {e}", flush=True)
@@ -186,7 +206,7 @@ class ObsidianClient:
 
     def list_dir(self, dirpath: str = "") -> list:
         """List files in a vault directory (via REST or disk fallback)."""
-        clean_dir = dirpath.strip("/\\")
+        clean_dir = self._vault_rel(dirpath)
         if self.is_rest_api_online():
             try:
                 encoded_dir = urllib.parse.quote(clean_dir, safe="/")
@@ -295,31 +315,21 @@ class ObsidianClient:
         filename = f"{today}.md"
         filepath = f"05 - Daily Logs/{filename}"
 
-        template = f"""# 📅 Daily Executive Briefing — {today}
+        # Structure only: no status, scores or counts. Anything stated here would be
+        # written before any agent has checked it (Phase 3A-2). Real results are
+        # appended below by log_session().
+        template = f"""# 📅 Daily Log — {today}
 
-> **Posted by:** [[🌸 Sakura]]  
-> **System Status:** 5/5 Agents Nominal · Groq Cloud / Local AMD RX 6600 XT Hybrid  
 > **Date:** {now.strftime('%A, %B %d, %Y')}
 
 ---
 
-## 🎯 Daily Mission & Priorities
-- [ ] **Priority 1:** Execute High-Leverage Outreach (Tailored Applications)
-- [ ] **Priority 2:** Portfolio Craft & Case Study Polish (6/6 Verified)
-- [ ] **Priority 3:** Swarm Maintenance & Telemetry Verification
-
----
-
-## 🤖 Squad Handoffs & Activity
-- **[[⭐ Chaewon]]:** Application tailoring & ATS resume packaging standing by
-- **[[🎨 Yunjin]]:** 6/6 Flagship case studies verified (100/100 QA score)
-- **[[💻 Kazuha]]:** Lead frontend architecture & design token adherence
-- **[[🛡️ Eunchae]]:** Hardware vitals & system watchdog active
+## 🎯 Priorities
+- [ ]
 
 ---
 
 ## 📝 Observations & Notes
-- Initialized by Sakura Morning Launchpad.
 
 ---
 

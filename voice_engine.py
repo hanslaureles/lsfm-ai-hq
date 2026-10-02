@@ -99,18 +99,20 @@ def normalize_audio_for_transcription(audio_bytes: bytes) -> bytes:
     return audio_bytes
 
 
-def apply_telepathy_dsp(raw_path: Path, output_path: Path) -> bool:
+def apply_telepathy_dsp(raw_path: Path, output_path: Path, lead_ms: int = 0) -> bool:
     """
     Applies Tensura Divine Wisdom telepathic resonance:
     - Highpass 120Hz (removes muddy room boom)
     - 3.5kHz crystalline EQ boost (crisp clarity)
     - Dual 25ms/45ms subtle comb reflection (speaks inside the soul corridor)
+    lead_ms prepends silence (the 350 ms gap before the first English clip).
     Takes ~40ms on local CPU via FFmpeg.
     """
+    lead = f"adelay={int(lead_ms)}:all=1," if lead_ms else ""
     try:
         cmd = [
             "ffmpeg", "-y", "-i", str(raw_path),
-            "-af", "highpass=f=120,equalizer=f=3500:t=q:w=1.2:g=3.0,aecho=0.85:0.8:25|45:0.18|0.09,volume=0.30",
+            "-af", lead + "highpass=f=120,equalizer=f=3500:t=q:w=1.2:g=3.0,aecho=0.85:0.8:25|45:0.18|0.09,volume=0.30",
             "-c:a", "libmp3lame", "-b:a", "192k", str(output_path)
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -231,6 +233,49 @@ async def text_to_speech_bilingual(
                 except OSError:
                     pass
 
+    return final_output
+
+
+CLIP_VOICES = {
+    "ja": (CIEL_JA_VOICE, CIEL_JA_PITCH, CIEL_JA_RATE),
+    "en": (CIEL_EN_VOICE, CIEL_EN_PITCH, CIEL_EN_RATE),
+}
+JA_EN_GAP_MS = 350  # the same pause text_to_speech_bilingual puts between the languages
+
+
+async def speak_clip(text: str, lang: str, output_filename: str, gap_before: bool = False) -> Path:
+    """
+    One streamed sentence: Edge TTS in Ciel's voice for `lang`, then the same
+    Thought Acceleration filter as the full reply. gap_before adds the JA->EN pause.
+    Raises if Edge TTS fails.
+    """
+    voice, pitch, rate = CLIP_VOICES[lang]
+    final_output = AUDIO_DIR / output_filename
+    temp_raw = AUDIO_DIR / f"raw_{output_filename}"
+    await edge_tts.Communicate(text, voice=voice, pitch=pitch, rate=rate).save(str(temp_raw))
+    if await asyncio.to_thread(apply_telepathy_dsp, temp_raw, final_output,
+                                 JA_EN_GAP_MS if gap_before else 0):
+        temp_raw.unlink(missing_ok=True)
+    else:
+        temp_raw.replace(final_output)  # unfiltered beats silent
+    return final_output
+
+
+async def concat_clips(clip_filenames: list, output_filename: str) -> Path:
+    """Joins already-filtered clips into one mp3 (stream copy, no re-encode) for replay and REST clients."""
+    final_output = AUDIO_DIR / output_filename
+    listing = AUDIO_DIR / f"concat_{output_filename}.txt"
+    # Bare names: the concat demuxer resolves them next to the list file.
+    listing.write_text("".join(f"file '{name}'\n" for name in clip_filenames), encoding="utf-8")
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
+           "-c", "copy", str(final_output)]
+    try:
+        await asyncio.to_thread(subprocess.run, cmd, check=True, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffmpeg could not join the audio clips: {e.stderr.decode(errors='replace')[-300:]}") from e
+    finally:
+        listing.unlink(missing_ok=True)
     return final_output
 
 

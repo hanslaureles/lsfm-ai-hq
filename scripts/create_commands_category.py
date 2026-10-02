@@ -167,7 +167,7 @@ async def on_ready():
             )
             yunjin_embed.add_field(
                 name="📊 `!status`",
-                value="Displays the live completion and polish scorecard for all 6 flagship case studies.",
+                value="Displays the live completion and polish scorecard for every flagship case study.",
                 inline=False
             )
             yunjin_embed.set_footer(text="Yunjin • Portfolio Guardian • Command Directory")

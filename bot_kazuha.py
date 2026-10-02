@@ -33,7 +33,12 @@ from kazuha_engine import (
     execute_research_scout
 )
 from rag_engine import ask_knowledge_base, query_rag, build_index, get_rag_stats
-from discord_utils import send_clean_embeds
+from discord_utils import send_clean_embeds, clip, EMBED_TITLE_MAX
+from llm_client import get_brain_status
+
+# Room left for the verdict/branch header or the code fence and footer line
+# around LLM text inside one 4096-char embed description.
+REVIEW_MAX = 3600
 
 # Agent-Memory Engine Integration
 MEMORY_DIR = Path(__file__).parent.parent / "agent-memory"
@@ -159,7 +164,7 @@ async def on_message(message):
             title="⚔️ Kazuha Sentinel — Code & Security Review",
             description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
                         f"🌿 Branch: `{res['info']['branch']}`\n\n"
-                        f"{res['review']}",
+                        f"{clip(res['review'], REVIEW_MAX)}",
             color=verdict_color
         )
         embed.set_footer(text="Kazuha • Autonomous Git & PR Sentinel")
@@ -177,7 +182,7 @@ async def on_message(message):
             return
         embed = discord.Embed(
             title="✍️ Proposed Conventional Commit",
-            description=f"```git\n{res['full_message']}\n```\n\n*Copy and paste into your terminal, or use `git commit -m \"...\"`*",
+            description=f"```git\n{clip(res['full_message'], REVIEW_MAX)}\n```\n\n*Copy and paste into your terminal, or use `git commit -m \"...\"`*",
             color=0x00B4D8
         )
         embed.set_footer(text="Kazuha • Conventional Commits v1.0.0")
@@ -360,7 +365,7 @@ async def search(ctx, *, query: str = None):
             return
         
         embed = discord.Embed(
-            title=f"🔎 Semantic Search Results // {query}",
+            title=f"🔎 Semantic Search Results // {clip(query, EMBED_TITLE_MAX - 40)}",
             description="Hybrid retrieval (Dense Cosine + Sparse BM25) across your codebase & memory:",
             color=0x00B4D8
         )
@@ -428,9 +433,14 @@ async def ragstats(ctx):
 @bot.command(name="ping")
 async def ping(ctx):
     latency_ms = round(bot.latency * 1000)
+    loop = asyncio.get_running_loop()
+    brain = await loop.run_in_executor(None, get_brain_status, "kazuha")
     embed = discord.Embed(
         title="🏓 Pong!",
-        description=f"Latency: **{latency_ms}ms**\nBrain: **Gemini 3.6 Flash** (Code Architect Ready)",
+        description=(
+            f"Latency: **{latency_ms}ms**\n"
+            f"Brain: **{brain['active_provider']}** · `{brain['active_model']}` (mode: {brain['mode']})"
+        ),
         color=0x00B4D8
     )
     await ctx.reply(embed=embed)
@@ -453,7 +463,7 @@ async def git_command(ctx, subcmd: str = None, flag: str = None):
             title="⚔️ Kazuha Sentinel — Code & Security Review",
             description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
                         f"🌿 Branch: `{res['info']['branch']}`\n\n"
-                        f"{res['review']}",
+                        f"{clip(res['review'], REVIEW_MAX)}",
             color=verdict_color
         )
         embed.set_footer(text="Kazuha • Autonomous Git & PR Sentinel")
@@ -472,7 +482,7 @@ async def git_command(ctx, subcmd: str = None, flag: str = None):
             return
         embed = discord.Embed(
             title="✍️ Proposed Conventional Commit",
-            description=f"```git\n{res['full_message']}\n```\n\n*Copy and paste into terminal, or run: `python git_sentinel.py commit --apply`*",
+            description=f"```git\n{clip(res['full_message'], REVIEW_MAX)}\n```\n\n*Copy and paste into terminal, or run: `python git_sentinel.py commit --apply`*",
             color=0x00B4D8
         )
         embed.set_footer(text="Kazuha • Conventional Commits v1.0.0")
@@ -488,7 +498,7 @@ async def git_command(ctx, subcmd: str = None, flag: str = None):
             await ctx.reply(f"⚠️ {res.get('error')}")
             return
         embed = discord.Embed(
-            title=f"📄 GitHub PR Draft: `{res['title']}`",
+            title=f"📄 GitHub PR Draft: `{clip(res['title'], EMBED_TITLE_MAX - 30)}`",
             description=f"{res['body'][:3800]}",
             color=0x00B4D8
         )

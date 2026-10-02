@@ -29,11 +29,28 @@ except ImportError:
     ObsidianClient = None
 
 
+def check_failed(check: str, category: str, agent: str, error) -> dict:
+    """
+    A check that could not run is reported, never dropped: an empty result must
+    mean every check ran and found nothing, not that one silently errored.
+    """
+    print(f"⚠️ [Sentinel] {check} check error: {error}", flush=True)
+    return {
+        "id": f"{check.lower()}_check_failed",
+        "severity": "warning",
+        "agent": agent,
+        "category": category,
+        "title": f"{check} Check Failed",
+        "description": f"The {check.lower()} check could not run: {error}",
+        "action_label": "Dismiss",
+    }
+
+
 def check_hardware_sentinel() -> list[dict]:
     """Inspects PC vitals and flags resource bottlenecks."""
     suggestions = []
     if not get_system_vitals:
-        return suggestions
+        return [check_failed("Hardware", "HARDWARE VITALS", "eunchae", "eunchae_engine is not importable")]
 
     try:
         vitals = get_system_vitals()
@@ -79,7 +96,7 @@ def check_hardware_sentinel() -> list[dict]:
                 "action_prompt": "Eunchae, prune audio and workspace caches to free disk space."
             })
     except Exception as e:
-        print(f"⚠️ [Sentinel] Hardware check error: {e}", flush=True)
+        suggestions.append(check_failed("Hardware", "HARDWARE VITALS", "eunchae", e))
 
     return suggestions
 
@@ -120,7 +137,7 @@ def check_git_sentinel() -> list[dict]:
                 "action_prompt": "Kazuha, review git status and summarize uncommitted changes."
             })
     except Exception as e:
-        print(f"⚠️ [Sentinel] Git check error: {e}", flush=True)
+        suggestions.append(check_failed("Git", "REPOSITORY SENTINEL", "kazuha", e))
 
     return suggestions
 
@@ -129,7 +146,7 @@ def check_obsidian_sentinel() -> list[dict]:
     """Inspects Obsidian Second Brain for daily briefing status and queued priorities."""
     suggestions = []
     if not ObsidianClient:
-        return suggestions
+        return [check_failed("Obsidian", "SECOND BRAIN", "sakura", "obsidian_client is not importable")]
 
     try:
         obs = ObsidianClient()
@@ -191,7 +208,7 @@ def check_obsidian_sentinel() -> list[dict]:
                     "action_prompt": prompt
                 })
     except Exception as e:
-        print(f"⚠️ [Sentinel] Obsidian check error: {e}", flush=True)
+        suggestions.append(check_failed("Obsidian", "SECOND BRAIN", "sakura", e))
 
     return suggestions
 
@@ -215,7 +232,7 @@ def check_portfolio_sentinel() -> list[dict]:
                     "action_prompt": "Yunjin, audit portfolio HTML structure and clean up remaining markers."
                 })
     except Exception as e:
-        print(f"⚠️ [Sentinel] Portfolio check error: {e}", flush=True)
+        suggestions.append(check_failed("Portfolio", "PORTFOLIO SENTINEL", "yunjin", e))
 
     return suggestions
 
@@ -240,7 +257,8 @@ def evaluate_proactive_suggestions() -> list[dict]:
 def generate_appraisal_summary(suggestions: list[dict]) -> str:
     """Formats a concise, high-density appraisal summary for Ciel."""
     if not suggestions:
-        return "Notice: Operational appraisal complete. All workspace sentinels are 100% nominal. Hardware, git repository, and Obsidian Second Brain are synchronized."
+        # Only reachable when all four checks ran (a failed check is a suggestion).
+        return "Notice: Operational appraisal complete. The hardware, git, Obsidian and portfolio checks all ran and flagged nothing."
 
     items = []
     for i, s in enumerate(suggestions, 1):

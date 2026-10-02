@@ -69,11 +69,26 @@ async def _tts_bilingual(ja_text="", en_text="", output_filename="ciel_reply.mp3
     return output_filename
 
 
+CLIPS = []   # (text, lang, filename, gap_before) per streamed sentence
+JOINED = []  # (clip filenames, output filename) per concat
+
+
+async def _speak_clip(text, lang, output_filename, gap_before=False):
+    CLIPS.append((text, lang, output_filename, gap_before))
+    return output_filename
+
+
+async def _concat_clips(clip_filenames, output_filename):
+    JOINED.append((list(clip_filenames), output_filename))
+    return output_filename
+
+
 STUBS = {
     "llm_client": {"query_llm": lambda *a, **k: "", "call_groq": _call_groq,
                    "get_brain_status": lambda: {"mode": "test"}},
     "obsidian_client": {"ObsidianClient": FakeObsidian},
-    "voice_engine": {"text_to_speech": _tts_bilingual, "text_to_speech_bilingual": _tts_bilingual},
+    "voice_engine": {"text_to_speech": _tts_bilingual, "text_to_speech_bilingual": _tts_bilingual,
+                     "speak_clip": _speak_clip, "concat_clips": _concat_clips},
     "proactive_sentinel": {"evaluate_proactive_suggestions": lambda: [],
                            "generate_appraisal_summary": lambda s: "No issues flagged."},
     # Optional engines: empty modules make each `from x import y` raise ImportError,
@@ -110,6 +125,8 @@ class MissionTestCase(unittest.IsolatedAsyncioTestCase):
             "proactive_sentinel": _module("proactive_sentinel", STUBS["proactive_sentinel"]),
         }))
         TTS_CALLS.clear()
+        CLIPS.clear()
+        JOINED.clear()
         self.ciel = ciel_orchestrator.CielOrchestrator()
         self.events = []
 
@@ -497,6 +514,163 @@ class TestAsyncSafety(MissionTestCase):
         self.assertEqual(third["agent_status"]["chaewon"], "done")
         self.assertEqual(len(calls), 2)
         self.assertEqual(peak[0], 1)
+
+
+STREAMED_REPLY = json.dumps({
+    "japanese_voice": "「告。」完了しました。",
+    "english_voice": "Notice: Done. All clear.",
+    "display_text": "Done.",
+}, ensure_ascii=False)
+CLIP_URL = r"^/audio/ciel_response_[0-9a-f]{32}_\d{2}\.mp3$"
+
+
+def streaming_groq(reply, split_at, pause_s=0.0, fail_after_first=False, returned=None):
+    """Synthesis stub that streams `reply` in two pieces through on_delta, pausing in between."""
+    def fake(prompt, system_instruction="", on_delta=None, **kwargs):
+        if "routing core" in system_instruction:
+            raise RuntimeError("router offline")
+        on_delta(reply[:split_at])
+        time.sleep(pause_s)
+        if fail_after_first:
+            raise RuntimeError("Groq stream broke after partial output: reset")
+        on_delta(reply[split_at:])
+        if returned is not None:
+            returned.append(time.time())
+        return reply
+    return fake
+
+
+class TestStreamedSpeech(MissionTestCase):
+    """3D-2: spoken sentences are voiced while the synthesis LLM is still streaming."""
+
+    def patch(self, name, value):
+        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+
+    def clip_events(self):
+        return [e for e in self.events if e["type"] == "ciel_audio_chunk"]
+
+    async def test_first_clip_is_announced_before_the_llm_finishes(self):
+        returned = []
+        split = STREAMED_REPLY.index("完") + 1  # one character past 「告。」
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, split, pause_s=0.5, returned=returned))
+        await self.run_mission("what is a b-tree?")
+        first = self.clip_events()[0]
+        self.assertEqual(first["seq"], 0)
+        self.assertLess(first["timestamp"], returned[0] - 0.3)  # well inside the 0.5 s the LLM was still busy
+
+    async def test_clips_in_order_then_joined_into_the_mission_mp3(self):
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        result = await self.run_mission("what is a b-tree?")
+        self.assertEqual([(t, lang, gap) for t, lang, _, gap in CLIPS], [
+            ("「告。」", "ja", False), ("完了しました。", "ja", False),
+            ("Notice: Done.", "en", True), ("All clear.", "en", False),  # the JA->EN pause, once
+        ])
+        events = self.clip_events()
+        self.assertEqual([e["seq"] for e in events], [0, 1, 2, 3])
+        for e in events:
+            self.assertRegex(e["audio_url"], CLIP_URL)  # invariant 8: only the validated id reaches a filename
+            self.assertEqual(e["mission_id"], result["mission_id"])
+        self.assertLess(self.events.index(events[-1]), self.events.index(self.completes()[0]))
+        self.assertEqual(JOINED, [([f for _, _, f, _ in CLIPS], f"ciel_response_{result['mission_id']}.mp3")])
+        self.assertEqual(result["audio_url"], f"/audio/ciel_response_{result['mission_id']}.mp3")
+        self.assertEqual(TTS_CALLS, [])  # no second, whole-reply synthesis
+
+    async def test_clips_overlap_but_are_announced_in_speaking_order(self):
+        # Earlier clips are slower here, so they finish last; the HUD must still get them in order.
+        delays = {"「告。」": 0.3, "完了しました。": 0.2, "Notice: Done.": 0.1, "All clear.": 0.0}
+
+        async def uneven_tts(text, lang, output_filename, gap_before=False):
+            await asyncio.sleep(delays[text])
+            CLIPS.append((text, lang, output_filename, gap_before))
+
+        self.patch("speak_clip", uneven_tts)
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, len(STREAMED_REPLY)))
+        started = time.perf_counter()
+        await self.run_mission("what is a b-tree?")
+        elapsed = time.perf_counter() - started
+        made = [t for t, _, _, _ in CLIPS]
+        self.assertNotEqual(made, list(delays))  # finished out of order...
+        urls = [e["audio_url"] for e in self.clip_events()]
+        self.assertEqual(urls, sorted(urls))  # ...announced in order
+        self.assertEqual([e["seq"] for e in self.clip_events()], [0, 1, 2, 3])
+        self.assertLess(elapsed, 0.5)  # 0.6 s of clips one by one; in parallel (3 at a time) about 0.3 s
+
+    async def test_unsafe_mission_id_never_reaches_a_clip_name(self):
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        result = await self.ciel.execute_mission("what is a b-tree?", mission_id="../../evil")
+        self.assertTrue(CLIPS)
+        for _, _, name, _ in CLIPS:
+            self.assertRegex(name, r"^ciel_response_[0-9a-f]{32}_\d{2}\.mp3$")
+            self.assertIn(result["mission_id"], name)
+
+    async def test_missing_english_field_is_voiced_from_the_display_text(self):
+        reply = json.dumps({"japanese_voice": "「告。」完了。", "display_text": "Report: B-trees stay balanced."},
+                           ensure_ascii=False)
+        self.patch("call_groq", streaming_groq(reply, 10))
+        await self.run_mission("what is a b-tree?")
+        self.assertEqual([(t, lang) for t, lang, _, _ in CLIPS],
+                         [("「告。」", "ja"), ("完了。", "ja"), ("Report: B-trees stay balanced.", "en")])
+
+    async def test_reply_without_voice_fields_uses_whole_reply_speech(self):
+        # Nothing to stream (e.g. the existing non-streaming stub): the old path, unchanged.
+        result = await self.run_mission("what is a b-tree?")
+        self.assertEqual(CLIPS, [])
+        self.assertEqual(self.clip_events(), [])
+        self.assertEqual(TTS_CALLS, [f"ciel_response_{result['mission_id']}.mp3"])
+
+    async def test_clip_failure_fails_the_mission(self):
+        async def tts_down(text, lang, output_filename, gap_before=False):
+            raise ConnectionError("Edge TTS unreachable")
+
+        self.patch("speak_clip", tts_down)
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        result = await self.run_mission("what is a b-tree?")
+        self.assertIn("Edge TTS unreachable", result["error"])
+        self.assertEqual(self.completes(), [])
+        self.assertEqual(len([e for e in self.events if e["type"] == "ciel_error"]), 1)
+
+    async def test_synthesis_timeout_while_clips_are_in_flight(self):
+        # Codex 3D NOTE: the first sentence is being voiced when synthesis times out.
+        entered = []  # times at which a clip started, so the test can prove one was in flight
+
+        async def slow_tts(text, lang, output_filename, gap_before=False):
+            entered.append(time.monotonic())
+            await asyncio.sleep(0.3)
+            CLIPS.append((text, lang, output_filename, gap_before))
+
+        loop_errors = []
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: loop_errors.append(ctx.get("message")))
+        self.enterContext(mock.patch.object(ciel_orchestrator, "SYNTHESIS_TIMEOUT_S", 0.1))
+        self.patch("speak_clip", slow_tts)
+        split = STREAMED_REPLY.index("完") + 1
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, split, pause_s=0.5))
+        result = await self.run_mission("what is a b-tree?")
+        failed_at = time.monotonic()
+        self.assertIn("timed out", result["error"])
+        # Codex FIX: prove a clip really was in flight when synthesis timed out.
+        self.assertEqual(len(entered), 1)
+        self.assertLess(entered[0], failed_at)
+        self.assertLess(failed_at - entered[0], 0.3)  # it started, but its 0.3 s had not run out
+        self.assertEqual(len([e for e in self.events if e["type"] == "ciel_error"]), 1)
+        self.assertEqual(self.completes(), [])
+        await asyncio.sleep(0.6)  # past the stub's pause and the clip's 0.3 s
+        self.assertEqual(CLIPS, [])           # the in-flight clip was cancelled, not finished
+        self.assertEqual(self.clip_events(), [])
+        self.assertEqual(JOINED, [])
+        import gc; gc.collect()               # surfaces "Task exception was never retrieved"
+        await asyncio.sleep(0)
+        self.assertEqual(loop_errors, [])
+
+    async def test_stream_break_fails_the_mission_and_stops_speaking(self):
+        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40, fail_after_first=True))
+        result = await self.run_mission("what is a b-tree?")
+        self.assertIn("broke after partial output", result["error"])
+        self.assertEqual(self.completes(), [])
+        self.assertEqual(JOINED, [])
+        await asyncio.sleep(0.05)
+        spoken = len(CLIPS)
+        await asyncio.sleep(0.1)
+        self.assertEqual(len(CLIPS), spoken)  # the clip worker was stopped
 
 
 if __name__ == "__main__":

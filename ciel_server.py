@@ -48,6 +48,7 @@ JSON_POST_ROUTES = {"/api/chat", "/api/memory/clear"}
 # how many run at once. A few more wait their turn; past that, refuse with 503.
 MAX_CONCURRENT_MISSIONS = 2
 MAX_QUEUED_MISSIONS = 8
+AUDIO_CACHE_MAX_FILES = 150
 
 
 class MissionGate:
@@ -81,6 +82,9 @@ class MissionGate:
         finally:
             self.queued -= 1
         try:
+            # Streamed speech leaves one clip per sentence; keep the newest few
+            # missions' worth (a HUD may still be playing the previous one).
+            await asyncio.to_thread(prune_audio_cache, AUDIO_CACHE_MAX_FILES)
             return await ciel.execute_mission(prompt, event_callback=broadcast_ws, mission_id=mission_id)
         finally:
             self._slots.release()
@@ -131,9 +135,12 @@ async def broadcast_ws(payload: dict):
 
 
 async def handle_telemetry(request):
-    """Returns real-time system, memory, and AI brain status."""
+    """
+    Returns real-time system, memory, and AI brain status. The HUD calls it once per
+    (re)connect; after that, telemetry_worker pushes vitals over the WebSocket.
+    """
     # Both block (psutil samples CPU for 0.5 s; the brain status probes Ollama over
-    # HTTP), and the HUD polls every 6 s, so run them in threads, side by side.
+    # HTTP), so run them in threads, side by side.
     vitals, brain = await asyncio.gather(
         asyncio.to_thread(get_system_vitals) if get_system_vitals else asyncio.sleep(0, {}),
         asyncio.to_thread(get_brain_status) if get_brain_status else asyncio.sleep(0, {}),
@@ -296,17 +303,45 @@ async def background_sentinel_worker(app):
             print(f"⚠️ [CielServer] Sentinel worker warning: {e}", flush=True)
 
 
+TELEMETRY_INTERVAL_S = 5
+
+
+async def telemetry_worker(app):
+    """
+    Pushes vitals to connected HUDs every TELEMETRY_INTERVAL_S, replacing the HUD's
+    HTTP poll. Samples only while a client is connected. cpu_interval=None never
+    sleeps; it reports CPU use since the previous sample.
+    """
+    # ponytail: after an idle stretch the first CPU figure averages the whole gap.
+    while True:
+        try:
+            await asyncio.sleep(TELEMETRY_INTERVAL_S)
+            if active_websockets and get_system_vitals:
+                vitals = await asyncio.to_thread(get_system_vitals, cpu_interval=None)
+                await broadcast_ws({"type": "telemetry", "vitals": vitals,
+                                    "memory_turns": len(ciel.conversation_history)})
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"⚠️ [CielServer] Telemetry worker warning: {e}", flush=True)
+
+
+BACKGROUND_TASKS = {"sentinel_task": background_sentinel_worker, "telemetry_task": telemetry_worker}
+
+
 async def start_background_tasks(app):
-    app["sentinel_task"] = asyncio.create_task(background_sentinel_worker(app))
+    for key, worker in BACKGROUND_TASKS.items():
+        app[key] = asyncio.create_task(worker(app))
 
 
 async def cleanup_background_tasks(app):
-    if "sentinel_task" in app:
-        app["sentinel_task"].cancel()
-        try:
-            await app["sentinel_task"]
-        except asyncio.CancelledError:
-            pass
+    for key in BACKGROUND_TASKS:
+        if key in app:
+            app[key].cancel()
+            try:
+                await app[key]
+            except asyncio.CancelledError:
+                pass
 
 
 def create_app():

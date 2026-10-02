@@ -1,0 +1,417 @@
+"""
+Reliability and honesty regressions for the Discord, Obsidian, gateway,
+sentinel and LLM-client code (Phases 3A, 3B).
+Hermetic: temp vaults, local HTTP stubs or an Obsidian URL nothing listens on,
+fake Discord targets, patched urlopen.
+"""
+
+import asyncio
+import email.message
+import http.server
+import importlib.util
+import json
+import os
+import random
+import re
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+from pathlib import Path
+from unittest import mock
+
+import discord
+
+import bot_kazuha
+import llm_client
+import run_all
+from discord_utils import send_clean_embeds, split_smart_chunks
+from obsidian_client import ObsidianClient
+
+ROOT = Path(__file__).resolve().parent
+
+
+def _load_real(name):
+    # Other test files put stubs in sys.modules at collection time (e.g.
+    # test_ciel_security stubs proactive_sentinel), so load the real file by path.
+    spec = importlib.util.spec_from_file_location(f"{name}_real", ROOT / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+proactive_sentinel = _load_real("proactive_sentinel")
+
+# Port 1 refuses at once, so every call takes the filesystem fallback.
+OFFLINE_URL = "https://127.0.0.1:1"
+
+
+class DailyLogTemplateTest(unittest.TestCase):
+    def test_template_states_no_unchecked_status(self):
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            rel = client.ensure_daily_log("2026-01-02")
+            text = (Path(vault) / rel).read_text(encoding="utf-8")
+        for claim in ("Nominal", "100/100", "5/5", "6/6", "verified", "standing by"):
+            self.assertNotIn(claim, text)
+
+
+class DiskAppendTest(unittest.TestCase):
+    def test_concurrent_appends_all_land(self):
+        threads_n, per_thread = 16, 25
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            client.put_file("log.md", "")
+            gate = threading.Barrier(threads_n)
+
+            def worker(t):
+                gate.wait()
+                for i in range(per_thread):
+                    self.assertTrue(client.append_file("log.md", f"entry-{t}-{i}\n"))
+
+            threads = [threading.Thread(target=worker, args=(t,)) for t in range(threads_n)]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+            lines = (Path(vault) / "log.md").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), threads_n * per_thread)
+        self.assertEqual(len(set(lines)), threads_n * per_thread)
+
+
+class FakeTarget:
+    def __init__(self):
+        self.embeds = []
+
+    async def reply(self, embed):
+        self.embeds.append(embed)
+
+    async def send(self, embed):
+        self.embeds.append(embed)
+
+
+class EmbedLimitsTest(unittest.TestCase):
+    def assert_within_limits(self, embeds):
+        for e in embeds:
+            self.assertLessEqual(len(e.title or ""), 256)
+            self.assertLessEqual(len(e.description or ""), 4096)
+            for f in e.fields:
+                self.assertLessEqual(len(f.value), 1024)
+            self.assertLessEqual(len(e), 6000)
+
+    def test_long_title_and_citations_fit(self):
+        target = FakeTarget()
+        citations = [f"https://example.com/{'x' * 380}/{n}" for n in range(5)]
+        asyncio.run(send_clean_embeds(target, "T" * 300, "word " * 2000, citations=citations))
+        self.assertGreater(len(target.embeds), 1)  # multi-part, so the "(Part i/n)" suffix is exercised
+        self.assert_within_limits(target.embeds)
+        self.assertTrue(target.embeds[0].title.endswith(f"(Part 1/{len(target.embeds)})"))
+
+    def test_short_input_unchanged(self):
+        target = FakeTarget()
+        asyncio.run(send_clean_embeds(target, "Title", "body", citations=["a", "b"]))
+        self.assertEqual(target.embeds[0].title, "Title")
+        self.assertEqual(target.embeds[0].fields[0].value, "a · b")
+
+
+class FakeBot:
+    """start() raises each error in turn; a 5th call means the loop never stopped."""
+
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.calls = 0
+
+    async def start(self, token):
+        self.calls += 1
+        if self.calls > 4:
+            raise asyncio.CancelledError("retried past a fatal error")
+        raise self.errors.pop(0)
+
+
+class GatewayRetryTest(unittest.TestCase):
+    def run_bot(self, bot):
+        sleep = mock.AsyncMock()
+        with mock.patch.object(run_all.asyncio, "sleep", sleep), mock.patch("builtins.print"):
+            asyncio.run(run_all.run_bot_resilient(bot, "token", "Test"))
+        return [c.args[0] for c in sleep.await_args_list]
+
+    def test_bad_token_stops_after_transient_retries(self):
+        bot = FakeBot([ConnectionError("a"), ConnectionError("b"),
+                       discord.errors.LoginFailure("Improper token has been passed.")])
+        delays = self.run_bot(bot)
+        self.assertEqual(bot.calls, 3)
+        self.assertEqual(len(delays), 2)
+
+    def test_backoff_is_jittered_and_grows(self):
+        bot = FakeBot([ConnectionError("a"), ConnectionError("b"),
+                       discord.errors.LoginFailure("stop")])
+        with mock.patch.object(run_all.random, "uniform", return_value=1.2):
+            first, second = self.run_bot(bot)
+        self.assertAlmostEqual(first, 3.0 * 1.2)
+        self.assertAlmostEqual(second, 4.5 * 1.2)
+
+    def test_healthy_session_resets_backoff(self):
+        bot = FakeBot([ConnectionError("a"), ConnectionError("b"), ConnectionError("c"),
+                       discord.errors.LoginFailure("stop")])
+        # Session 3 ran 120 s before failing, so its retry starts from 3 s again.
+        clock = iter([0, 1, 1, 2, 2, 122, 122, 123])
+        with mock.patch.object(run_all, "monotonic", lambda: next(clock)):
+            delays = self.run_bot(bot)
+        self.assertEqual(len(delays), 3)
+        self.assertTrue(2.4 <= delays[2] <= 3.6, delays)
+
+
+class FixedClaimLintTest(unittest.TestCase):
+    """Status the code never computed must not ship in user-facing strings."""
+    FIXED_CLAIMS = re.compile(
+        r"100/100|6/6|5/5 Agents|100% nominal|Hardware Nominal|vitals_summary', 'Nominal'"
+        r"|verified case studies|Brain: \*\*Gemini|\b6 Flagship", re.IGNORECASE)
+
+    def test_no_fixed_status_claims(self):
+        hits = []
+        for path in [*ROOT.glob("*.py"), *ROOT.glob("scripts/*.py")]:
+            if path.name.startswith("test_"):
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if self.FIXED_CLAIMS.search(line):
+                    hits.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:100]}")
+        self.assertEqual(hits, [])
+
+
+class SentinelFailureTest(unittest.TestCase):
+    def test_failed_hardware_check_is_reported(self):
+        with mock.patch.object(proactive_sentinel, "get_system_vitals", side_effect=OSError("psutil gone")), \
+                mock.patch("builtins.print"):
+            res = proactive_sentinel.check_hardware_sentinel()
+        self.assertEqual([s["id"] for s in res], ["hardware_check_failed"])
+        self.assertIn("psutil gone", res[0]["description"])
+
+    def test_git_check_outside_a_repo_is_reported(self):
+        with tempfile.TemporaryDirectory() as not_a_repo, \
+                mock.patch.object(proactive_sentinel, "WORKSPACE_DIR", Path(not_a_repo)), \
+                mock.patch("builtins.print"):
+            res = proactive_sentinel.check_git_sentinel()
+        self.assertEqual([s["id"] for s in res], ["git_check_failed"])
+
+    def test_empty_summary_claims_only_what_ran(self):
+        text = proactive_sentinel.generate_appraisal_summary([])
+        self.assertNotIn("nominal", text.lower())
+        self.assertNotIn("synchronized", text.lower())
+
+
+class FakeCtx:
+    def __init__(self):
+        self.embeds = []
+
+    async def reply(self, content=None, embed=None):
+        if embed is not None:
+            self.embeds.append(embed)
+        msg = mock.Mock()
+        msg.delete = mock.AsyncMock()
+        return msg
+
+    def typing(self):
+        return mock.AsyncMock()
+
+
+class KazuhaEmbedTest(unittest.TestCase):
+    def run_git(self, sub, **patches):
+        ctx = FakeCtx()
+        with mock.patch.multiple(bot_kazuha, **patches):
+            asyncio.run(bot_kazuha.git_command.callback(ctx, sub))
+        return ctx.embeds
+
+    def assert_fits(self, e):
+        self.assertLessEqual(len(e.title or ""), 256)
+        self.assertLessEqual(len(e.description or ""), 4096)
+        self.assertLessEqual(len(e), 6000)
+
+    def test_pr_draft_with_long_llm_title(self):
+        pr = {"success": True, "title": "feat: " + "x" * 400, "body": "b" * 5000}
+        (embed,) = self.run_git("pr", kazuha_create_pr=lambda: pr)
+        self.assert_fits(embed)
+
+    def test_review_with_long_llm_text(self):
+        review = {"score": 80, "verdict": "OK", "info": {"branch": "main"}, "review": "r" * 6000}
+        (embed,) = self.run_git("review", kazuha_review_changes=lambda staged: review)
+        self.assert_fits(embed)
+
+    def test_commit_with_long_llm_message(self):
+        commit = {"success": True, "full_message": "m" * 6000}
+        (embed,) = self.run_git("commit", kazuha_create_commit=lambda staged: commit)
+        self.assert_fits(embed)
+
+
+class BrainStatusTest(unittest.TestCase):
+    CFG = {"mode": "cloud", "local_model": "local-x", "cloud_model": "cloud-y",
+           "agent_cloud_models": {"chaewon": "chaewon-z"}}
+
+    def status(self, agent, mode="cloud", ollama=(False, [])):
+        cfg = dict(self.CFG, mode=mode)
+        with mock.patch.object(llm_client, "load_brain_config", return_value=cfg), \
+                mock.patch.object(llm_client, "check_ollama_status", return_value=ollama):
+            return llm_client.get_brain_status(agent)
+
+    def test_cloud_mode_reports_the_agents_own_model(self):
+        self.assertEqual(self.status("chaewon")["active_model"], "chaewon-z")
+        self.assertEqual(self.status("sakura")["active_model"], "cloud-y")  # no override
+
+    def test_auto_mode_with_ollama_up_reports_local(self):
+        self.assertEqual(self.status("chaewon", "auto", (True, ["local-x"]))["active_model"], "local-x")
+
+
+FENCE = "```"
+WORDS = ["agent", "router", "Groq", "Gemini", "vault", "embed", "token", "latency", "x" * 50]
+
+
+def random_markdown(rng):
+    """Paragraphs, long lines, sentences, code fences and the odd giant word."""
+    blocks = []
+    for _ in range(rng.randint(1, 40)):
+        kind = rng.random()
+        if kind < 0.15:
+            body = "\n".join(" ".join(rng.choices(WORDS, k=rng.randint(1, 30))) for _ in range(rng.randint(1, 60)))
+            blocks.append(f"{FENCE}{rng.choice(['', 'python', 'bash'])}\n{body}\n{FENCE}")
+        elif kind < 0.2:
+            blocks.append("w" * rng.randint(100, 2500))  # a word longer than the chunk size
+        else:
+            sentences = [" ".join(rng.choices(WORDS, k=rng.randint(1, 25))) + "." for _ in range(rng.randint(1, 80))]
+            blocks.append(" ".join(sentences))
+    return "\n\n".join(blocks)
+
+
+class ChunkPropertyTest(unittest.TestCase):
+    """split_smart_chunks on 300 seeded random documents (stdlib only, reproducible)."""
+    MAX = 600
+
+    def test_properties(self):
+        rng = random.Random(20261002)
+        for case in range(300):
+            text = random_markdown(rng)
+            chunks = split_smart_chunks(text, max_chars=self.MAX)
+            with self.subTest(case=case):
+                for c in chunks:
+                    self.assertLessEqual(len(c), self.MAX)          # Discord never sees an oversize part
+                    self.assertEqual(c.count(FENCE) % 2, 0)          # every part renders its code blocks
+                rejoined = re.sub(r"\s+", "", "".join(chunks).replace(FENCE, "").replace("python", "").replace("bash", ""))
+                original = re.sub(r"\s+", "", text.replace(FENCE, "").replace("python", "").replace("bash", ""))
+                self.assertEqual(rejoined, original)                # no text dropped or duplicated
+
+    def test_short_text_is_one_chunk(self):
+        self.assertEqual(split_smart_chunks("hello", max_chars=100), ["hello"])
+
+
+class _StubHandler(http.server.BaseHTTPRequestHandler):
+    mode = "error"  # "error" → 500, "hang" → reply after the client's 3 s timeout
+
+    def _reply(self):
+        if self.mode == "hang":
+            time.sleep(3.6)
+        self.send_response(500)
+        self.end_headers()
+        self.wfile.write(b"stub failure")
+
+    do_GET = do_PUT = do_POST = _reply
+
+    def log_message(self, *args):
+        pass
+
+
+class ObsidianHttpStubTest(unittest.TestCase):
+    """REST up but failing (500) or hanging: reads and writes fall back to the vault on disk."""
+
+    def serve(self, mode):
+        handler = type("H", (_StubHandler,), {"mode": mode})
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def run_mode(self, mode):
+        with tempfile.TemporaryDirectory() as vault:
+            (Path(vault) / "note.md").write_text("from disk", encoding="utf-8")
+            client = ObsidianClient(base_url=self.serve(mode), vault_path=vault)
+            self.assertTrue(client.is_rest_api_online())          # the stub is listening
+            self.assertEqual(client.get_file("note.md"), "from disk")
+            self.assertTrue(client.put_file("new.md", "written"))
+            self.assertEqual((Path(vault) / "new.md").read_text(encoding="utf-8"), "written")
+
+    def test_rest_500_falls_back_to_disk(self):
+        self.run_mode("error")
+
+    def test_rest_timeout_falls_back_to_disk(self):
+        self.run_mode("hang")
+
+
+class VaultPathGuardTest(unittest.TestCase):
+    """Ciel's read/append-note tools pass router (LLM) output as the path."""
+    # A leading slash is stripped on purpose ("/05 - Daily Logs/x.md" is a vault path),
+    # so "/etc/passwd" lands inside the vault and is not an escape. A drive path
+    # only escapes on Windows; elsewhere it is an odd filename inside the vault.
+    # Backslashes are separators only on Windows, likewise.
+    ESCAPES = ["../outside.md", "notes/../../outside.md"] + \
+        (["..\\outside.md", "C:\\Windows\\win.ini"] if os.name == "nt" else [])
+
+    def test_paths_outside_the_vault_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            vault.mkdir()
+            (Path(tmp) / "outside.md").write_text("secret", encoding="utf-8")
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            for path in self.ESCAPES:
+                with self.subTest(path=path):
+                    with self.assertRaises(ValueError):
+                        client.get_file(path)
+                    with self.assertRaises(ValueError):
+                        client.put_file(path, "x")
+                    with self.assertRaises(ValueError):
+                        client.append_file(path, "x")
+            self.assertEqual((Path(tmp) / "outside.md").read_text(encoding="utf-8"), "secret")
+
+    def test_normal_vault_paths_still_work(self):
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            self.assertTrue(client.put_file("05 - Daily Logs/2026-10-02.md", "ok"))
+            self.assertEqual(client.get_file("/05 - Daily Logs/2026-10-02.md"), "ok")
+            self.assertIn("2026-10-02.md", client.list_dir("05 - Daily Logs"))
+
+
+def _http_429(retry_after):
+    headers = email.message.Message()
+    headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError("https://api.groq.com", 429, "Too Many Requests", headers, None)
+
+
+def _ok_response(text="ok"):
+    resp = mock.MagicMock()
+    resp.__enter__.return_value.read.return_value = json.dumps(
+        {"choices": [{"message": {"content": text}}]}).encode()
+    return resp
+
+
+class GroqRetryAfterTest(unittest.TestCase):
+    def call(self, retry_after):
+        sleeps = []
+        with mock.patch.dict(os.environ, {"GROQ_API_KEY": "test-key"}), \
+                mock.patch.object(llm_client.urllib.request, "urlopen",
+                                  side_effect=[_http_429(retry_after), _ok_response()]), \
+                mock.patch.object(llm_client.time, "sleep", side_effect=sleeps.append), \
+                mock.patch("builtins.print"):
+            self.assertEqual(llm_client.call_groq("hi", model="m"), "ok")
+        return sleeps
+
+    def test_decimal_retry_after_is_honoured(self):
+        self.assertEqual(self.call("1.5"), [1.5 + 0.2])
+
+    def test_integer_retry_after_is_honoured(self):
+        self.assertEqual(self.call("2"), [2.0 + 0.2])
+
+    def test_unparseable_retry_after_uses_default(self):
+        self.assertEqual(self.call("soon"), [2.0 + 0.2])
+
+
+if __name__ == "__main__":
+    unittest.main()

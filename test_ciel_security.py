@@ -38,9 +38,9 @@ def _install_stubs():
         "voice_engine": {
             "transcribe_audio": lambda audio_bytes, filename="": {"text": "hi"},
             "transcribe_audio_groq": lambda *a, **k: {"text": "hi"},
-            "prune_audio_cache": lambda: 0,
+            "prune_audio_cache": lambda max_files=35: 0,
         },
-        "eunchae_engine": {"get_system_vitals": lambda: {"cpu_pct": 1}},
+        "eunchae_engine": {"get_system_vitals": lambda **kwargs: {"cpu_pct": 1}},
         "llm_client": {"get_brain_status": lambda: {"mode": "test"}},
         "proactive_sentinel": {"evaluate_proactive_suggestions": lambda: []},
     }
@@ -230,6 +230,46 @@ class TestServerStaysResponsive(unittest.IsolatedAsyncioTestCase):
             self.assertLess(rtt, 0.25)
             await asyncio.gather(*ciel_server.ws_missions)
         await ws.close()
+
+
+class TestTelemetryPush(unittest.IsolatedAsyncioTestCase):
+    """Vitals reach the HUD over the WebSocket, sampled without blocking and only while someone listens."""
+
+    async def asyncSetUp(self):
+        self.calls = []
+
+        def vitals(**kwargs):
+            self.calls.append(kwargs)
+            return {"cpu_pct": 7}
+
+        self.enterContext(mock.patch.object(ciel_server, "TELEMETRY_INTERVAL_S", 0.05))
+        self.enterContext(mock.patch.object(ciel_server, "get_system_vitals", vitals))
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_connected_hud_receives_telemetry_events(self):
+        ws = await self.client.ws_connect("/ws", headers=GOOD_ORIGIN)
+        await ws.receive_json(timeout=2)  # ciel_connected
+        event = await ws.receive_json(timeout=2)
+        self.assertEqual(event["type"], "telemetry")
+        self.assertEqual(event["vitals"], {"cpu_pct": 7})
+        self.assertIn("memory_turns", event)
+        self.assertEqual(self.calls[0], {"cpu_interval": None})  # never psutil's 0.5 s sleep
+        await ws.close()
+
+    async def test_no_sampling_without_clients(self):
+        await asyncio.sleep(0.3)  # six intervals
+        self.assertEqual(self.calls, [])
+
+    async def test_rest_telemetry_still_served(self):
+        res = await self.client.get("/api/telemetry", headers=GOOD_HOST)
+        self.assertEqual(res.status, 200)
+        self.assertEqual((await res.json())["vitals"], {"cpu_pct": 7})
+        bad = await self.client.get("/api/telemetry", headers={"Host": "evil.example:8000"})
+        self.assertEqual(bad.status, 403)
 
 
 class TestMissionAdmission(unittest.IsolatedAsyncioTestCase):

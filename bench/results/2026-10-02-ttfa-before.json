@@ -1,0 +1,202 @@
+{
+  "date": "2026-10-02",
+  "started_at": "2026-10-02T13:37:35",
+  "duration_s": 502.3,
+  "runs": 10,
+  "inputs": {
+    "spoken_prompt": "Ciel, check our hardware vitals and git status.",
+    "mission_prompt": "Explain the difference between TCP and UDP in two sentences.",
+    "llm_prompt": "Explain the difference between TCP and UDP in about 120 words.",
+    "llm_max_tokens": 256,
+    "search_query": "Raft consensus algorithm"
+  },
+  "environment": {
+    "hardware": {
+      "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+      "cpu_logical_cores": 12,
+      "ram_gb": 15.8,
+      "gpu": "AMD Radeon RX 6600 XT"
+    },
+    "software": {
+      "os": "Microsoft Windows 11 Pro (build 10.0.26200)",
+      "python": "3.11.9",
+      "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev",
+      "edge_tts": "7.2.8",
+      "ddgs": "9.16.0",
+      "ollama": "unreachable (URLError)"
+    },
+    "git": {
+      "sha": "3315b69110548742c4f79b2b1043644cc8f19c45",
+      "dirty": false
+    }
+  },
+  "stages": {
+    "e2e_mission": {
+      "network": true,
+      "notes": "Full execute_mission for a general-knowledge prompt: router LLM, synthesis LLM, bilingual TTS. Sub-stages are timed inside it, including time_to_first_audio (mission start until the first playable audio URL is broadcast).",
+      "n_ok": 10,
+      "n_failed": 0,
+      "pace_s": 45,
+      "errors": [],
+      "ms": {
+        "p50": 4596.9,
+        "p95": 5991.7,
+        "max": 5991.7,
+        "min": 3400.9,
+        "mean": 4737.1
+      },
+      "samples_ms": [
+        4179.5,
+        3512.9,
+        3400.9,
+        5991.7,
+        5837.1,
+        4701.4,
+        4035.7,
+        5518.3,
+        5596.8,
+        4596.9
+      ],
+      "extras": [
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        },
+        {
+          "intent": "general_knowledge"
+        }
+      ]
+    },
+    "e2e.router_llm": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 508.2,
+        "p95": 650.1,
+        "max": 650.1,
+        "min": 488.7,
+        "mean": 527.8
+      },
+      "samples_ms": [
+        526.1,
+        508.2,
+        545.3,
+        513.6,
+        495.9,
+        650.1,
+        494.9,
+        488.7,
+        555.1,
+        500.1
+      ],
+      "extras": []
+    },
+    "e2e.synthesis_llm": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 835.5,
+        "p95": 1500.2,
+        "max": 1500.2,
+        "min": 751.6,
+        "mean": 990.9
+      },
+      "samples_ms": [
+        948.2,
+        822.8,
+        751.6,
+        1066.8,
+        1017.7,
+        835.5,
+        799.6,
+        1500.2,
+        1362.5,
+        804.0
+      ],
+      "extras": []
+    },
+    "e2e.tts_bilingual": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 3214.6,
+        "p95": 4410.1,
+        "max": 4410.1,
+        "min": 2102.5,
+        "mean": 3217.0
+      },
+      "samples_ms": [
+        2703.0,
+        2180.6,
+        2102.5,
+        4410.1,
+        4322.3,
+        3214.6,
+        2739.9,
+        3528.2,
+        3677.9,
+        3291.4
+      ],
+      "extras": []
+    },
+    "e2e.time_to_first_audio": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 4596.4,
+        "p95": 5991.1,
+        "max": 5991.1,
+        "min": 3400.1,
+        "mean": 4736.5
+      },
+      "samples_ms": [
+        4178.9,
+        3512.4,
+        3400.1,
+        5991.1,
+        5836.5,
+        4700.8,
+        4035.1,
+        5517.8,
+        5596.2,
+        4596.4
+      ],
+      "extras": []
+    }
+  }
+}

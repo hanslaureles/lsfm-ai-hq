@@ -25,6 +25,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 from yunjin_engine import audit_full_portfolio, critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
 from discord_utils import send_clean_embeds
+from llm_client import get_brain_status
 
 AUDIT_DATE_FILE = MEMORY_DIR / "last_portfolio_audit_date.txt"
 
@@ -218,9 +219,14 @@ async def help_command(ctx):
 @bot.command(name="ping")
 async def ping(ctx):
     latency_ms = round(bot.latency * 1000)
+    loop = asyncio.get_running_loop()
+    brain = await loop.run_in_executor(None, get_brain_status, "yunjin")
     embed = discord.Embed(
         title="🏓 Pong!",
-        description=f"Latency: **{latency_ms}ms**\nBrain: **Gemini 3.6 Flash** (Portfolio Critic Ready)",
+        description=(
+            f"Latency: **{latency_ms}ms**\n"
+            f"Brain: **{brain['active_provider']}** · `{brain['active_model']}` (mode: {brain['mode']})"
+        ),
         color=0xE91E63
     )
     await ctx.reply(embed=embed)

@@ -384,7 +384,7 @@ class Bench:
         """
         import ciel_orchestrator as co
         calls = []
-        real_groq, real_tts = co.call_groq, co.text_to_speech_bilingual
+        real_groq, real_tts, real_clip = co.call_groq, co.text_to_speech_bilingual, co.speak_clip
 
         def timed_groq(prompt, system_instruction="", **kwargs):
             kind = "router_llm" if "routing core" in system_instruction else "synthesis_llm"
@@ -405,7 +405,24 @@ class Bench:
             calls.append(("tts_bilingual", (time.perf_counter() - started) * 1000, None))
             return path
 
-        co.call_groq, co.text_to_speech_bilingual = timed_groq, timed_tts
+        async def timed_clip(*args, **kwargs):
+            # Streamed speech: one Edge TTS + filter call per sentence.
+            started = time.perf_counter()
+            path = await real_clip(*args, **kwargs)
+            calls.append(("tts_clip", (time.perf_counter() - started) * 1000, None))
+            return path
+
+        # Time to first audio: mission start until the first playable audio URL is
+        # broadcast (a streamed clip, or the finished mp3 on ciel_complete). Server
+        # side; the HUD's fetch and decode of a local file come on top.
+        first_audio = []
+
+        async def on_event(ev):
+            if not first_audio and (ev["type"] == "ciel_audio_chunk"
+                                    or (ev["type"] == "ciel_complete" and ev.get("audio_url"))):
+                first_audio.append((time.perf_counter() - mission_started) * 1000)
+
+        co.call_groq, co.text_to_speech_bilingual, co.speak_clip = timed_groq, timed_tts, timed_clip
         log = io.StringIO()
         try:
             ciel = self.ciel()
@@ -413,9 +430,14 @@ class Bench:
             # call_groq prints "[Groq 429] ..." / "[Groq Error] ..." when it sleeps on a
             # rate limit or switches model (worker threads share sys.stdout).
             with contextlib.redirect_stdout(log):
-                result = await ciel.execute_mission(MISSION_PROMPT)
+                mission_started = time.perf_counter()
+                result = await ciel.execute_mission(MISSION_PROMPT, event_callback=on_event)
         finally:
-            co.call_groq, co.text_to_speech_bilingual = real_groq, real_tts
+            co.call_groq, co.text_to_speech_bilingual, co.speak_clip = real_groq, real_tts, real_clip
+        if first_audio:
+            calls.append(("time_to_first_audio", first_audio[0], None))
+        for clip in (REPO_DIR / "audio_cache").glob(f"ciel_response_{result.get('mission_id')}_*.mp3"):
+            clip.unlink(missing_ok=True)  # streamed clips, if any
         groq_events = [line.strip() for line in log.getvalue().splitlines() if "[Groq" in line]
         if groq_events:
             # A 3 s rate-limit sleep or a different model would distort the timing.
@@ -445,7 +467,8 @@ STAGES = [
                                  "prompt repeats every run, so first-token time reflects Ollama's prompt cache "
                                  "(uncached prompt eval is in the server breakdown)."),
     ("e2e_mission", True, "Full execute_mission for a general-knowledge prompt: router LLM, synthesis LLM, "
-                          "bilingual TTS. Sub-stages are timed inside it."),
+                          "bilingual TTS. Sub-stages are timed inside it, including time_to_first_audio "
+                          "(mission start until the first playable audio URL is broadcast)."),
 ]
 LOCAL_STAGES = [name for name, network, _ in STAGES if not network]
 

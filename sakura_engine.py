@@ -115,7 +115,7 @@ def execute_morning_launchpad(sync_obsidian: bool = True) -> dict:
         inbox_summary += "\n" + "\n".join(f"  • {h}" for h in inbox["highlights"])
 
     # 2. Hardware vitals
-    vitals_summary = "Hardware Nominal"
+    vitals_summary = "Hardware vitals unavailable (check failed)"
     try:
         from eunchae_engine import get_system_vitals
         v = get_system_vitals()
@@ -137,7 +137,7 @@ The user is an Applied AI Engineer & Full-Stack Builder with dual-competency in 
 ### CANDIDATE & PORTFOLIO PROFILE:
 - Role: Applied AI Engineer / Full-Stack AI Engineer (BS Computer Science)
 - Core Value: Builds production agent swarms, multi-provider LLM routing (Groq, Gemini, local Ollama), deterministic BM25 memory, and high-craft UI/UX.
-- Flagship Projects: 6 verified case studies live in portfolio-site/ (LSFM AI Swarm, Lumina Analytics, Vellum OS, FinTrack, Aura Coffee, Cognitive Memory Core)
+- Flagship Projects: 7 case studies in portfolio-site/ (LSFM AI HQ, Manas: Ciel, Cognitive Memory Core, Aura Coffee, Lumina Analytics, Vellum, FinTrack)
 - Active Rules: 10 crystallized heuristics in Obsidian (MEM-001 through MEM-010)
 
 ### MASTER SPRINT GOALS:
@@ -165,8 +165,9 @@ Compose a structured, authoritative, and inspiring Daily Morning Briefing with t
 
 3. 📊 **SQUAD OPERATIONAL READINESS**:
    - ⭐ **Chaewon (Career):** {app_count} applications logged; ready to tailor new roles (`!tailor`).
-   - 🎨 **Yunjin (Portfolio):** 6/6 Flagship case studies verified (100/100 QA score, 0 broken assets).
-   - 💻 **Kazuha (Frontend):** Swiss Editorial design tokens & terminal telemetry in sync.
+   - 🎨 **Yunjin (Portfolio):** ready for portfolio audits and case-study critiques (`!audit`, `!critique`).
+   - 💻 **Kazuha (Frontend):** ready for code review and knowledge-base questions (`!git review`, `!ask`).
+   - Do not state scores, pass rates, asset counts or health results unless they appear in the status data above.
    - 🛡️ **Eunchae (Guardian):** {vitals_summary}.
 
 4. 🎯 **TOP 3 PRIORITIES FOR HANS TODAY**:
@@ -189,7 +190,6 @@ Tone: Calm, commanding, warm, razor-sharp leadership. Avoid robotic clichés.
                 f"Inbox Triage: {inbox.get('unread_count', 0)} unread messages scanned",
                 f"Hardware Vitals: {vitals_summary}",
                 f"Application Archive: {app_count} applications logged",
-                "Case Studies: 6/6 flagship studies verified live in portfolio-site/",
                 "Top 3 Daily Priorities synchronized to daily log"
             ]
             if inbox.get("job_alerts"):
@@ -275,7 +275,7 @@ def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
         git_commits = [f"Git status query: {e}"]
 
     # 3. Hardware vitals
-    vitals_summary = "Hardware Nominal"
+    vitals_summary = "Hardware vitals unavailable (check failed)"
     try:
         from eunchae_engine import get_system_vitals
         v = get_system_vitals()
@@ -298,7 +298,7 @@ Deliver the formal **Evening Standup & Daily Rollup** to close out the day for H
 
 ### CANDIDATE CONTEXT:
 - Candidate: Hans Aaron Laureles (Applied AI Engineer & Full-Stack Builder)
-- Active Infrastructure: 5-Daemon LSFM Swarm, Obsidian AI Brain, 6 Flagship Projects, 10 Crystallized Heuristics (MEM-001 through MEM-010)
+- Active Infrastructure: 5-Daemon LSFM Swarm, Obsidian AI Brain, 7 portfolio case studies, 10 Crystallized Heuristics (MEM-001 through MEM-010)
 
 ### DAY'S OPERATIONAL DATA:
 - Today's Date: {today_str}
@@ -322,7 +322,7 @@ Compose a structured, authoritative, and empowering Evening Standup report with 
 
 2. 📊 **SQUAD SYSTEM PULSE & HYGIENE**:
    - Summarize the performance of Chaewon, Yunjin, Kazuha, and Eunchae.
-   - Note git commit hygiene, portfolio stability (6/6 projects), and zero resource leaks.
+   - Note git commit hygiene from the commit list above. Do not claim test results, portfolio health or resource figures that are not in the data above.
 
 3. 🔮 **STRATEGIC CARRYOVER & QUEUE FOR TOMORROW**:
    - 2-3 concrete tasks prioritized for tomorrow morning's launchpad (e.g., following up on inbound signals, next engineering sprint).

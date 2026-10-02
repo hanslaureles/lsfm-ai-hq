@@ -84,28 +84,30 @@ def check_ollama_status() -> tuple[bool, list[str]]:
     except Exception:
         return False, []
 
-def get_brain_status() -> dict:
-    """Comprehensive diagnostic of the AI brain state with Blueprint C agent breakdown."""
+def get_brain_status(agent: str = None) -> dict:
+    """Comprehensive diagnostic of the AI brain state with Blueprint C agent breakdown.
+    With agent, the cloud model is that agent's own (what query_llm routes it to)."""
     mode = get_brain_mode()
     ollama_up, local_models = check_ollama_status()
     groq_configured = bool(os.getenv("GROQ_API_KEY", "").strip())
     gemini_configured = bool(os.getenv("GEMINI_API_KEY", "").strip())
     cfg = load_brain_config()
     agent_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
+    cloud_model = agent_map.get(agent, cfg.get("cloud_model", "qwen/qwen3.8-27b"))
 
     if mode == "local":
         active_provider = "Local Ollama (RX 6600 XT)" if ollama_up else "Local (Ollama Offline ⚠️)"
         active_model = cfg.get("local_model", "qwen2.5-coder:7b")
     elif mode == "cloud":
         active_provider = "Multi-Tier Cloud Cluster (Groq LPUs + Gemini)"
-        active_model = cfg.get("cloud_model", "qwen/qwen3.8-27b")
+        active_model = cloud_model
     else:  # auto
         if ollama_up and local_models:
             active_provider = "Local Ollama (Auto-detected)"
             active_model = cfg.get("local_model", "qwen2.5-coder:7b")
         else:
             active_provider = "Multi-Tier Cloud Cluster (Auto-fallback)"
-            active_model = cfg.get("cloud_model", "qwen/qwen3.8-27b")
+            active_model = cloud_model
 
     return {
         "mode": mode,
@@ -136,7 +138,32 @@ GEMINI_FALLBACK_MODELS = [
     "gemini-3.7-flash"
 ]
 
-def call_groq(prompt: str, system_instruction: str = "", model: str = None, temperature: float = 0.4) -> str:
+def _read_groq_stream(resp, on_delta) -> str:
+    """Reads an OpenAI-style SSE stream, passing each content piece to on_delta; returns the whole text."""
+    parts = []
+    for raw in resp:
+        line = raw.decode("utf-8").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        for choice in json.loads(data).get("choices") or []:
+            piece = (choice.get("delta") or {}).get("content")
+            if piece:
+                parts.append(piece)
+                on_delta(piece)
+    return "".join(parts).strip()
+
+
+def call_groq(prompt: str, system_instruction: str = "", model: str = None, temperature: float = 0.4,
+              on_delta=None) -> str:
+    """
+    Groq chat completion with model fallback and 429 handling. With on_delta, the
+    reply is streamed and on_delta(piece) runs for each text piece as it arrives
+    (in this thread). Once a piece has gone out, a failure raises instead of
+    retrying, since a retry would replay the reply from the start.
+    """
     groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
     if not groq_key:
         raise ValueError("GROQ_API_KEY not configured")
@@ -155,9 +182,18 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
         messages.append({"role": "system", "content": system_instruction})
     messages.append({"role": "user", "content": prompt})
 
+    delivered = []
+
+    def forward(piece):
+        delivered.append(piece)
+        on_delta(piece)
+
     last_error = None
     for cand_model in candidate_models:
         for attempt in range(2):
+            body = {"model": cand_model, "messages": messages, "temperature": temperature}
+            if on_delta:
+                body["stream"] = True
             req = urllib.request.Request(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -165,21 +201,23 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
                     "Content-Type": "application/json",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 },
-                data=json.dumps({
-                    "model": cand_model,
-                    "messages": messages,
-                    "temperature": temperature
-                }).encode("utf-8")
+                data=json.dumps(body).encode("utf-8")
             )
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
+                    if on_delta:
+                        return _read_groq_stream(resp, forward)
                     data = json.loads(resp.read().decode("utf-8"))
                     return data["choices"][0]["message"]["content"].strip()
             except urllib.error.HTTPError as e:
                 last_error = e
                 if e.code == 429:
                     retry_after = e.headers.get("Retry-After")
-                    wait_time = float(retry_after) if retry_after and retry_after.isdigit() else (2.0 + attempt * 2.0)
+                    # Groq sends fractional seconds ("1.5"); isdigit() rejected those.
+                    try:
+                        wait_time = float(retry_after)
+                    except (TypeError, ValueError):
+                        wait_time = 2.0 + attempt * 2.0
                     if wait_time <= 4.0 and attempt == 0:
                         print(f"[Groq 429] {cand_model} transient rate limit, waiting {wait_time:.1f}s...")
                         time.sleep(wait_time + 0.2)
@@ -191,6 +229,8 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
                     print(f"[Groq Error] {cand_model}: {e}")
                     break
             except Exception as e:
+                if delivered:
+                    raise RuntimeError(f"Groq stream from {cand_model} broke after partial output: {e}") from e
                 last_error = e
                 print(f"[Groq Exception] {cand_model}: {e}")
                 break

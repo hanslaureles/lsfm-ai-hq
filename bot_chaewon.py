@@ -323,7 +323,7 @@ async def help_command(ctx):
 async def ping(ctx):
     latency_ms = round(bot.latency * 1000)
     loop = asyncio.get_running_loop()
-    brain = await loop.run_in_executor(None, get_brain_status)
+    brain = await loop.run_in_executor(None, get_brain_status, "chaewon")
     embed = discord.Embed(
         title="🏓 Pong!",
         description=(

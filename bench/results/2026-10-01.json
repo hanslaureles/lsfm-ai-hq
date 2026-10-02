@@ -28,7 +28,7 @@
     "git": {
       "sha": "0bbd5b0d77b936053449d17cf91db5e2093118af",
       "dirty": false,
-      "provenance": "Private workstation commit where benchmarks were run; exported public release matches this architecture"
+      "provenance": "Private workstation commit where benchmarks were run. Checked 2026-10-02 against the public lsfm-ai-hq export: ciel_orchestrator.py, ciel_server.py, llm_client.py and proactive_sentinel.py are identical to it; voice_engine.py differs in the Whisper domain prompt and docstrings; pdf_engine.py, eunchae_engine.py and obsidian_client.py differ; bench/bench_ciel.py was not yet committed at 0bbd5b0."
     }
   },
   "stages": {

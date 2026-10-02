@@ -3,6 +3,15 @@ from discord.ext import commands
 import re
 from typing import List, Optional, Union, Any
 
+# Discord rejects the whole message (HTTP 400) if any embed exceeds these.
+EMBED_TITLE_MAX = 256
+EMBED_FIELD_VALUE_MAX = 1024
+EMBED_DESCRIPTION_MAX = 4096
+
+
+def clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
 def split_smart_chunks(text: str, max_chars: int = 3800) -> List[str]:
     """
     Intelligently splits long text into chunks along markdown headers, paragraphs,
@@ -14,6 +23,12 @@ def split_smart_chunks(text: str, max_chars: int = 3800) -> List[str]:
         return [""]
     if len(text) <= max_chars:
         return [text]
+
+    # Re-balancing code fences below can add "```lang\n" in front of a chunk and
+    # "\n```" after it, so split to a budget that leaves room for both.
+    langs = re.findall(r"```(\w*)", text)
+    fence_room = (3 + max(map(len, langs)) + 1 + 4) if langs else 0
+    max_chars = max(1, max_chars - fence_room)
 
     # Split primarily into paragraphs
     paragraphs = text.split("\n\n")
@@ -70,7 +85,12 @@ def split_smart_chunks(text: str, max_chars: int = 3800) -> List[str]:
                                                 if current_chunk:
                                                     raw_chunks.append(current_chunk)
                                                     current_chunk = ""
-                                                current_chunk = w[:max_chars]
+                                                # A single word longer than a chunk (a URL, a
+                                                # base64 blob) is split, not truncated.
+                                                while len(w) > max_chars:
+                                                    raw_chunks.append(w[:max_chars])
+                                                    w = w[max_chars:]
+                                                current_chunk = w
 
     if current_chunk:
         raw_chunks.append(current_chunk)
@@ -125,7 +145,8 @@ async def send_clean_embeds(
     total_parts = len(chunks)
 
     for i, chunk in enumerate(chunks, 1):
-        part_title = title if total_parts == 1 else f"{title} (Part {i}/{total_parts})"
+        suffix = "" if total_parts == 1 else f" (Part {i}/{total_parts})"
+        part_title = clip(title, EMBED_TITLE_MAX - len(suffix)) + suffix
         embed = discord.Embed(
             title=part_title,
             description=chunk,
@@ -137,7 +158,7 @@ async def send_clean_embeds(
         # Attach citations and final footer on the last part
         if i == total_parts:
             if citations:
-                cite_str = " · ".join(citations[:5])
+                cite_str = clip(" · ".join(citations[:5]), EMBED_FIELD_VALUE_MAX)
                 embed.add_field(name="📚 Verified Citations", value=cite_str, inline=False)
             embed.set_footer(text=footer_text)
         else:

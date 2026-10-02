@@ -28,3 +28,6 @@ test_render.*
 
 # Large model weights (keep out of git; use LFS or external storage)
 rvc_models/
+
+# Ciel speech output (written at run time; pruned by ciel_server)
+audio_cache/

@@ -46,9 +46,12 @@ except Exception:
 # ==============================================================================
 # HARDWARE VITALS MONITORING (Legacy Guardian Duties)
 # ==============================================================================
-def get_system_vitals() -> dict:
-    """Reads real-time PC hardware vitals using psutil."""
-    cpu_pct = psutil.cpu_percent(interval=0.5)
+def get_system_vitals(cpu_interval: float | None = 0.5) -> dict:
+    """
+    Reads real-time PC hardware vitals using psutil. cpu_interval=None doesn't
+    sleep: it reports CPU use since the previous call (the HUD's 5 s push loop).
+    """
+    cpu_pct = psutil.cpu_percent(interval=cpu_interval)
     cpu_count = psutil.cpu_count(logical=True)
     
     vm = psutil.virtual_memory()
