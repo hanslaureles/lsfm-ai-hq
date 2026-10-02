@@ -4,6 +4,7 @@ import asyncio
 import datetime
 from pathlib import Path
 import discord
+import health_recorder
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -22,6 +23,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+health_recorder.attach(bot, "yunjin")  # memory/health/yunjin.json (4B-2)
 
 from yunjin_engine import audit_full_portfolio, critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
 from discord_utils import send_clean_embeds

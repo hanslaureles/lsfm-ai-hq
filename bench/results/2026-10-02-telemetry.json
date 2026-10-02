@@ -1,0 +1,644 @@
+{
+  "date": "2026-10-02",
+  "started_at": "2026-10-02T12:31:30+00:00",
+  "duration_s": 226.4,
+  "mock": false,
+  "runs": 10,
+  "stream": false,
+  "pace_s": 3.0,
+  "brain_mode": "cloud",
+  "environment": {
+    "hardware": {
+      "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+      "cpu_logical_cores": 12,
+      "ram_gb": 15.8,
+      "gpu": "AMD Radeon RX 6600 XT"
+    },
+    "software": {
+      "os": "Microsoft Windows 11 Pro (build 10.0.26200)",
+      "python": "3.11.9",
+      "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev",
+      "edge_tts": "7.2.8",
+      "ddgs": "9.16.0",
+      "ollama": "unreachable (URLError)"
+    },
+    "git": {
+      "sha": "922248a46dca0a7c543e898fa6ad0403d08aab34",
+      "dirty": true
+    }
+  },
+  "agents": {
+    "sakura": {
+      "prompt": "In two sentences, say what a good morning briefing should list first.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "total_ms": {
+        "p50": 312.0,
+        "p95": 466.7,
+        "max": 466.7,
+        "min": 292.0,
+        "mean": 338.5
+      },
+      "ttft_ms": null,
+      "fallback_rate": 0.0,
+      "answered_by": {
+        "groq/qwen/qwen3.8-27b": 10
+      },
+      "errors": [],
+      "calls": [
+        {
+          "ok": true,
+          "total_ms": 312.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 308.7,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 338.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 370.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 360.1,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 300.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 466.7,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 292.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 310.7,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 326.2,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        }
+      ]
+    },
+    "chaewon": {
+      "prompt": "In two sentences, explain what an ATS match score measures.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "total_ms": {
+        "p50": 786.3,
+        "p95": 931.0,
+        "max": 931.0,
+        "min": 736.3,
+        "mean": 806.4
+      },
+      "ttft_ms": null,
+      "fallback_rate": 0.0,
+      "answered_by": {
+        "groq/openai/gpt-oss-120b": 10
+      },
+      "errors": [],
+      "calls": [
+        {
+          "ok": true,
+          "total_ms": 772.4,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 854.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 752.4,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 786.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 773.1,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 812.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 736.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 931.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 836.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 810.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-120b"
+          ]
+        }
+      ]
+    },
+    "yunjin": {
+      "prompt": "In two sentences, state the WCAG 2.1 AA contrast rule for normal text.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "total_ms": {
+        "p50": 4861.1,
+        "p95": 7011.6,
+        "max": 7011.6,
+        "min": 4257.1,
+        "mean": 5383.2
+      },
+      "ttft_ms": null,
+      "fallback_rate": 0.1,
+      "answered_by": {
+        "gemini/gemini-3.6-flash": 9,
+        "gemini/gemini-3.5-flash": 1
+      },
+      "errors": [],
+      "calls": [
+        {
+          "ok": true,
+          "total_ms": 6827.4,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 7011.6,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.5-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash",
+            "gemini/gemini-3.5-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 5480.1,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 4474.7,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 4379.9,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 5688.5,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 4674.3,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 4861.1,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 6177.1,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 4257.1,
+          "ttft_ms": null,
+          "provider": "gemini",
+          "model": "gemini-3.6-flash",
+          "fallback_chain": [
+            "gemini/gemini-3.6-flash"
+          ]
+        }
+      ]
+    },
+    "kazuha": {
+      "prompt": "In two sentences, explain what git rebase does.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "total_ms": {
+        "p50": 333.6,
+        "p95": 554.1,
+        "max": 554.1,
+        "min": 299.1,
+        "mean": 368.4
+      },
+      "ttft_ms": null,
+      "fallback_rate": 0.0,
+      "answered_by": {
+        "groq/qwen/qwen3.8-27b": 10
+      },
+      "errors": [],
+      "calls": [
+        {
+          "ok": true,
+          "total_ms": 333.6,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 318.8,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 307.2,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 357.4,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 370.2,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 299.1,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 554.1,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 344.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 491.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 308.4,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "qwen/qwen3.8-27b",
+          "fallback_chain": [
+            "groq/qwen/qwen3.8-27b"
+          ]
+        }
+      ]
+    },
+    "eunchae": {
+      "prompt": "In two sentences, explain why a watchdog samples CPU and RAM on a schedule.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "total_ms": {
+        "p50": 747.1,
+        "p95": 918.3,
+        "max": 918.3,
+        "min": 466.9,
+        "mean": 745.9
+      },
+      "ttft_ms": null,
+      "fallback_rate": 0.0,
+      "answered_by": {
+        "groq/openai/gpt-oss-20b": 10
+      },
+      "errors": [],
+      "calls": [
+        {
+          "ok": true,
+          "total_ms": 691.6,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 466.9,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 593.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 918.3,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 886.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 747.1,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 881.2,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 780.0,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 728.2,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        },
+        {
+          "ok": true,
+          "total_ms": 766.7,
+          "ttft_ms": null,
+          "provider": "groq",
+          "model": "openai/gpt-oss-20b",
+          "fallback_chain": [
+            "groq/openai/gpt-oss-20b"
+          ]
+        }
+      ]
+    }
+  },
+  "overall": {
+    "n_ok": 50,
+    "total_ms": {
+      "p50": 736.3,
+      "p95": 6177.1,
+      "max": 7011.6,
+      "min": 292.0,
+      "mean": 1528.5
+    }
+  }
+}

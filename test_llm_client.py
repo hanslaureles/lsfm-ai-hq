@@ -338,6 +338,136 @@ class TestGeminiSdk(unittest.TestCase):
         self.assertIn("google-genai", reqs)
 
 
+class _Json:
+    """A non-streamed chat completion response."""
+
+    def __init__(self, text):
+        self.body = json.dumps({"choices": [{"message": {"content": text}}]}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def _http_error(code, retry_after=None):
+    import email.message
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return llm_client.urllib.error.HTTPError("https://api.groq.com", code, "err", headers, None)
+
+
+class TestStructuredResult(unittest.TestCase):
+    """4B-1: query_llm_structured reports which provider/model answered, how long it took,
+    and every model tried on the way; query_llm keeps returning the text."""
+
+    def setUp(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.config = tmp / "brain_mode.json"
+        self.config.write_text(json.dumps({"mode": "cloud"}), encoding="utf-8")
+        self.enterContext(mock.patch.object(llm_client, "CONFIG_FILE", self.config))
+        self.enterContext(mock.patch.object(llm_client, "_config_cache", (None, None), create=True))
+        self.enterContext(mock.patch.dict(os.environ, {"GROQ_API_KEY": "test", "GEMINI_API_KEY": "test"}))
+        self.enterContext(mock.patch("time.sleep"))
+        self.enterContext(mock.patch("builtins.print"))
+        self.sent = []
+
+    def groq(self, *responses):
+        responses = list(responses)
+
+        def fake_urlopen(req, timeout=None):
+            self.sent.append(json.loads(req.data)["model"])
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        self.enterContext(mock.patch.object(llm_client.urllib.request, "urlopen", fake_urlopen))
+
+    def test_first_model_answers(self):
+        self.groq(_Json(" hello "))
+        r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertIsInstance(r, llm_client.LLMResult)
+        self.assertEqual((r.text, r.provider, r.model), ("hello", "groq", "qwen/qwen3.8-27b"))
+        self.assertEqual(r.fallback_chain, ("groq/qwen/qwen3.8-27b",))
+        self.assertIsNone(r.ttft_ms)  # nothing streamed
+
+    def test_total_ms_spans_the_whole_call(self):
+        # A fake clock: each perf_counter() read advances 1 s, so the result can't round to 0 by luck.
+        ticks = iter(range(1000))
+        self.groq(_http_error(429, retry_after="30"), _Json("ok"))
+        with mock.patch.object(llm_client.time, "perf_counter", lambda: float(next(ticks))):
+            r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertGreaterEqual(r.total_ms, 1000.0)  # at least the first read to the last
+
+    def test_rate_limit_moves_to_the_next_groq_model_and_is_recorded(self):
+        self.groq(_http_error(429, retry_after="30"), _Json("ok"))
+        r = llm_client.query_llm_structured("hi", agent="chaewon")
+        self.assertEqual(r.model, self.sent[1])
+        self.assertEqual(r.fallback_chain, (f"groq/{self.sent[0]}", f"groq/{self.sent[1]}"))
+        self.assertEqual(self.sent[0], "openai/gpt-oss-120b")
+
+    def test_transient_retry_on_the_same_model_is_not_a_fallback_step(self):
+        self.groq(_http_error(429, retry_after="1.5"), _Json("ok"))
+        r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertEqual(self.sent, ["qwen/qwen3.8-27b", "qwen/qwen3.8-27b"])
+        self.assertEqual(r.fallback_chain, ("groq/qwen/qwen3.8-27b",))
+
+    def test_every_groq_model_failing_falls_through_to_gemini(self):
+        n = len(llm_client.GROQ_FALLBACK_MODELS)
+        self.groq(*[_http_error(500)] * n)
+        self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("from gemini")])))
+        r = llm_client.query_llm_structured("hi", agent="kazuha")
+        self.assertEqual((r.text, r.provider, r.model), ("from gemini", "gemini", "gemini-3.6-flash"))
+        self.assertEqual(r.fallback_chain[-1], "gemini/gemini-3.6-flash")
+        self.assertEqual(len(r.fallback_chain), n + 1)
+        self.assertTrue(all(step.startswith("groq/") for step in r.fallback_chain[:-1]))
+
+    def test_yunjin_tries_gemini_first(self):
+        self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("design notes")])))
+        r = llm_client.query_llm_structured("hi", agent="yunjin")
+        self.assertEqual((r.provider, r.model, r.fallback_chain), ("gemini", "gemini-3.6-flash",
+                                                                   ("gemini/gemini-3.6-flash",)))
+
+    def test_streaming_reports_time_to_first_token(self):
+        self.groq(SSE(["one ", "two"]))
+        pieces = []
+        r = llm_client.query_llm_structured("hi", agent="sakura", on_delta=pieces.append)
+        self.assertEqual((r.text, pieces), ("one two", ["one ", "two"]))
+        self.assertIsNotNone(r.ttft_ms)
+        self.assertLessEqual(r.ttft_ms, r.total_ms)
+
+    def test_local_mode_reports_ollama(self):
+        self.config.write_text(json.dumps({"mode": "local"}), encoding="utf-8")
+        self.enterContext(mock.patch.object(llm_client, "check_ollama_status", lambda: (True, ["qwen2.5-coder:7b"])))
+        self.groq(_Json("local answer"))
+        r = llm_client.query_llm_structured("hi", agent="eunchae")
+        self.assertEqual((r.provider, r.model, r.fallback_chain),
+                         ("ollama", "qwen2.5-coder:7b", ("ollama/qwen2.5-coder:7b",)))
+
+    def test_query_llm_still_returns_the_text(self):
+        self.groq(_Json("plain"))
+        self.assertEqual(llm_client.query_llm("hi", agent="sakura"), "plain")
+
+    def test_total_failure_still_raises(self):
+        n = len(llm_client.GROQ_FALLBACK_MODELS)
+        self.groq(*[_http_error(500)] * n)
+        self.enterContext(mock.patch("google.genai.Client",
+                                     FakeGenai([Exception("down")] * len(llm_client.GEMINI_FALLBACK_MODELS))))
+        with self.assertRaises(RuntimeError):
+            llm_client.query_llm_structured("hi", agent="sakura")
+
+    def test_providers_that_report_nothing_fall_back_to_the_requested_model(self):
+        # Callers and tests may stub call_groq with a plain function that ignores meta.
+        self.enterContext(mock.patch.object(llm_client, "call_groq", lambda p, **k: "stub"))
+        r = llm_client.query_llm_structured("hi", agent="eunchae")
+        self.assertEqual((r.text, r.provider, r.model, r.fallback_chain), ("stub", "groq", "openai/gpt-oss-20b", ()))
+
+
 def _load_rag():
     spec = importlib.util.spec_from_file_location("rag_engine_under_test", Path(__file__).with_name("rag_engine.py"))
     module = importlib.util.module_from_spec(spec)

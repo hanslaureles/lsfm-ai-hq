@@ -31,3 +31,6 @@ rvc_models/
 
 # Ciel speech output (written at run time; pruned by ciel_server)
 audio_cache/
+
+# Per-bot heartbeat files (written at run time by health_recorder)
+memory/health/

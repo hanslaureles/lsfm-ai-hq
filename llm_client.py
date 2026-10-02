@@ -5,6 +5,7 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -169,14 +170,33 @@ def _read_groq_stream(resp, on_delta) -> str:
     return "".join(parts).strip()
 
 
+def _note_attempt(meta, provider, model):
+    """Adds provider/model to meta["chain"] the first time it is tried (retries on it don't repeat it)."""
+    if meta is not None:
+        step = f"{provider}/{model}"
+        chain = meta.setdefault("chain", [])
+        if step not in chain:
+            chain.append(step)
+
+
+def _note_answer(meta, provider, model, ttft_ms=None):
+    if meta is not None:
+        meta.update(provider=provider, model=model, ttft_ms=ttft_ms)
+
+
 def call_groq(prompt: str, system_instruction: str = "", model: str = None, temperature: float = 0.4,
-              on_delta=None) -> str:
+              on_delta=None, meta: dict = None) -> str:
     """
     Groq chat completion with model fallback and 429 handling. With on_delta, the
     reply is streamed and on_delta(piece) runs for each text piece as it arrives
     (in this thread). Once a piece has gone out, a failure raises instead of
     retrying, since a retry would replay the reply from the start.
+    meta (optional dict) collects telemetry for query_llm_structured: "chain" (every
+    model tried), and on success "provider", "model" and "ttft_ms" (first streamed
+    piece, measured from this call's start; None without on_delta).
     """
+    started = time.perf_counter()
+    first_piece_ms = []
     groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
     if not groq_key:
         raise ValueError("GROQ_API_KEY not configured")
@@ -198,12 +218,15 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
     delivered = []
 
     def forward(piece):
+        if not first_piece_ms:
+            first_piece_ms.append(round((time.perf_counter() - started) * 1000, 1))
         delivered.append(piece)
         on_delta(piece)
 
     last_error = None
     for cand_model in candidate_models:
         for attempt in range(2):
+            _note_attempt(meta, "groq", cand_model)
             body = {"model": cand_model, "messages": messages, "temperature": temperature}
             if on_delta:
                 body["stream"] = True
@@ -219,9 +242,12 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     if on_delta:
-                        return _read_groq_stream(resp, forward)
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return data["choices"][0]["message"]["content"].strip()
+                        text = _read_groq_stream(resp, forward)
+                    else:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        text = data["choices"][0]["message"]["content"].strip()
+                _note_answer(meta, "groq", cand_model, first_piece_ms[0] if first_piece_ms else None)
+                return text
             except urllib.error.HTTPError as e:
                 last_error = e
                 if e.code == 429:
@@ -250,10 +276,11 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
 
     raise RuntimeError(f"All Groq models failed: {last_error}")
 
-def call_local_ollama(prompt: str, system_instruction: str = "", model: str = None) -> str:
+def call_local_ollama(prompt: str, system_instruction: str = "", model: str = None, meta: dict = None) -> str:
     if not model:
         cfg = load_brain_config()
         model = cfg.get("local_model", "qwen2.5-coder:7b")
+    _note_attempt(meta, "ollama", model)
 
     messages = []
     if system_instruction:
@@ -267,9 +294,12 @@ def call_local_ollama(prompt: str, system_instruction: str = "", model: str = No
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"].strip()
+        text = data["choices"][0]["message"]["content"].strip()
+    _note_answer(meta, "ollama", model)
+    return text
 
-def call_gemini(prompt: str, system_instruction: str = "", model_name: str = None, temperature: float = 0.4) -> str:
+def call_gemini(prompt: str, system_instruction: str = "", model_name: str = None, temperature: float = 0.4,
+                meta: dict = None) -> str:
     from google import genai
     from google.genai import types
     gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -293,10 +323,12 @@ def call_gemini(prompt: str, system_instruction: str = "", model_name: str = Non
     with genai.Client(api_key=gemini_key) as client:  # closes its HTTP session on every exit
         for cand_model in candidate_models:
             for attempt in range(2):
+                _note_attempt(meta, "gemini", cand_model)
                 try:
                     res = client.models.generate_content(model=cand_model, contents=full_prompt, config=generation_config)
                     if not (res.text or "").strip():
                         raise ValueError("empty response (blocked or no text parts)")
+                    _note_answer(meta, "gemini", cand_model)
                     return res.text.strip()
                 except Exception as e:
                     last_error = e
@@ -321,11 +353,29 @@ def call_gemini(prompt: str, system_instruction: str = "", model_name: str = Non
 AGENTS = tuple(DEFAULT_CONFIG["agent_cloud_models"])
 
 
+@dataclass(frozen=True)
+class LLMResult:
+    """One query_llm_structured answer with the telemetry behind it."""
+    text: str
+    model: str                       # the model that answered
+    provider: str                    # "groq" | "gemini" | "ollama"
+    ttft_ms: float | None            # first streamed piece; None unless on_delta was given (Groq only)
+    total_ms: float                  # whole call, including failed attempts and fallbacks
+    fallback_chain: tuple[str, ...]  # "provider/model" in the order tried; the last one answered
+
+
 def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.4, *, agent: str) -> str:
+    """query_llm_structured(...).text: the dispatcher every bot calls."""
+    return query_llm_structured(prompt, system_instruction, temperature, agent=agent).text
+
+
+def query_llm_structured(prompt: str, system_instruction: str = "", temperature: float = 0.4, *,
+                         agent: str, on_delta=None) -> LLMResult:
     """
     Multi-provider LLM dispatcher with per-agent model specialization. `agent` is
     required and must be one of AGENTS; it picks the cloud model from
-    brain_mode.json's agent_cloud_models (defaults below).
+    brain_mode.json's agent_cloud_models (defaults below). on_delta streams Groq
+    replies (and gives ttft_ms); Gemini and Ollama answer in one piece.
     - 'cloud':
         * Sakura: qwen/qwen3.8-27b (Groq)
         * Chaewon: openai/gpt-oss-120b (Groq)
@@ -342,17 +392,24 @@ def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.
     cfg = load_brain_config()
     mode = cfg.get("mode", "cloud").lower()
     errors = []
+    meta = {"chain": []}  # filled by the call_* functions (see call_groq)
+    started = time.perf_counter()
 
     agent_cloud_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
     target_cloud_model = agent_cloud_map.get(agent_key, cfg.get("cloud_model", "qwen/qwen3.8-27b"))
     target_local_model = cfg.get("local_model", "qwen2.5-coder:7b")
 
-    # 1. LOCAL MODE
-    if mode == "local":
-        ollama_up, models = check_ollama_status()
-        if not ollama_up:
-            raise RuntimeError("⚠️ Brain mode is set to 'local', but Ollama is not running on localhost:11434! Please launch Ollama or type '!mode cloud' in Discord.")
-        return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model)
+    def _groq(model):
+        return call_groq(prompt, system_instruction=system_instruction, model=model, temperature=temperature,
+                         on_delta=on_delta, meta=meta), "groq", model
+
+    def _gemini(model):
+        return call_gemini(prompt, system_instruction=system_instruction, model_name=model,
+                           temperature=temperature, meta=meta), "gemini", model
+
+    def _ollama():
+        return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model,
+                                 meta=meta), "ollama", target_local_model
 
     # Helper for specialized cloud dispatch
     def _dispatch_cloud():
@@ -360,41 +417,52 @@ def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.
         if target_cloud_model.startswith("gemini"):
             if os.getenv("GEMINI_API_KEY", "").strip():
                 try:
-                    return call_gemini(prompt, system_instruction=system_instruction, model_name=target_cloud_model, temperature=temperature)
+                    return _gemini(target_cloud_model)
                 except Exception as ge:
                     errors.append(f"Gemini ({target_cloud_model}): {ge}")
             # Fallback to Groq
             try:
-                return call_groq(prompt, system_instruction=system_instruction, model="qwen/qwen3.8-27b", temperature=temperature)
+                return _groq("qwen/qwen3.8-27b")
             except Exception as e:
                 errors.append(f"Groq Cloud fallback: {e}")
         else:
             # Target model is a Groq model (Sakura, Chaewon, Kazuha, Eunchae)
             try:
-                return call_groq(prompt, system_instruction=system_instruction, model=target_cloud_model, temperature=temperature)
+                return _groq(target_cloud_model)
             except Exception as e:
                 errors.append(f"Groq Cloud ({target_cloud_model}): {e}")
             # Fallback to Gemini
             if os.getenv("GEMINI_API_KEY", "").strip():
                 try:
-                    return call_gemini(prompt, system_instruction=system_instruction, model_name="gemini-3.6-flash", temperature=temperature)
+                    return _gemini("gemini-3.6-flash")
                 except Exception as ge:
                     errors.append(f"Gemini fallback: {ge}")
 
         raise RuntimeError(f"Cloud providers failed: {'; '.join(errors)}")
 
-    # 2. CLOUD MODE
-    if mode == "cloud":
-        return _dispatch_cloud()
+    def _dispatch():
+        # 1. LOCAL MODE
+        if mode == "local":
+            ollama_up, models = check_ollama_status()
+            if not ollama_up:
+                raise RuntimeError("⚠️ Brain mode is set to 'local', but Ollama is not running on localhost:11434! Please launch Ollama or type '!mode cloud' in Discord.")
+            return _ollama()
 
-    # 3. AUTO MODE (Smart detection)
-    else:
+        # 2. CLOUD MODE
+        if mode == "cloud":
+            return _dispatch_cloud()
+
+        # 3. AUTO MODE (Smart detection)
         ollama_up, local_models = check_ollama_status()
         if ollama_up and local_models:
             try:
-                return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model)
+                return _ollama()
             except Exception as e:
                 errors.append(f"Local Ollama: {e}")
-
         return _dispatch_cloud()
 
+    text, provider, requested = _dispatch()
+    # A provider stubbed without meta support reports nothing; fall back to what was asked for.
+    return LLMResult(text=text, model=meta.get("model", requested), provider=meta.get("provider", provider),
+                     ttft_ms=meta.get("ttft_ms"), total_ms=round((time.perf_counter() - started) * 1000, 1),
+                     fallback_chain=tuple(meta["chain"]))

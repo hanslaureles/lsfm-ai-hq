@@ -5,6 +5,7 @@ import asyncio
 import datetime
 from pathlib import Path
 import discord
+import health_recorder
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -24,6 +25,7 @@ intents.message_content = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+health_recorder.attach(bot, "sakura")  # memory/health/sakura.json (4B-2)
 
 from sakura_engine import (
     generate_morning_briefing,

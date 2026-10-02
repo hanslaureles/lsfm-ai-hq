@@ -4,6 +4,7 @@ import sys
 import asyncio
 from pathlib import Path
 import discord
+import health_recorder
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -26,6 +27,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+health_recorder.attach(bot, "chaewon")  # memory/health/chaewon.json (4B-2)
 
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
 from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, get_portal_search_links
