@@ -14,7 +14,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -64,6 +64,15 @@ def init_db():
 # -----------------------------------------------------------------------------
 # 2. BATCH EMBEDDINGS PROVIDER
 # -----------------------------------------------------------------------------
+def _embed(api_key: str, contents, task_type: str) -> list[list[float]]:
+    """One gemini-embedding-001 call (google-genai); returns one vector per input."""
+    from google import genai
+    from google.genai import types
+    with genai.Client(api_key=api_key) as client:  # closes its HTTP session on every exit
+        res = client.models.embed_content(
+            model="gemini-embedding-001", contents=contents, config=types.EmbedContentConfig(task_type=task_type))
+    return [e.values for e in res.embeddings]
+
 def get_batch_embeddings(texts: list[str], batch_size: int = 20) -> list[list[float]]:
     """
     Generates 3072-dimensional embeddings in batches using Google Gemini models/gemini-embedding-001.
@@ -75,20 +84,13 @@ def get_batch_embeddings(texts: list[str], batch_size: int = 20) -> list[list[fl
     all_embeddings = []
 
     if api_key:
-        genai.configure(api_key=api_key)
         for i in range(0, len(texts), batch_size):
             batch = [t[:4000] for t in texts[i:i + batch_size]]
             retries = 3
             success = False
             while retries > 0 and not success:
                 try:
-                    res = genai.embed_content(
-                        model="models/gemini-embedding-001",
-                        content=batch,
-                        task_type="retrieval_document"
-                    )
-                    embeddings = res.get("embedding", [])
-                    all_embeddings.extend(embeddings)
+                    all_embeddings.extend(_embed(api_key, batch, "RETRIEVAL_DOCUMENT"))
                     success = True
                     time.sleep(0.5) # Gentle pacing to avoid 429 quota limits
                 except Exception as e:
@@ -114,13 +116,7 @@ def get_query_embedding(query_text: str) -> list[float] | None:
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if api_key:
         try:
-            genai.configure(api_key=api_key)
-            res = genai.embed_content(
-                model="models/gemini-embedding-001",
-                content=query_text[:2000],
-                task_type="retrieval_query"
-            )
-            return res.get("embedding", [])
+            return _embed(api_key, query_text[:2000], "RETRIEVAL_QUERY")[0]
         except Exception as e:
             print(f"⚠️ [RAG] Query embedding error: {e}", flush=True)
     return None
@@ -230,7 +226,7 @@ def build_index(force: bool = False) -> dict:
     for file_path, doc_type, title in targets:
         try:
             rel_path = str(file_path.relative_to(WORKSPACE_DIR)).replace("\\", "/")
-        except Exception:
+        except Exception:  # quiet: file outside the workspace: keep its bare name
             rel_path = file_path.name
 
         try:
@@ -425,7 +421,7 @@ Your job is to answer Hans's question using ONLY the provided verified context f
 - If the answer cannot be determined from the context, state honestly that the knowledge is not in the indexed docs.
 - Tone: Disciplined, articulate, executive frontend architect.
 """
-    answer_text = query_llm(prompt, temperature=0.2)
+    answer_text = query_llm(prompt, temperature=0.2, agent="kazuha")
     return {
         "answer": answer_text,
         "citations": list(dict.fromkeys(citations))

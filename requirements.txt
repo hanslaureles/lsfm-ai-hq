@@ -11,7 +11,7 @@ python-dotenv>=1.0.0
 
 # LLM Providers (Hybrid Cloud & Local Inference)
 groq>=0.9.0
-google-generativeai>=0.7.2
+google-genai>=2.27.0
 openai>=1.30.0
 
 # Google Workspace REST APIs (OAuth2 & Gmail Engine)

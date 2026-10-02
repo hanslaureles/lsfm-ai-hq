@@ -10,7 +10,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 from typing import Optional, Dict, Any, List
 from google.auth.transport.requests import Request
@@ -133,8 +133,8 @@ def extract_body_text(payload: Dict[str, Any]) -> str:
                     body_text += clean
                 else:
                     body_text += decoded
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [gmail_engine.extract_body_text] suppressed {type(_exc).__name__}: {_exc}", flush=True)
     return body_text[:2500]
 
 def fetch_inbox_messages(service, max_results: int = 25, unread_only: bool = False) -> List[Dict[str, Any]]:
@@ -401,7 +401,7 @@ Return ONLY valid JSON:
 }}
 """
     try:
-        res = query_llm(prompt, temperature=0.1)
+        res = query_llm(prompt, temperature=0.1, agent="sakura")
         json_match = re.search(r"\{[\s\S]*\}", res)
         if json_match:
             data = json.loads(json_match.group(0))
@@ -413,8 +413,8 @@ Return ONLY valid JSON:
                     "action": "KEEP_INBOX" if data.get("category") in ["UNIVERSITY", "INTERVIEW", "FINANCE", "PERSONAL_VIP", "DELIVERY"] else "ARCHIVE_PROMO",
                     "summary": data.get("summary", subject[:70])
                 }
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [gmail_engine.classify_email] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # Safe fallback: automated emails are never VIP!
     return {
@@ -722,7 +722,8 @@ def get_recent_finance_summary(max_results: int = 20) -> Dict[str, Any]:
                 "date": date_str,
                 "snippet": snippet[:100]
             })
-        except Exception:
+        except Exception as _exc:
+            print(f"⚠️ [gmail_engine.get_recent_finance_summary] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             continue
 
     return {

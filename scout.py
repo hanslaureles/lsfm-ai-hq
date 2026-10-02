@@ -45,7 +45,7 @@ Hans is chatting with you in the #job-tailoring channel.
 - Keep the tone confident, encouraging, direct, and professional with a touch of Chaewon's charismatic energy.
 - Format cleanly for Discord markdown.
 """
-    return query_llm(prompt, temperature=0.4)
+    return query_llm(prompt, temperature=0.4, agent="chaewon")
 
 
 def extract_job_meta(job_text: str) -> tuple[str, str]:
@@ -66,7 +66,7 @@ Excerpt:
 {job_text[:3000]}
 """
     try:
-        res_text = query_llm(prompt, temperature=0.1)
+        res_text = query_llm(prompt, temperature=0.1, agent="chaewon")
         role = "Design / Engineering Role"
         company = "Target Company"
         for line in res_text.splitlines():
@@ -76,7 +76,8 @@ Excerpt:
             elif line_s.lower().startswith("company:"):
                 company = line_s.split(":", 1)[1].strip()
         return role, company
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [scout.extract_job_meta] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         return "Design / Engineering Role", "Target Company"
 
 def is_valid_body_paragraph(text: str) -> bool:
@@ -166,7 +167,7 @@ Perform a deep, strategic analysis and produce the following tailored applicatio
 Format your response cleanly in readable GitHub Markdown.
 """
 
-    output_text = query_llm(prompt, temperature=0.4)
+    output_text = query_llm(prompt, temperature=0.4, agent="chaewon")
 
     # Post-check fallback: Extract company or role if they were generic but mentioned in the generated letter
     if company in ["Target Company", "Job", ""]:
@@ -190,7 +191,7 @@ Format your response cleanly in readable GitHub Markdown.
     if score_match:
         try:
             match_score = int(score_match.group(1))
-        except Exception:
+        except Exception:  # quiet: unparsable score keeps the default
             pass
 
     # Save to applications archive
@@ -374,5 +375,5 @@ Your task is to write high-converting, ATS-optimized answers to the employer's s
    [Answer text ready to copy]
    ```
 """
-    return query_llm(prompt, temperature=0.3)
+    return query_llm(prompt, temperature=0.3, agent="chaewon")
 

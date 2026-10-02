@@ -120,8 +120,8 @@ def execute_morning_launchpad(sync_obsidian: bool = True) -> dict:
         from eunchae_engine import get_system_vitals
         v = get_system_vitals()
         vitals_summary = f"CPU: {v.get('cpu_pct', 0)}% ({v.get('cpu_count', 12)} Cores) | RAM: {v.get('ram_used_gb', 0)}GB / {v.get('ram_total_gb', 0)}GB ({v.get('ram_pct', 0)}%) | C: Drive Free: {v.get('disk_free_gb', 0)}GB"
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [sakura_engine.execute_morning_launchpad] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # 3. Application count
     applications_log = load_file(MEMORY_DIR / "applications_log.md")
@@ -175,7 +175,7 @@ Compose a structured, authoritative, and inspiring Daily Morning Briefing with t
 
 Tone: Calm, commanding, warm, razor-sharp leadership. Avoid robotic clichés.
 """
-    briefing_text = query_llm(prompt, temperature=0.4)
+    briefing_text = query_llm(prompt, temperature=0.4, agent="sakura")
 
     # 5. Obsidian Second Brain Sync
     obsidian_synced = False
@@ -280,8 +280,8 @@ def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
         from eunchae_engine import get_system_vitals
         v = get_system_vitals()
         vitals_summary = f"CPU: {v.get('cpu_pct', 0)}% ({v.get('cpu_count', 12)} Cores) | RAM: {v.get('ram_used_gb', 0)}GB / {v.get('ram_total_gb', 0)}GB ({v.get('ram_pct', 0)}%) | C: Drive Free: {v.get('disk_free_gb', 0)}GB | Uptime: {v.get('uptime_str', '')}"
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [sakura_engine.execute_evening_rollup] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # 4. Applications count
     applications_log = load_file(MEMORY_DIR / "applications_log.md")
@@ -332,7 +332,7 @@ Compose a structured, authoritative, and empowering Evening Standup report with 
 
 Tone: Calm, commanding, executive, razor-sharp. Avoid robotic clichés.
 """
-    rollup_text = query_llm(prompt, temperature=0.4)
+    rollup_text = query_llm(prompt, temperature=0.4, agent="sakura")
 
     # 6. Obsidian Daily Log Append
     obsidian_synced = False
@@ -398,7 +398,7 @@ The user is asking you for guidance.
 Provide structured, strategic, high-value advice.
 Be direct, actionable, and confident. Think like an executive coach or senior design manager.
 """
-    return query_llm(prompt, temperature=0.4)
+    return query_llm(prompt, temperature=0.4, agent="sakura")
 
 
 PENDING_PROPOSALS_FILE = MEMORY_DIR / "pending_proposals.json"
@@ -408,7 +408,8 @@ def load_pending_proposals() -> dict:
         try:
             import json
             return json.loads(PENDING_PROPOSALS_FILE.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as _exc:
+            print(f"⚠️ [sakura_engine.load_pending_proposals] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             return {}
     return {}
 

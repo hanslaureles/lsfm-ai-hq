@@ -129,7 +129,7 @@ async def broadcast_ws(payload: dict):
     for ws in list(active_websockets):
         try:
             await ws.send_str(msg)
-        except Exception:
+        except Exception:  # quiet: a closed socket is dropped from the client set
             dead_ws.add(ws)
     active_websockets.difference_update(dead_ws)
 
@@ -376,5 +376,6 @@ def create_app():
 
 if __name__ == "__main__":
     print(f"✨ Starting Ciel Server on http://localhost:{CIEL_PORT}")
+    print(f"🗂️ [Vault] {ciel.obsidian.check_vault_consistency()}", flush=True)
     app = create_app()
     web.run_app(app, host="127.0.0.1", port=CIEL_PORT)

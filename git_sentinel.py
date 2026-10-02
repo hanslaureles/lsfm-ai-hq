@@ -10,12 +10,15 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 BASE_DIR = Path(__file__).parent
 WORKSPACE_DIR = BASE_DIR.parent
 MEMORY_DIR = BASE_DIR / "memory"
+# D6: the default repo is HQ itself. WORKSPACE_DIR (Projects/) is not a git repo, so
+# every default check there failed ("Git Check Failed"). Pass repo_path for others.
+GIT_REPO_DIR = BASE_DIR
 
 from llm_client import query_llm, check_ollama_status, call_local_ollama
 
@@ -76,7 +79,7 @@ def run_git_command(args: List[str], cwd: Path) -> Tuple[int, str, str]:
 
 def get_git_info(repo_path: Optional[Path] = None) -> Dict[str, Any]:
     """Extracts status, current branch, staged and unstaged file lists."""
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     code, branch, _ = run_git_command(["branch", "--show-current"], cwd)
     if code != 0 or not branch:
         branch = "HEAD (detached)"
@@ -119,7 +122,7 @@ def get_git_info(repo_path: Optional[Path] = None) -> Dict[str, Any]:
 
 def get_git_diff(repo_path: Optional[Path] = None, staged: bool = False) -> str:
     """Retrieves the unified git diff. If staged=True, gets staged changes; otherwise unstaged (or both)."""
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     
     if staged:
         code, diff_out, _ = run_git_command(["diff", "--cached"], cwd)
@@ -169,15 +172,15 @@ def execute_llm_query(prompt: str, system_instruction: str = "") -> str:
     if ollama_up and any("qwen2.5-coder" in m.lower() for m in models):
         try:
             return call_local_ollama(prompt, system_instruction=system_instruction, model="qwen2.5-coder:7b")
-        except Exception:
-            pass
-    return query_llm(prompt, system_instruction=system_instruction, temperature=0.2)
+        except Exception as _exc:
+            print(f"⚠️ [git_sentinel.execute_llm_query] suppressed {type(_exc).__name__}: {_exc}", flush=True)
+    return query_llm(prompt, system_instruction=system_instruction, temperature=0.2, agent="kazuha")
 
 def review_code_diff(repo_path: Optional[Path] = None, staged_only: bool = False) -> Dict[str, Any]:
     """
     Performs Kazuha's Autonomous Code & PR Review on active workspace changes.
     """
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     info = get_git_info(cwd)
     diff = get_git_diff(cwd, staged=staged_only)
 
@@ -254,7 +257,7 @@ Tone: Calm, disciplined, precise, and authoritative. Format cleanly in Discord/G
     if score_match:
         try:
             score = int(score_match.group(1))
-        except Exception:
+        except Exception:  # quiet: unparsable score keeps the default
             pass
 
     verdict = "🟢 READY TO COMMIT" if score >= 90 else ("🟡 CAUTION" if score >= 70 else "🔴 BLOCKED")
@@ -277,7 +280,7 @@ def generate_conventional_commit(repo_path: Optional[Path] = None, staged_only: 
     """
     Generates a high-precision Conventional Commit message based on the active diff.
     """
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     diff = get_git_diff(cwd, staged=staged_only)
 
     if not diff:
@@ -327,7 +330,7 @@ def generate_pr_description(repo_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     Generates a production-ready GitHub Pull Request description.
     """
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     info = get_git_info(cwd)
     diff = get_git_diff(cwd, staged=False)
 
@@ -382,7 +385,7 @@ Produce a complete Pull Request template in clean GitHub Markdown with:
 
 def apply_git_commit(commit_message: str, repo_path: Optional[Path] = None) -> Tuple[bool, str]:
     """Executes git commit -m with the generated message."""
-    cwd = repo_path or WORKSPACE_DIR
+    cwd = repo_path or GIT_REPO_DIR
     code, out, err = run_git_command(["commit", "-m", commit_message], cwd)
     if code == 0:
         return True, out or "Committed successfully."
@@ -417,7 +420,7 @@ def cli_main():
     pr_p.add_argument("--path", type=str, default=None, help="Target git repository path")
 
     args = parser.parse_args()
-    target_path = Path(args.path).resolve() if getattr(args, "path", None) else WORKSPACE_DIR
+    target_path = Path(args.path).resolve() if getattr(args, "path", None) else GIT_REPO_DIR
 
     print("=" * 65)
     print("⚔️  KAZUHA'S LOCAL GIT & PR SENTINEL — LE SSERAFIM AI HQ")

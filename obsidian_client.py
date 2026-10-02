@@ -67,7 +67,7 @@ class ObsidianClient:
             port = u.port or 27124
             with socket.create_connection((host, port), timeout=0.20):
                 self._online_cache = True
-        except Exception:
+        except Exception:  # quiet: REST offline is a normal state, cached and returned
             self._online_cache = False
         self._online_cache_time = now
         return self._online_cache
@@ -127,8 +127,8 @@ class ObsidianClient:
                 res = self._request("GET", f"/vault/{encoded_path}", extra_headers={"Accept": "text/markdown"})
                 if res.get("status") == 200:
                     return res.get("body", "")
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [obsidian_client.get_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         # Filesystem fallback
         if self.vault_path and self.vault_path.exists():
@@ -153,8 +153,8 @@ class ObsidianClient:
                 )
                 if res.get("status") in (200, 204):
                     return True
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [obsidian_client.put_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         # Filesystem fallback
         if self.vault_path and self.vault_path.exists():
@@ -183,8 +183,8 @@ class ObsidianClient:
                 )
                 if res.get("status") in (200, 204):
                     return True
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [obsidian_client.append_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         # Filesystem fallback
         if self.vault_path and self.vault_path.exists():
@@ -204,6 +204,28 @@ class ObsidianClient:
 
         return False
 
+    def check_vault_consistency(self) -> str:
+        """
+        Startup check that the vault Obsidian has open (REST) is the one at
+        OBSIDIAN_VAULT_PATH, which the disk fallback reads and writes. Compares the
+        two root listings without writing anything. Returns a one-line verdict.
+        """
+        if not self.vault_path.is_dir():
+            return f"MISMATCH: OBSIDIAN_VAULT_PATH {self.vault_path} does not exist; disk fallback writes will fail"
+        if not self.is_rest_api_online():
+            return "skipped: REST API offline, only the disk vault is in use"
+        try:
+            res = self._request("GET", "/vault/")
+            rest_names = {f.rstrip("/") for f in json.loads(res.get("body", "{}")).get("files", [])}
+        except Exception as e:
+            return f"skipped: REST listing failed ({type(e).__name__}: {e})"
+        missing = sorted(rest_names - {p.name for p in self.vault_path.iterdir()})
+        if missing:
+            return (f"MISMATCH: {len(missing)} of {len(rest_names)} entries in Obsidian's open vault are not in "
+                    f"{self.vault_path} (e.g. {', '.join(missing[:3])}); REST and disk-fallback writes go to "
+                    f"different vaults. Set OBSIDIAN_VAULT_PATH to the vault Obsidian has open.")
+        return f"ok: REST vault matches {self.vault_path} ({len(rest_names)} root entries)"
+
     def list_dir(self, dirpath: str = "") -> list:
         """List files in a vault directory (via REST or disk fallback)."""
         clean_dir = self._vault_rel(dirpath)
@@ -215,10 +237,10 @@ class ObsidianClient:
                     try:
                         data = json.loads(res.get("body", "{}"))
                         return data.get("files", [])
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _exc:
+                        print(f"⚠️ [obsidian_client.list_dir] suppressed {type(_exc).__name__}: {_exc}", flush=True)
+            except Exception as _exc:
+                print(f"⚠️ [obsidian_client.list_dir] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         # Filesystem fallback
         if self.vault_path and self.vault_path.exists():
@@ -237,10 +259,10 @@ class ObsidianClient:
                 if res.get("status") == 200:
                     try:
                         return json.loads(res.get("body", "[]"))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _exc:
+                        print(f"⚠️ [obsidian_client.search_simple] suppressed {type(_exc).__name__}: {_exc}", flush=True)
+            except Exception as _exc:
+                print(f"⚠️ [obsidian_client.search_simple] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         # Filesystem fallback search
         if self.vault_path and self.vault_path.exists():
@@ -259,8 +281,8 @@ class ObsidianClient:
                     text = md_file.read_text(encoding="utf-8", errors="ignore")
                     if q_lower in text.lower():
                         matches.append({"filename": rel, "score": 50})
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    print(f"⚠️ [obsidian_client.search_simple] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             # Sort by score descending
             matches.sort(key=lambda x: x.get("score", 0), reverse=True)
             return matches[:10]
@@ -280,7 +302,7 @@ class ObsidianClient:
         for c in candidates:
             try:
                 return self.get_file(c)
-            except Exception:
+            except Exception:  # quiet: tries the next candidate path
                 continue
         return self.get_file(f"02 - Agents/{target}")
 
@@ -293,7 +315,7 @@ class ObsidianClient:
         for c in candidates:
             try:
                 return self.get_file(c)
-            except Exception:
+            except Exception:  # quiet: tries the next candidate path
                 continue
         return self.get_file("03 - Rules & Memory/Learned_Rules.md")
 

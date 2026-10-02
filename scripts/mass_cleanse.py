@@ -11,7 +11,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -101,7 +101,8 @@ def fetch_all_inbox_metadata(service, max_total: int = 250) -> List[Dict[str, An
                     retries -= 1
                 else:
                     break
-            except Exception:
+            except Exception as _exc:
+                print(f"⚠️ [mass_cleanse.fetch_all_inbox_metadata] suppressed {type(_exc).__name__}: {_exc}", flush=True)
                 break
 
     print(f"\n✅ Finished loading {len(parsed_emails)} emails.")

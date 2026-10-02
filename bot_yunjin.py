@@ -12,7 +12,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -48,7 +48,7 @@ async def post_portfolio_audit_if_due():
         try:
             last_d = datetime.datetime.strptime(last_date_str, "%Y-%m-%d").date()
             days_since = (now.date() - last_d).days
-        except Exception:
+        except Exception:  # quiet: malformed stored date: treated as never run
             pass
 
     # Run once every 7 days

@@ -12,7 +12,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -486,7 +486,7 @@ async def test_command(ctx, *, filepath: str = None):
 
     try:
         await status_msg.delete()
-    except Exception:
+    except Exception:  # quiet: best-effort delete of a status message
         pass
 
     if not res.get("success"):

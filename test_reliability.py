@@ -13,9 +13,11 @@ import json
 import os
 import random
 import re
+import subprocess
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
 from pathlib import Path
@@ -121,6 +123,13 @@ class FakeBot:
     def __init__(self, errors):
         self.errors = list(errors)
         self.calls = 0
+        self.http = types.SimpleNamespace(connector=None)
+
+    async def close(self):
+        pass
+
+    def clear(self):
+        pass
 
     async def start(self, token):
         self.calls += 1
@@ -162,6 +171,156 @@ class GatewayRetryTest(unittest.TestCase):
         self.assertTrue(2.4 <= delays[2] <= 3.6, delays)
 
 
+class RetrySessionLeakTest(unittest.TestCase):
+    """3B-6: a real discord.Client retried by run_bot_resilient leaves no aiohttp session open."""
+
+    def test_every_attempt_gets_a_live_session_and_all_are_closed(self):
+        attempts = []  # (session, its connector was already closed when used)
+        outcomes = [ConnectionError("gateway reset"), ConnectionError("gateway reset"),
+                    discord.errors.LoginFailure("Improper token has been passed.")]
+
+        async def fake_request(http, route, **kwargs):
+            session = http._HTTPClient__session
+            attempts.append((session, session.connector is None or session.connector.closed))
+            raise outcomes[len(attempts) - 1]
+
+        async def run():
+            bot = discord.Client(intents=discord.Intents.none())
+            sleep = mock.AsyncMock()
+            with mock.patch.object(discord.http.HTTPClient, "request", fake_request), \
+                    mock.patch.object(run_all.asyncio, "sleep", sleep), mock.patch("builtins.print"):
+                await run_all.run_bot_resilient(bot, "token", "Test")
+
+        asyncio.run(run())
+        self.assertEqual(len(attempts), 3)                      # it retried, then stopped on the bad token
+        self.assertEqual(len({id(s) for s, _ in attempts}), 3)  # one session per login
+        self.assertEqual([dead for _, dead in attempts], [False] * 3)  # never built on a closed connector
+        self.assertTrue(all(s.closed for s, _ in attempts), "a retried session was left open")
+
+    def test_session_is_closed_even_when_client_close_raises(self):
+        # Client.close() awaits state and gateway cleanup before http.close(); if
+        # that cleanup raises, reset_client must still close the HTTP session
+        # before it drops the connector (Codex 3E round 1).
+        sessions = []
+
+        async def fake_request(http, route, **kwargs):
+            sessions.append(http._HTTPClient__session)
+            raise (ConnectionError("gateway reset") if len(sessions) == 1
+                   else discord.errors.LoginFailure("Improper token has been passed."))
+
+        async def run():
+            bot = discord.Client(intents=discord.Intents.none())
+            with mock.patch.object(discord.http.HTTPClient, "request", fake_request), \
+                    mock.patch.object(type(bot._connection), "close", side_effect=RuntimeError("state")), \
+                    mock.patch.object(run_all.asyncio, "sleep", mock.AsyncMock()), mock.patch("builtins.print"):
+                await run_all.run_bot_resilient(bot, "token", "Test")
+
+        asyncio.run(run())
+        self.assertEqual(len(sessions), 2)
+        self.assertTrue(all(s.closed for s in sessions), "close() raised and the session was left open")
+
+
+class VaultConsistencyTest(unittest.TestCase):
+    """3E-3: startup verdict on whether REST and OBSIDIAN_VAULT_PATH are the same vault."""
+
+    def verdict(self, disk_entries, rest_files=None, vault=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(vault or tmp)
+            for name in disk_entries:
+                (root / name).mkdir() if name.endswith("/") else (root / name).write_text("x", encoding="utf-8")
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=str(root))
+            online = rest_files is not None
+            body = json.dumps({"files": rest_files or []})
+            with mock.patch.object(client, "is_rest_api_online", return_value=online), \
+                    mock.patch.object(client, "_request", return_value={"status": 200, "body": body}):
+                return client.check_vault_consistency()
+
+    def test_same_vault_is_ok(self):
+        self.assertTrue(self.verdict(["Home.md", "01 - User/"], ["Home.md", "01 - User/"]).startswith("ok"))
+
+    def test_different_vault_is_a_mismatch(self):
+        v = self.verdict(["Home.md"], ["Home.md", "05 - Daily Logs/", "Inbox.md"])
+        self.assertTrue(v.startswith("MISMATCH: 2 of 3"), v)
+        self.assertIn("05 - Daily Logs", v)
+
+    def test_missing_vault_path_and_offline_rest(self):
+        self.assertTrue(self.verdict([], ["a.md"], vault=r"Z:\no\such\vault").startswith("MISMATCH"))
+        self.assertTrue(self.verdict(["a.md"], None).startswith("skipped: REST API offline"))
+
+
+class SuppressedExceptionLintTest(unittest.TestCase):
+    """3E-3: every `except Exception:` either logs one line or says why it is quiet."""
+
+    def test_no_silent_broad_excepts(self):
+        import ast
+        repo = Path(__file__).parent
+        silent = []
+        for path in sorted({*repo.glob("*.py"), *repo.glob("scripts/*.py"), *repo.glob("bench/*.py"),
+                            *repo.glob("legacy/*.py")}):
+            # Unit tests are skipped; scripts/test_*.py are live scripts, so they are linted.
+            if path.name.startswith("test_") and path.parent.name != "scripts":
+                continue
+            src = path.read_text(encoding="utf-8")
+            lines = src.splitlines()
+            for node in ast.walk(ast.parse(src)):
+                if not (isinstance(node, ast.ExceptHandler) and isinstance(node.type, ast.Name)
+                        and node.type.id == "Exception"):
+                    continue
+                if "# quiet:" in lines[node.lineno - 1]:
+                    continue
+                first = node.body[0]
+                logs = (isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+                        and getattr(first.value.func, "id", None) == "print")
+                if node.name is None or not logs:
+                    # A named handler may also use the exception in other ways (return it, re-raise).
+                    used = node.name and any(isinstance(n, ast.Name) and n.id == node.name
+                                             for b in node.body for n in ast.walk(b))
+                    if not used:
+                        silent.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(silent, [])
+
+
+class HeavyPoolTest(unittest.TestCase):
+    """3E-4: PDF and Gmail jobs queue on their own pool, so quick calls never wait behind them."""
+
+    def test_quick_calls_are_not_starved_by_heavy_jobs(self):
+        import heavy_jobs
+
+        async def scenario():
+            from concurrent.futures import ThreadPoolExecutor
+            loop = asyncio.get_running_loop()
+            loop.set_default_executor(ThreadPoolExecutor(max_workers=2))  # a small default pool, worst case
+            heavy = [asyncio.ensure_future(heavy_jobs.run_heavy(time.sleep, 0.4)) for _ in range(4)]
+            await asyncio.sleep(0.05)
+            started = time.perf_counter()
+            await asyncio.to_thread(lambda: None)  # vitals, a chat reply, an Obsidian read...
+            quick_wait = time.perf_counter() - started
+            await asyncio.gather(*heavy)
+            return quick_wait
+
+        self.assertLess(asyncio.run(scenario()), 0.1)
+
+    def test_heavy_jobs_run_on_the_heavy_pool(self):
+        import heavy_jobs
+        name = asyncio.run(heavy_jobs.run_heavy(lambda: threading.current_thread().name))
+        self.assertTrue(name.startswith("heavy"), name)
+
+    def test_no_heavy_job_left_on_the_default_executor(self):
+        import ast
+        heavy = {"compile_master_resume", "generate_tailored_pdf_package", "triage_inbox", "sweep_inbox",
+                 "run_mass_cleanse", "get_recent_finance_summary", "scrape_with_headless_edge"}
+        repo = Path(__file__).parent
+        found = []
+        for path in sorted(repo.glob("*.py")):
+            if path.name.startswith("test_"):
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "run_in_executor" \
+                        and len(node.args) >= 2 and getattr(node.args[1], "id", None) in heavy:
+                    found.append(f"{path.name}:{node.lineno} {node.args[1].id}")
+        self.assertEqual(found, [])
+
+
 class FixedClaimLintTest(unittest.TestCase):
     """Status the code never computed must not ship in user-facing strings."""
     FIXED_CLAIMS = re.compile(
@@ -189,10 +348,24 @@ class SentinelFailureTest(unittest.TestCase):
 
     def test_git_check_outside_a_repo_is_reported(self):
         with tempfile.TemporaryDirectory() as not_a_repo, \
-                mock.patch.object(proactive_sentinel, "WORKSPACE_DIR", Path(not_a_repo)), \
+                mock.patch.object(proactive_sentinel, "GIT_REPO_DIR", Path(not_a_repo)), \
                 mock.patch("builtins.print"):
             res = proactive_sentinel.check_git_sentinel()
         self.assertEqual([s["id"] for s in res], ["git_check_failed"])
+
+    def test_d6_default_repo_is_hq_and_dirty_repos_are_reported(self):
+        import git_sentinel
+        hq = Path(proactive_sentinel.__file__).resolve().parent
+        self.assertEqual(Path(proactive_sentinel.GIT_REPO_DIR).resolve(), hq)
+        self.assertEqual(Path(git_sentinel.GIT_REPO_DIR).resolve(), hq)
+        with tempfile.TemporaryDirectory() as repo, mock.patch("builtins.print"):
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            for name in "abc":
+                Path(repo, f"{name}.txt").write_text(name, encoding="utf-8")
+            with mock.patch.object(proactive_sentinel, "GIT_REPO_DIR", Path(repo)):
+                res = proactive_sentinel.check_git_sentinel()
+        self.assertEqual([s["id"] for s in res], ["git_uncommitted_files"])
+        self.assertIn("3 Uncommitted", res[0]["title"])
 
     def test_empty_summary_claims_only_what_ran(self):
         text = proactive_sentinel.generate_appraisal_summary([])

@@ -29,6 +29,7 @@ from llm_client import query_llm, call_groq, get_brain_status
 from obsidian_client import ObsidianClient
 from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
 from speech_stream import VoiceStream, split_sentences
+from heavy_jobs import run_heavy
 
 # Import specialist tool engines safely
 try:
@@ -86,16 +87,21 @@ VAULT_TIMEOUT_S = 10        # Obsidian REST calls use a 3 s urlopen timeout
 APPRAISAL_TIMEOUT_S = 30    # psutil + git + Obsidian sentinels
 DEFAULT_AGENT_TIMEOUT_S = 30
 AGENT_TIMEOUTS_S = {"chaewon": 60}  # headless Edge PDF build alone may take 25 s
+HEAVY_AGENTS = {"chaewon", "sakura"}  # PDF build; Gmail inbox scan. Run on heavy_jobs.HEAVY_POOL
 
 # Serializes resume builds within this process. A threading.Lock, not an asyncio
 # one: the lock must outlive an abandoned await (see compile_resume).
 RESUME_BUILD_LOCK = threading.Lock()
 
 
-async def run_blocking(fn, *args, timeout: float, label: str, **kwargs):
-    """Runs a blocking call off the event loop; raises TimeoutError("<label> timed out after N s")."""
+async def run_blocking(fn, *args, timeout: float, label: str, heavy: bool = False, **kwargs):
+    """
+    Runs a blocking call off the event loop; raises TimeoutError("<label> timed out
+    after N s"). heavy=True uses heavy_jobs.HEAVY_POOL instead of the default executor.
+    """
+    call = run_heavy(fn, *args, **kwargs) if heavy else asyncio.to_thread(fn, *args, **kwargs)
     try:
-        return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kwargs), timeout)
+        return await asyncio.wait_for(call, timeout)
     except TimeoutError:
         raise TimeoutError(f"{label} timed out after {timeout:g} s") from None
 
@@ -331,8 +337,8 @@ class CielOrchestrator:
                         "condition": "Meteorological data via Web Intelligence",
                         "raw_summary": f"Web Weather Report: {web_res[0].get('snippet')}"
                     }
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [ciel_orchestrator.ciel_get_weather] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             return {"success": False, "error": str(e), "raw_summary": f"Notice: Atmospheric telemetry sensor offline ({e})."}
 
     def ciel_web_search(self, query: str, max_results: int = 5) -> list:
@@ -605,7 +611,8 @@ Respond ONLY with valid JSON.
             parsed["direct_obsidian"] = direct_obsidian
             parsed["requires_real_tools"] = len(agents) > 0 or bool(direct_obsidian)
             return parsed
-        except Exception:
+        except Exception as _exc:
+            print(f"⚠️ [ciel_orchestrator.analyze_and_plan] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             # Fallback heuristic router
             agents = []
             targets = []
@@ -698,7 +705,7 @@ Respond ONLY with valid JSON.
             print(f"⚠️ [Ciel] Mission {mission_id} failed: {failure['error']}", flush=True)
             try:
                 await emit("ciel_error", failure)
-            except Exception:
+            except Exception:  # quiet: the failure still reaches the HUD in the REST reply
                 pass  # the HUD still gets the failure through the REST reply
             return failure
 
@@ -960,8 +967,8 @@ Respond ONLY with valid JSON.
             ja_speech = parsed.get("japanese_voice", "").strip()
             en_speech = parsed.get("english_voice", "").strip()
             final_reply = parsed.get("display_text", "").strip()
-        except Exception:
-            pass
+        except Exception as _exc:
+            print(f"⚠️ [ciel_orchestrator._run_mission] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         if not final_reply:
             final_reply = en_speech or raw_reply.strip()
@@ -1034,7 +1041,8 @@ Respond ONLY with valid JSON.
             task, work = self._agent_job(agent, user_prompt, tool_targets)
             if task:
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
-            status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize())
+            status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize(),
+                                                     heavy=agent in HEAVY_AGENTS)
         except TimeoutError:
             status = "failed"
             result_text = f"{agent.capitalize()} failed: timed out after {timeout:g} s"
@@ -1212,8 +1220,8 @@ Respond ONLY with valid JSON.
                     f"Ciel Mission: {user_prompt[:50]}",
                     [f"Outcome: Handled ({result_text[:70]}...)"]
                 )
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [ciel_orchestrator.run_and_log] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             return status, result_text
 
         return task, run_and_log

@@ -516,6 +516,24 @@ class TestAsyncSafety(MissionTestCase):
         self.assertEqual(peak[0], 1)
 
 
+class TestHeavyAgentsUseHeavyPool(MissionTestCase):
+    """3E-4: Chaewon's PDF build runs on heavy_jobs.HEAVY_POOL, not the default executor."""
+
+    async def test_resume_build_thread(self):
+        import threading
+        threads = []
+
+        def build(**kwargs):
+            threads.append(threading.current_thread().name)
+            return {"success": True, "size_kb": 82.9}
+
+        self.enterContext(mock.patch.object(ciel_orchestrator, "compile_master_resume", build))
+        result = await self.run_mission("compile resume")
+        self.assertEqual(result["agent_status"]["chaewon"], "done")
+        self.assertEqual(len(threads), 1)
+        self.assertTrue(threads[0].startswith("heavy"), threads)
+
+
 STREAMED_REPLY = json.dumps({
     "japanese_voice": "「告。」完了しました。",
     "english_voice": "Notice: Done. All clear.",

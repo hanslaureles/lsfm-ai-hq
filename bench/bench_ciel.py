@@ -134,12 +134,12 @@ def collect_environment():
     try:
         import edge_tts
         env["software"]["edge_tts"] = edge_tts.__version__
-    except Exception:
+    except Exception:  # quiet: optional package; its version is just omitted
         pass
     try:
         import ddgs
         env["software"]["ddgs"] = getattr(ddgs, "__version__", "unknown")
-    except Exception:
+    except Exception:  # quiet: optional package; its version is just omitted
         pass
     try:
         env["software"]["ollama"] = _http_json(f"{ollama_base()}/api/version")["version"]

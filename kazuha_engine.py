@@ -59,7 +59,7 @@ Provide an architectural inspection with:
 
 Tone: Precise, disciplined, elegant engineering craft.
 """
-    res_text = query_llm(prompt, temperature=0.2)
+    res_text = query_llm(prompt, temperature=0.2, agent="kazuha")
 
     return {
         "success": True,
@@ -88,7 +88,7 @@ Build a production-grade, accessible UI component based on this description:
 
 Provide the complete, clean code with a brief explanation.
 """
-    return query_llm(prompt, temperature=0.2)
+    return query_llm(prompt, temperature=0.2, agent="kazuha")
 
 from git_sentinel import (
     get_git_info,
@@ -155,7 +155,7 @@ Hans is chatting with you in the #frontend-lab channel.
 - Speak with calm, graceful, disciplined engineering authority.
 - Format code blocks cleanly for Discord.
 """
-    return query_llm(prompt, temperature=0.2)
+    return query_llm(prompt, temperature=0.2, agent="kazuha")
 
 
 def generate_tech_pitch(job_text: str, role: str = "Design / Engineering Role", company: str = "Target Company") -> dict:
@@ -194,7 +194,7 @@ As the Lead Frontend Architect, produce a sharp, disciplined technical briefing:
 
 Format in clean Discord Markdown. Tone: Calm, precise, disciplined, and authoritative.
 """
-    tech_text = query_llm(prompt, temperature=0.2)
+    tech_text = query_llm(prompt, temperature=0.2, agent="kazuha")
 
     return {
         "tech_pitch": tech_text
@@ -317,7 +317,7 @@ Structure your response into 3 concise, high-signal sections:
 Tone: Precise, disciplined, elegant, authoritative engineering craft.
 Formatting: Discord Markdown with clean bullet points and clear hierarchy.
 """
-    digest_text = query_llm(prompt, temperature=0.2)
+    digest_text = query_llm(prompt, temperature=0.2, agent="kazuha")
 
     obsidian_synced = False
     obsidian_note_path = f"04 - Resources/AI Research/AI_Research_Digest_{date_str}.md"

@@ -13,7 +13,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -36,7 +36,8 @@ try:
     from recall import recall_memories  # type: ignore
     from reflect import record_reflection, load_all_memories  # type: ignore
     from crystallize import crystallize  # type: ignore
-except Exception:
+except Exception as _exc:
+    print(f"⚠️ [eunchae_engine.<module>] suppressed {type(_exc).__name__}: {_exc}", flush=True)
     recall_memories = None
     record_reflection = None
     load_all_memories = None
@@ -106,7 +107,7 @@ Present these vitals with high energy, clarity, and charm.
 - Give a quick status on the squad (Sakura, Chaewon, Yunjin, Kazuha).
 - Keep it concise and formatted with clean Discord markdown.
 """
-    return query_llm(prompt, temperature=0.5)
+    return query_llm(prompt, temperature=0.5, agent="eunchae")
 
 def chat_eunchae(message_text: str) -> str:
     """Answers chats and hardware queries with Eunchae's energetic maknae guardian persona."""
@@ -132,7 +133,7 @@ Hans is chatting with you in the #pc-vitals or #system-alerts channel.
 - You guard both Hans's PC hardware AND the quality of all squad deliverables.
 - Keep it concise for Discord.
 """
-    return query_llm(prompt, temperature=0.5)
+    return query_llm(prompt, temperature=0.5, agent="eunchae")
 
 
 # ==============================================================================
@@ -165,8 +166,8 @@ def check_deterministic_qa(tailor_res: dict, company: str, role: str) -> dict:
     if saved_file and Path(saved_file).exists():
         try:
             raw_saved = Path(saved_file).read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as _exc:
+            print(f"⚠️ [eunchae_engine.check_deterministic_qa] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     found_placeholders = PLACEHOLDER_REGEX.findall(report_text + "\n" + raw_saved)
     if found_placeholders:
@@ -221,7 +222,8 @@ def recall_squad_heuristics(query: str) -> list:
     try:
         results = recall_memories(query, top_k=3, min_score=0.35)
         return results
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [eunchae_engine.recall_squad_heuristics] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         return []
 
 def audit_application_package(
@@ -300,7 +302,7 @@ Assess the package with protective, sharp QA rigor and output:
    - 2-3 energetic, sharp sentences giving the green light or explaining what must be fixed.
 """
     try:
-        qa_review_text = query_llm(prompt, temperature=0.3)
+        qa_review_text = query_llm(prompt, temperature=0.3, agent="eunchae")
     except Exception as e:
         det_passed = det.get("passed", False)
         verdict = "🔴 QA DEFECT BLOCKED" if not det_passed else "🟡 QA UNINSPECTED (LLM ERROR)"
@@ -322,7 +324,7 @@ Assess the package with protective, sharp QA rigor and output:
             parsed_score = int(score_match.group(1))
             if 0 <= parsed_score <= 100:
                 score = parsed_score
-        except Exception:
+        except Exception:  # quiet: unparsable score keeps the fail-closed default
             pass
 
     if score is None:
@@ -379,7 +381,7 @@ Perform a Quality Assurance inspection on the document: `{file_path.name}`.
 Audit this document for professionalism, structure, quantifiable impact, and formatting.
 Provide a QA Score (0-100%), Verdict (`🟢 PASSED`, `🟡 POLISH`, `🔴 DEFECT`), and 2-3 specific improvements.
 """
-    review_text = query_llm(prompt, temperature=0.3)
+    review_text = query_llm(prompt, temperature=0.3, agent="eunchae")
     score_match = re.search(r"(\d{2,3})%", review_text)
     score = int(score_match.group(1)) if score_match else 85
     verdict = "🟢 PASSED" if score >= 90 else ("🟡 POLISH" if score >= 75 else "🔴 DEFECT")
@@ -425,8 +427,8 @@ def record_qa_failure(
         if crystallize:
             try:
                 crystallize()
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [eunchae_engine.record_qa_failure] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         return {"success": True, "entry": entry}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -440,7 +442,8 @@ def get_all_learned_lessons(domain: str = None) -> list:
         if domain:
             records = [r for r in records if r.get("domain", "").lower() == domain.lower()]
         return records
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [eunchae_engine.get_all_learned_lessons] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         return []
 
 # ==============================================================================
@@ -546,8 +549,8 @@ def test_code_file(file_path_str: str) -> dict:
                         defects.append(f"⚠️ **Import Resolution Error:** {err_msg.splitlines()[-1]}")
                     else:
                         checks.append("⚡ **Import Dry-Run:** Tested (Script requires command line arguments)")
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [eunchae_engine.test_code_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # JavaScript / HTML / CSS
     elif ext in [".html", ".css", ".js", ".jsx", ".ts", ".tsx"]:
@@ -588,7 +591,7 @@ def check_obsidian_heartbeat() -> dict:
     rest_online = False
     try:
         rest_online = client.ping()
-    except Exception:
+    except Exception:  # quiet: REST offline is reported as rest_online=False
         rest_online = False
 
     vault_exists = client.vault_path.exists()

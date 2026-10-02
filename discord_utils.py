@@ -138,7 +138,7 @@ async def send_clean_embeds(
     if status_msg_to_delete:
         try:
             await status_msg_to_delete.delete()
-        except Exception:
+        except Exception:  # quiet: best-effort delete of a status message
             pass
 
     chunks = split_smart_chunks(content, max_chars=3800)
@@ -171,7 +171,8 @@ async def send_clean_embeds(
                 try:
                     await target.reply(embed=embed)
                     replied = True
-                except Exception:
+                except Exception as _exc:
+                    print(f"⚠️ [discord_utils.send_clean_embeds] suppressed {type(_exc).__name__}: {_exc}", flush=True)
                     replied = False
             if not replied:
                 if hasattr(target, "channel") and hasattr(target.channel, "send"):

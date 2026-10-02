@@ -153,7 +153,7 @@ Author a comprehensive Portfolio Health Audit with the following sections:
 Format in clean, engaging Markdown. Tone: Sophisticated, insightful, encouraging, and razor-sharp design taste.
 """
 
-    critique_text = query_llm(prompt, temperature=0.4)
+    critique_text = query_llm(prompt, temperature=0.4, agent="yunjin")
 
 
     # Extract score
@@ -162,7 +162,7 @@ Format in clean, engaging Markdown. Tone: Sophisticated, insightful, encouraging
     if score_match:
         try:
             score = int(score_match.group(1))
-        except Exception:
+        except Exception:  # quiet: unparsable score keeps the default
             pass
 
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -220,7 +220,7 @@ Evaluate this case study through the eyes of a Design Director at a top design-l
 Tone: Constructive, sharp, high design aesthetic, professional.
 """
 
-    res_text = query_llm(prompt, temperature=0.4)
+    res_text = query_llm(prompt, temperature=0.4, agent="yunjin")
     
     return {
         "success": True,
@@ -255,7 +255,7 @@ Hans is chatting with you in the #portfolio-audits channel.
 - Be honest, inspiring, and direct with Yunjin's vibrant, high-taste creative personality.
 - Keep the formatting clean and readable for Discord.
 """
-    return query_llm(prompt, temperature=0.4)
+    return query_llm(prompt, temperature=0.4, agent="yunjin")
 
 
 def select_portfolio_pitch(job_text: str, role: str = "Design / Engineering Role", company: str = "Target Company") -> dict:
@@ -291,7 +291,7 @@ Structure your pitch strategy with:
 
 Format in clean Discord Markdown. Tone: Discerning, sophisticated, strategic, and razor-sharp design taste.
 """
-    pitch_text = query_llm(prompt, temperature=0.3)
+    pitch_text = query_llm(prompt, temperature=0.3, agent="yunjin")
 
     # Detect recommended projects
     candidates = ["LSFM AI HQ", "Lumina Analytics", "Vellum OS", "FinTrack", "Aura Coffee & Kitchen", "Cognitive Memory Core", "Patriot Capstone"]

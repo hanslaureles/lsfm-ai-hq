@@ -1,3 +1,4 @@
+from heavy_jobs import run_heavy
 import re
 import asyncio
 import subprocess
@@ -96,12 +97,12 @@ async def scrape_job_url(url: str) -> dict:
                             "success": True,
                             "error": None
                         }
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [web_tools.scrape_job_url] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # 2. Secondary fallback via headless Edge
     loop = asyncio.get_running_loop()
-    edge_text = await loop.run_in_executor(None, scrape_with_headless_edge, url)
+    edge_text = await run_heavy(scrape_with_headless_edge, url)
     if edge_text and len(edge_text) > 150 and not is_bot_challenge_page(edge_text):
         return {
             "url": url,
@@ -245,8 +246,8 @@ async def fetch_live_remote_jobs(query: str = "ai", location: str = "Philippines
                             "source": "Jobicy",
                             "description": clean_html_text(j.get("jobDescription", ""))[:400]
                         })
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [web_tools.fetch_live_remote_jobs] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     try:
         ro_tag = "ai" if any(k in q_lower for k in ["ai", "ml", "llm", "agent"]) else "python"
@@ -268,8 +269,8 @@ async def fetch_live_remote_jobs(query: str = "ai", location: str = "Philippines
                                 "source": "RemoteOK",
                                 "description": clean_html_text(j.get("description", ""))[:400]
                             })
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [web_tools.fetch_live_remote_jobs] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     if not raw_jobs:
         return []

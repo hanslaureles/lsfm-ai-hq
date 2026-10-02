@@ -1,3 +1,4 @@
+from heavy_jobs import run_heavy
 import os
 import sys
 import asyncio
@@ -11,7 +12,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -55,7 +56,7 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
     print(f"⭐ [Chaewon] Executing Weekly Vector Resume Rebuild (Date: {today_str})...", flush=True)
     loop = asyncio.get_running_loop()
     try:
-        res = await loop.run_in_executor(None, compile_master_resume, True, True, True)
+        res = await run_heavy(compile_master_resume, True, True, True)
         if not res.get("success"):
             print(f"⚠️ [Chaewon] Resume compilation failed: {res.get('error')}", flush=True)
             return
@@ -485,7 +486,7 @@ async def cmd_pdf(ctx, *, target: str = "General"):
             "portfolio_display": os.getenv("PORTFOLIO_DISPLAY", "example.com"),
             "summary": cand_summary
         }
-        res = await loop.run_in_executor(None, generate_tailored_pdf_package, tailored_dict, target, target)
+        res = await run_heavy(generate_tailored_pdf_package, tailored_dict, target, target)
         if res.get("error"):
             await msg.edit(content=f"⚠️ Cannot generate PDF package: {res['error']}")
             return
@@ -518,8 +519,8 @@ async def cmd_screen(ctx, *, questions: str = None):
         try:
             ref_msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             questions = ref_msg.content
-        except Exception:
-            pass
+        except Exception as _exc:
+            print(f"⚠️ [bot_chaewon.cmd_screen] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     if not questions:
         await ctx.reply(
@@ -555,7 +556,7 @@ async def cmd_rebuild_resume(ctx):
     msg = await ctx.reply("⭐ **Chaewon is rebuilding Hans's Master ATS Vector Resume...**")
     loop = asyncio.get_running_loop()
     try:
-        res = await loop.run_in_executor(None, compile_master_resume, True, True, True)
+        res = await run_heavy(compile_master_resume, True, True, True)
         if not res.get("success"):
             await msg.edit(content=f"❌ Error compiling resume: {res.get('error')}")
             return

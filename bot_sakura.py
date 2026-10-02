@@ -1,3 +1,4 @@
+from heavy_jobs import run_heavy
 import os
 import sys
 import asyncio
@@ -12,7 +13,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -379,8 +380,10 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
         rec_projects = ", ".join(yunjin_res.get("recommended_projects", ["Vellum OS", "Lumina Analytics"]))
         pitch_text = yunjin_res.get("pitch_text", "")
     except Exception as e:
-        rec_projects = "Vellum OS, Lumina Analytics"
-        pitch_text = f"Curated flagship case studies for {company}: Vellum OS and Lumina Analytics."
+        # Invariant 7: say the step failed instead of presenting stock picks as Yunjin's curation.
+        print(f"⚠️ [bot_sakura.handle_apply_orchestration] Yunjin curation failed: {type(e).__name__}: {e}", flush=True)
+        rec_projects = "none (curation failed)"
+        pitch_text = f"⚠️ Yunjin could not run the curation step: {type(e).__name__}: {e}"
 
     yunjin_embed = discord.Embed(
         title=f"🎨 YUNJIN — Portfolio Curation & UX Pitch Strategy",
@@ -397,7 +400,8 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
         kazuha_res = await loop.run_in_executor(None, generate_tech_pitch, job_text, role, company)
         tech_pitch = kazuha_res.get("tech_pitch", "")
     except Exception as e:
-        tech_pitch = f"Emphasize BS Computer Science background and React/TypeScript token architecture."
+        print(f"⚠️ [bot_sakura.handle_apply_orchestration] Kazuha tech pitch failed: {type(e).__name__}: {e}", flush=True)
+        tech_pitch = f"⚠️ Kazuha could not write the tech pitch: {type(e).__name__}: {e}"
 
     kazuha_embed = discord.Embed(
         title=f"💻 KAZUHA — Frontend Engineering & Technical Rigor",
@@ -520,7 +524,8 @@ async def on_raw_reaction_add(payload):
 
     try:
         target_msg = await channel.fetch_message(payload.message_id)
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [bot_sakura.on_raw_reaction_add] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         target_msg = None
 
     if emoji_str == "✅":
@@ -919,7 +924,7 @@ async def inbox_command(ctx, scope: str = ""):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, triage_inbox, scan_limit, not is_all)
+            res = await run_heavy(triage_inbox, scan_limit, not is_all)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during inbox triage: `{e}`")
         return
@@ -1073,7 +1078,7 @@ async def clean_command(ctx):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, sweep_inbox, 50)
+            res = await run_heavy(sweep_inbox, 50)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during sweep: `{e}`")
         return
@@ -1131,7 +1136,7 @@ async def receipts_command(ctx):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, get_recent_finance_summary, 15)
+            res = await run_heavy(get_recent_finance_summary, 15)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error retrieving receipts: `{e}`")
         return
@@ -1183,7 +1188,7 @@ async def cleanse_command(ctx):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, run_mass_cleanse)
+            res = await run_heavy(run_mass_cleanse)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during mass cleanse: `{e}`")
         return

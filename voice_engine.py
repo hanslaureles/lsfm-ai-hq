@@ -94,8 +94,8 @@ def normalize_audio_for_transcription(audio_bytes: bytes) -> bytes:
         )
         if proc.stdout and len(proc.stdout) > 44:
             return proc.stdout
-    except Exception:
-        pass
+    except Exception as _exc:
+        print(f"⚠️ [voice_engine.normalize_audio_for_transcription] suppressed {type(_exc).__name__}: {_exc}", flush=True)
     return audio_bytes
 
 
@@ -117,7 +117,8 @@ def apply_telepathy_dsp(raw_path: Path, output_path: Path, lead_ms: int = 0) -> 
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [voice_engine.apply_telepathy_dsp] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         return False
 
 
@@ -221,7 +222,8 @@ async def text_to_speech_bilingual(
         await asyncio.to_thread(
             subprocess.run, cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-    except Exception:
+    except Exception as _exc:
+        print(f"⚠️ [voice_engine.text_to_speech_bilingual] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         # Fallback: if ffmpeg fails, use Japanese audio
         if p_ja_temp.exists():
             p_ja_temp.replace(final_output)

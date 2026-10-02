@@ -11,7 +11,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 load_dotenv()
@@ -52,7 +52,8 @@ try:
     from recall import recall_memories, DEFAULT_STORE  # type: ignore
     from crystallize import crystallize, DEFAULT_RULES_OUTPUT  # type: ignore
     from reflect import record_reflection  # type: ignore
-except Exception:
+except Exception as _exc:
+    print(f"⚠️ [bot_kazuha.<module>] suppressed {type(_exc).__name__}: {_exc}", flush=True)
     recall_memories = None
     crystallize = None
     record_reflection = None
@@ -651,8 +652,8 @@ async def rules_command(ctx):
     if not rules_path.exists() and crystallize:
         try:
             crystallize()
-        except Exception:
-            pass
+        except Exception as _exc:
+            print(f"⚠️ [bot_kazuha.rules_command] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     if not rules_path.exists():
         await ctx.reply("⚠️ No crystallized rules file found in `.agents/rules/learned_rules.md`.")
@@ -728,8 +729,8 @@ async def kazuha_reflect_command(ctx, *, args: str = None):
         if crystallize:
             try:
                 crystallize()
-            except Exception:
-                pass
+            except Exception as _exc:
+                print(f"⚠️ [bot_kazuha.kazuha_reflect_command] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
         status_str = f"✨ Recorded new rule **[{res['id']}]**" if res["status"] == "created" else f"🔄 Reinforced rule **[{res['id']}]** (Observed {res['frequency']}x)"
         embed = discord.Embed(

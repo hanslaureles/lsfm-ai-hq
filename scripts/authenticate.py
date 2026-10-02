@@ -7,7 +7,7 @@ if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
+    except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -46,7 +46,7 @@ def main():
 
     try:
         os.startfile(auth_url)
-    except Exception:
+    except Exception:  # quiet: falls back to webbrowser.open
         webbrowser.open(auth_url)
 
     print("⏳ Waiting for you to sign in with your Google account and click Allow...", flush=True)
@@ -59,7 +59,7 @@ def main():
     if AUTH_FILE.exists():
         try:
             AUTH_FILE.unlink()
-        except Exception:
+        except Exception:  # quiet: best-effort removal of a stale token file
             pass
 
 if __name__ == "__main__":

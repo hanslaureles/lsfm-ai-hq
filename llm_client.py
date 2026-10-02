@@ -1,4 +1,5 @@
 import os
+import copy
 import json
 import time
 import urllib.request
@@ -27,20 +28,32 @@ DEFAULT_CONFIG = {
     }
 }
 
+_config_cache = (None, None)  # (brain_mode.json mtime_ns, merged config)
+
+
 def load_brain_config() -> dict:
-    if CONFIG_FILE.exists():
+    """
+    brain_mode.json merged over DEFAULT_CONFIG. Parsed once and re-read only when
+    the file's mtime changes (!mode writes it). Returns a copy callers may modify.
+    """
+    global _config_cache
+    try:
+        mtime = CONFIG_FILE.stat().st_mtime_ns
+    except OSError:
+        return copy.deepcopy(DEFAULT_CONFIG)
+    if _config_cache[0] != mtime:
+        merged = copy.deepcopy(DEFAULT_CONFIG)
         try:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            merged = DEFAULT_CONFIG.copy()
             merged.update(data)
             merged_agents = DEFAULT_CONFIG["agent_cloud_models"].copy()
-            if "agent_cloud_models" in data and isinstance(data["agent_cloud_models"], dict):
+            if isinstance(data.get("agent_cloud_models"), dict):
                 merged_agents.update(data["agent_cloud_models"])
             merged["agent_cloud_models"] = merged_agents
-            return merged
-        except Exception:
-            pass
-    return DEFAULT_CONFIG.copy()
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            print(f"⚠️ [llm_client] {CONFIG_FILE.name} unreadable, using defaults: {e}", flush=True)
+        _config_cache = (mtime, merged)
+    return copy.deepcopy(_config_cache[1])
 
 def save_brain_config(cfg: dict):
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -81,7 +94,7 @@ def check_ollama_status() -> tuple[bool, list[str]]:
             data = json.loads(resp.read().decode("utf-8"))
             models = [m.get("name", "") for m in data.get("models", [])]
             return True, models
-    except Exception:
+    except Exception:  # quiet: Ollama offline is a normal state, returned to the caller
         return False, []
 
 def get_brain_status(agent: str = None) -> dict:
@@ -257,17 +270,15 @@ def call_local_ollama(prompt: str, system_instruction: str = "", model: str = No
         return data["choices"][0]["message"]["content"].strip()
 
 def call_gemini(prompt: str, system_instruction: str = "", model_name: str = None, temperature: float = 0.4) -> str:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if not gemini_key:
         raise ValueError("GEMINI_API_KEY not configured")
 
-    genai.configure(api_key=gemini_key)
-    generation_config = {
-        "temperature": temperature,
-        "top_p": 0.95,
-        "max_output_tokens": 4096,
-    }
+    generation_config = types.GenerateContentConfig(
+        temperature=temperature, top_p=0.95, max_output_tokens=4096,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))  # no tools; skips a per-call warning
 
     candidate_models = []
     if model_name:
@@ -279,87 +290,58 @@ def call_gemini(prompt: str, system_instruction: str = "", model_name: str = Non
     full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
     last_error = None
 
-    for cand_model in candidate_models:
-        for attempt in range(2):
-            try:
-                model = genai.GenerativeModel(model_name=cand_model, generation_config=generation_config)
-                res = model.generate_content(full_prompt)
-                return res.text.strip()
-            except Exception as e:
-                last_error = e
-                err_str = str(e)
-                if "429" in err_str or "quota" in err_str.lower() or "ResourceExhausted" in err_str:
-                    import re
-                    m_delay = re.search(r"Please retry in ([\d\.]+)s", err_str)
-                    wait_time = float(m_delay.group(1)) if m_delay else 3.0
-                    if wait_time <= 4.0 and attempt == 0:
-                        print(f"[Gemini 429] {cand_model} transient rate limit, waiting {wait_time:.1f}s...")
-                        time.sleep(wait_time + 0.5)
-                        continue
+    with genai.Client(api_key=gemini_key) as client:  # closes its HTTP session on every exit
+        for cand_model in candidate_models:
+            for attempt in range(2):
+                try:
+                    res = client.models.generate_content(model=cand_model, contents=full_prompt, config=generation_config)
+                    if not (res.text or "").strip():
+                        raise ValueError("empty response (blocked or no text parts)")
+                    return res.text.strip()
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e)
+                    if "429" in err_str or "quota" in err_str.lower() or "ResourceExhausted" in err_str:
+                        import re
+                        m_delay = re.search(r"Please retry in ([\d\.]+)s", err_str)
+                        wait_time = float(m_delay.group(1)) if m_delay else 3.0
+                        if wait_time <= 4.0 and attempt == 0:
+                            print(f"[Gemini 429] {cand_model} transient rate limit, waiting {wait_time:.1f}s...")
+                            time.sleep(wait_time + 0.5)
+                            continue
+                        else:
+                            print(f"[Gemini 429] {cand_model} quota reached, switching to backup model...")
+                            break
                     else:
-                        print(f"[Gemini 429] {cand_model} quota reached, switching to backup model...")
+                        print(f"[Gemini Error] {cand_model}: {err_str[:80]}")
                         break
-                else:
-                    print(f"[Gemini Error] {cand_model}: {err_str[:80]}")
-                    break
 
     raise RuntimeError(f"All Gemini models failed: {last_error}")
 
-def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.4, agent: str = None) -> str:
+AGENTS = tuple(DEFAULT_CONFIG["agent_cloud_models"])
+
+
+def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.4, *, agent: str) -> str:
     """
-    Intelligent multi-provider LLM query dispatcher with per-agent model specialization.
-    - 'cloud': Highest quality outputs:
-        * Sakura: qwen/qwen3.8-27b (Groq, 27B parameter strategic orchestration)
-        * Chaewon: openai/gpt-oss-120b (Groq, 120B parameter persuasive career/resume conversion)
-        * Yunjin: gemini-3.6-flash (Google DeepMind, elite literary Design Director UX critiques)
-        * Kazuha: qwen/qwen3.8-27b (Groq, sub-second clean frontend code & token systems)
-        * Eunchae: openai/gpt-oss-20b (Groq, ultra-high throughput QA defect auditing & heartbeat)
-    - 'local': Uses local Ollama on RX 6600 XT with zero model swapping.
-    - 'auto': Uses local Ollama if running, otherwise seamlessly routes to specialized cloud models.
+    Multi-provider LLM dispatcher with per-agent model specialization. `agent` is
+    required and must be one of AGENTS; it picks the cloud model from
+    brain_mode.json's agent_cloud_models (defaults below).
+    - 'cloud':
+        * Sakura: qwen/qwen3.8-27b (Groq)
+        * Chaewon: openai/gpt-oss-120b (Groq)
+        * Yunjin: gemini-3.6-flash (Google), Groq fallback
+        * Kazuha: qwen/qwen3.8-27b (Groq)
+        * Eunchae: openai/gpt-oss-20b (Groq)
+    - 'local': local Ollama (local_model) for every agent.
+    - 'auto': local Ollama if it is running, otherwise the agent's cloud model.
     """
-    mode = get_brain_mode()
+    agent_key = agent.lower().strip() if isinstance(agent, str) else ""
+    if agent_key not in AGENTS:
+        raise ValueError(f"query_llm: agent must be one of {', '.join(AGENTS)}; got {agent!r}")
+
     cfg = load_brain_config()
+    mode = cfg.get("mode", "cloud").lower()
     errors = []
-
-    # Auto-detect agent from caller stack or prompt context if not explicitly provided
-    agent_key = (agent or "").lower().strip()
-    if not agent_key:
-        try:
-            import sys
-            frame = sys._getframe(1)
-            while frame:
-                fname = frame.f_code.co_filename.replace("\\", "/").lower().split("/")[-1]
-                if "scout" in fname or "chaewon" in fname:
-                    agent_key = "chaewon"
-                    break
-                elif "yunjin" in fname:
-                    agent_key = "yunjin"
-                    break
-                elif "kazuha" in fname:
-                    agent_key = "kazuha"
-                    break
-                elif "eunchae" in fname:
-                    agent_key = "eunchae"
-                    break
-                elif "sakura" in fname or "gmail" in fname:
-                    agent_key = "sakura"
-                    break
-                frame = frame.f_back
-        except Exception:
-            pass
-
-    if not agent_key:
-        snippet = (system_instruction + "\n" + prompt[:400]).lower()
-        if "sakura" in snippet:
-            agent_key = "sakura"
-        elif "chaewon" in snippet:
-            agent_key = "chaewon"
-        elif "yunjin" in snippet:
-            agent_key = "yunjin"
-        elif "kazuha" in snippet:
-            agent_key = "kazuha"
-        elif "eunchae" in snippet:
-            agent_key = "eunchae"
 
     agent_cloud_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
     target_cloud_model = agent_cloud_map.get(agent_key, cfg.get("cloud_model", "qwen/qwen3.8-27b"))

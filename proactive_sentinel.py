@@ -14,6 +14,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 WORKSPACE_DIR = BASE_DIR.parent
 PORTFOLIO_DIR = WORKSPACE_DIR / "portfolio-site"
+GIT_REPO_DIR = BASE_DIR  # D6: watch the HQ repo; WORKSPACE_DIR (Projects/) is not a git repo
 
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
@@ -102,13 +103,13 @@ def check_hardware_sentinel() -> list[dict]:
 
 
 def check_git_sentinel() -> list[dict]:
-    """Inspects git repository status on workspace."""
+    """Inspects git status of the HQ repo (GIT_REPO_DIR)."""
     suggestions = []
     try:
         # Check porcelain status
         res = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(WORKSPACE_DIR),
+            cwd=str(GIT_REPO_DIR),
             capture_output=True,
             text=True,
             check=True
@@ -118,7 +119,7 @@ def check_git_sentinel() -> list[dict]:
         # Check branch
         branch_res = subprocess.run(
             ["git", "branch", "--show-current"],
-            cwd=str(WORKSPACE_DIR),
+            cwd=str(GIT_REPO_DIR),
             capture_output=True,
             text=True,
             check=True
@@ -132,7 +133,7 @@ def check_git_sentinel() -> list[dict]:
                 "agent": "kazuha",
                 "category": "REPOSITORY SENTINEL",
                 "title": f"{len(lines)} Uncommitted Changes on '{current_branch}'",
-                "description": f"Workspace has {len(lines)} modified or untracked file(s). Recommend reviewing diff and committing progress.",
+                "description": f"The HQ repo has {len(lines)} modified or untracked file(s). Recommend reviewing diff and committing progress.",
                 "action_label": "Review with Kazuha",
                 "action_prompt": "Kazuha, review git status and summarize uncommitted changes."
             })
@@ -157,7 +158,8 @@ def check_obsidian_sentinel() -> list[dict]:
         content = ""
         try:
             content = obs.get_file(daily_rel_path)
-        except Exception:
+        except Exception as _exc:
+            print(f"⚠️ [proactive_sentinel.check_obsidian_sentinel] suppressed {type(_exc).__name__}: {_exc}", flush=True)
             content = ""
 
         if not content or len(content.strip()) < 50:

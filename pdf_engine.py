@@ -65,7 +65,7 @@ def render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
         if temp_html.exists():
             try:
                 temp_html.unlink()
-            except Exception:
+            except Exception:  # quiet: best-effort temp file cleanup
                 pass
 
 def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
