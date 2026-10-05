@@ -351,20 +351,20 @@ async def profile(ctx):
     )
     embed.add_field(
         name="💼 Experience",
-        value="• **LSFM AI HQ:** Lead AI Systems Architect (5-agent swarm, Groq + Gemini routing, OAuth2 triage)\n• **Mobile Capstone:** Lead Systems Architect (React Native, AWS Lambda, DynamoDB, Redis)\n• **Frontend Internship:** UI/UX & Frontend Engineer Intern (Figma, React, Tailwind)",
+        value="• **LSFM AI HQ:** Lead AI Systems Architect (5-agent team, Groq + Gemini routing, OAuth2 triage)\n• **Mobile Capstone:** Lead Systems Architect (React Native, AWS Lambda, DynamoDB, Redis)\n• **Frontend Internship:** UI/UX & Frontend Engineer Intern (Figma, React, Tailwind)",
         inline=False
     )
     embed.add_field(
         name="🚀 Flagship Projects",
-        value="• **LSFM AI HQ:** Autonomous 5-agent swarm, Groq + Gemini routing & hybrid RAG\n• **Lumina Analytics:** Enterprise AI observability & SaaS telemetry engine\n• **Vellum OS:** Mental wellness & ambient human-AI reflection companion\n• **FinTrack:** Algorithmic personal finance & sub-3s categorization\n• **Aura Coffee & Kitchen:** Artisanal commerce web store & Philippine payment rails\n• **Cognitive Memory Core:** Zero-dependency BM25 self-improving agent flywheel",
+        value="• **LSFM AI HQ:** 5-agent team on Discord, Groq + Gemini routing & hybrid RAG\n• **Manas: Ciel:** Bilingual voice copilot with streaming speech & a web HUD\n• **Cognitive Memory Core:** Lessons-learned memory for AI coding assistants (stdlib BM25)\n• **Aura Coffee & Kitchen:** One-page coffee ordering demo with 6 payment options\n• **Lumina Analytics:** Student study & focus dashboard (Figma + React/TypeScript, sample data)\n• **Vellum / FinTrack:** Mobile UX concepts in Figma (untested)",
         inline=False
     )
     embed.add_field(
         name="🛠️ Capabilities Triad",
-        value="• **AI & Agents:** Multi-Agent Swarms, Groq, Gemini, Ollama (local), Hybrid RAG, Tool Calling\n• **Systems & Cloud:** Python (asyncio), Google Workspace API, Headless Edge, AWS, Redis\n• **Interface Craft:** React, TypeScript, Next.js, Design Tokens, Tailwind, WCAG AAA",
+        value="• **AI & Agents:** Multi-Agent Systems, Groq, Gemini, Ollama (local), Hybrid RAG, Tool Calling\n• **Systems & Cloud:** Python (asyncio), Google Workspace API, Headless Edge, AWS, Redis\n• **Interface Craft:** React, TypeScript, Design Tokens, Tailwind, Accessibility (WCAG 2.1 AA)",
         inline=False
     )
-    embed.set_footer(text="Memory loaded from lsfm-swarm/memory/master_resume.md")
+    embed.set_footer(text="Fixed summary card · full resume source: memory/master_resume.md")
     await ctx.reply(embed=embed)
 
 @bot.command(name="history")
