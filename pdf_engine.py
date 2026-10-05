@@ -112,7 +112,11 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
     # 2. Parse contact info from header or bullet lines
     for line in lines:
         line_s = line.strip()
-        if re.match(r'^[-*]\s+\*{0,2}Location:\*{0,2}', line_s, re.IGNORECASE):
+        short_m = re.match(r'^[-*]\s+\*{0,2}(Location|Degree) \(short\):\*{0,2}\s*(.+)', line_s, re.IGNORECASE)
+        if short_m:  # header-only variants; the full values stay for cover letters
+            key = "location_short" if short_m.group(1).lower() == "location" else "education_short"
+            ctx[key] = short_m.group(2).strip()
+        elif re.match(r'^[-*]\s+\*{0,2}Location:\*{0,2}', line_s, re.IGNORECASE):
             ctx["location"] = re.sub(r'^[-*]\s+\*{0,2}Location:\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
         elif re.match(r'^[-*]\s+\*{0,2}Email:\*{0,2}', line_s, re.IGNORECASE):
             ctx["email"] = re.sub(r'^[-*]\s+\*{0,2}Email:\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
@@ -120,10 +124,14 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
             ctx["github_url"] = re.sub(r'^[-*]\s+\*{0,2}GitHub:\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
         elif re.match(r'^[-*]\s+\*{0,2}(Portfolio|Portfolio Website|Website):\*{0,2}', line_s, re.IGNORECASE):
             ctx["portfolio_url"] = re.sub(r'^[-*]\s+\*{0,2}(Portfolio|Portfolio Website|Website):\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
-        elif re.match(r'^[-*]\s+\*{0,2}(Target Roles?|Title):\*{0,2}', line_s, re.IGNORECASE):
-            ctx["title"] = re.sub(r'^[-*]\s+\*{0,2}(Target Roles?|Title):\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
+        elif re.match(r'^[-*]\s+\*{0,2}Title:\*{0,2}', line_s, re.IGNORECASE):
+            ctx["title"] = re.sub(r'^[-*]\s+\*{0,2}Title:\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
+        elif re.match(r'^[-*]\s+\*{0,2}Target Roles?:\*{0,2}', line_s, re.IGNORECASE):
+            ctx["target_roles"] = re.sub(r'^[-*]\s+\*{0,2}Target Roles?:\*{0,2}\s*', '', line_s, flags=re.IGNORECASE).strip()
         elif line_s.startswith("- **Professional Summary:**"):
-            ctx["summary"] = line_s.split(":", 1)[1].strip()
+            ctx["summary"] = line_s.split(":", 1)[1].lstrip("* ").strip()
+    if not ctx.get("title") and ctx.get("target_roles"):
+        ctx["title"] = ctx["target_roles"]
 
     # 3. Partition sections by ## headings
     sections: Dict[str, List[str]] = {}
@@ -133,13 +141,17 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
             sec_name = line.strip()[3:].strip().lower()
             current_sec = sec_name
             sections[current_sec] = []
-        elif current_sec:
+        elif current_sec and not re.fullmatch(r'\s*([-*_])\1{2,}\s*', line):  # skip --- rules
             sections[current_sec].append(line)
 
     # 4. Parse sections
     for sec_name, sec_lines in sections.items():
+        # Highlights: the Key Technical Impact bullets, chosen by hand across projects
+        if "highlight" in sec_name:
+            ctx["bullets"] = [l.strip()[2:].strip() for l in sec_lines if l.strip().startswith(("- ", "* "))]
+
         # A. Summary
-        if "summary" in sec_name:
+        elif "summary" in sec_name:
             if not ctx.get("summary"):
                 summary_text = " ".join([l.strip() for l in sec_lines if l.strip() and not l.strip().startswith("#") and not l.strip().startswith("- **")])
                 if summary_text:
@@ -237,7 +249,13 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 elif curr_proj:
                     if ls.startswith("- ") or ls.startswith("* "):
                         bullet = ls[2:].strip()
-                        if not any(bullet.lower().startswith(x) for x in ["**role:**", "**period:**", "**discipline:**", "**stack:**", "**key contributions"]):
+                        if bullet.lower().startswith("**resume line:**"):
+                            curr_proj["desc"] = bullet.split(":", 1)[1].lstrip("* ").strip()
+                        elif bullet.lower().startswith("**role:**"):
+                            credit_m = re.search(r'\(([^)]+)\)\s*$', bullet)  # "Developer (Solo Project)"
+                            if credit_m:
+                                curr_proj["credit"] = credit_m.group(1).strip()
+                        elif not any(bullet.lower().startswith(x) for x in ["**role:**", "**period:**", "**discipline:**", "**stack:**", "**key contributions"]):
                             curr_proj["bullets"].append(bullet)
                     elif ls and not ls.startswith("#") and not ls.startswith("- **"):
                         if not curr_proj["desc"]:
@@ -262,13 +280,16 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 if ":" in sl_clean:
                     cat, vals = sl_clean.split(":", 1)
                     cat_lower = cat.lower()
-                    vals_clean = vals.strip().strip("*").strip()
+                    vals_clean = vals.strip().strip("*").strip().rstrip(".")
+                    key = None
                     if any(k in cat_lower for k in ["ai", "llm", "ml"]):
-                        ctx["skills_ai"] = vals_clean
+                        key = "skills_ai"
                     elif any(k in cat_lower for k in ["lang", "backend", "system"]):
-                        ctx["skills_sys"] = vals_clean
+                        key = "skills_sys"
                     elif any(k in cat_lower for k in ["front", "ui", "mobile", "design"]):
-                        ctx["skills_ui"] = vals_clean
+                        key = "skills_ui"
+                    if key:  # several lines can feed one row; keep them all
+                        ctx[key] = f"{ctx[key]}, {vals_clean}" if ctx.get(key) else vals_clean
 
         # E. Education
         elif "education" in sec_name:
@@ -352,7 +373,7 @@ def build_resume_html(data: Dict[str, Any]) -> str:
     if not title or title in ["Design / Engineering Role", "Target Role", "Role", "Application"]:
         title = os.getenv("OWNER_TITLE", "Software Engineer")
 
-    location = data.get("location") or os.getenv("OWNER_LOCATION", "")
+    location = data.get("location_short") or data.get("location") or os.getenv("OWNER_LOCATION", "")
     email = data.get("email") or os.getenv("OWNER_EMAIL", OWNER_EMAIL)
     portfolio_url = data.get("portfolio_url") or os.getenv("PORTFOLIO_URL", "")
     portfolio_display = data.get("portfolio_display") or os.getenv("PORTFOLIO_DISPLAY", portfolio_url.replace("https://", "").replace("http://", "").rstrip("/"))
@@ -396,7 +417,7 @@ def build_resume_html(data: Dict[str, Any]) -> str:
     project_items_html = ""
     for p in projects[:4]:
         p_name = p.get('name', '')
-        p_tag = p.get('tag', '')
+        p_tag = " · ".join(x for x in (p.get('tag', ''), p.get('credit', '')) if x)
         tag_html = f'<span class="item-meta">{p_tag}</span>' if p_tag else ''
         p_desc = p.get('desc', '')
         project_items_html += f"""

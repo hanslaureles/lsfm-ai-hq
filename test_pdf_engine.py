@@ -227,5 +227,121 @@ Degree, school, year.
                 self.assertEqual(created_pdfs, [])
 
 
+# The master profile's own layout: bold "- **Field:** value" lines, "---" rules
+# between sections, two front-end skill lines, a Target Roles list and a Title.
+MASTER_STYLE_RESUME = """# Jane Doe — Master Profile & Resume
+
+- **Full Name:** Jane Doe
+- **Target Roles:** Role A, Role B, Role C
+- **Title:** Applied AI Engineer
+- **Professional Summary:** Builds agents. Ships web apps.
+
+---
+
+## Education
+
+- **Degree:** BS Computer Science
+- **Institution:** Example University
+
+---
+
+## Highlights
+
+- Highlight one across projects.
+- Highlight two across projects.
+
+---
+
+## Professional Work Experience
+
+### Frontend Intern
+- **Company:** Example Co
+- **Period:** 2024
+- **Key Contributions & Impact:**
+  - Built components.
+
+---
+
+## Engineering & Portfolio Projects
+
+### 1. Alpha — Tag A
+- **Role:** Developer
+- **Resume line:** One short line about Alpha.
+- **Key Contributions & Impact:**
+  - A long first bullet about Alpha.
+  - A long second bullet about Alpha.
+
+### 2. Beta — Tag B
+- **Key Contributions & Impact:**
+  - Only bullet about Beta.
+
+---
+
+## Technical Proficiencies
+
+- **Frontend & Mobile:** React.js, Tailwind CSS
+- **UI/UX & Design:** Figma, Wireframing
+"""
+
+
+class TestMasterProfileLayout(unittest.TestCase):
+    """Regressions from the 2026-10-06 rebuild: the master profile rendered markdown leftovers."""
+
+    def setUp(self):
+        self.ctx, err = parse_markdown_resume(MASTER_STYLE_RESUME)
+        self.assertIsNone(err)
+
+    def test_summary_has_no_leftover_bold_markers(self):
+        self.assertEqual(self.ctx["summary"], "Builds agents. Ships web apps.")
+
+    def test_horizontal_rules_are_not_content(self):
+        self.assertEqual(self.ctx["experience"][0]["desc"], "")
+        self.assertNotIn("---", self.ctx["projects"][-1]["desc"])
+
+    def test_title_field_wins_over_target_roles(self):
+        self.assertEqual(self.ctx["title"], "Applied AI Engineer")
+        flipped = MASTER_STYLE_RESUME.replace(
+            "- **Target Roles:** Role A, Role B, Role C\n- **Title:** Applied AI Engineer\n",
+            "- **Title:** Applied AI Engineer\n- **Target Roles:** Role A, Role B, Role C\n")
+        ctx, _ = parse_markdown_resume(flipped)
+        self.assertEqual(ctx["title"], "Applied AI Engineer")
+
+    def test_both_frontend_skill_lines_are_kept(self):
+        self.assertIn("React.js", self.ctx["skills_ui"])
+        self.assertIn("Figma", self.ctx["skills_ui"])
+
+    def test_highlights_section_feeds_key_impact_bullets(self):
+        self.assertEqual(self.ctx["bullets"], ["Highlight one across projects.", "Highlight two across projects."])
+
+    def test_resume_line_is_the_project_description(self):
+        alpha, beta = self.ctx["projects"]
+        self.assertEqual(alpha["desc"], "One short line about Alpha.")
+        self.assertNotIn("Resume line", " ".join(alpha["bullets"]))
+        self.assertEqual(beta["desc"], "Only bullet about Beta.")  # fallback unchanged
+
+    def test_role_credit_follows_the_project_tag(self):
+        text = MASTER_STYLE_RESUME.replace("- **Role:** Developer\n", "- **Role:** Developer (Solo Project)\n")
+        ctx, _ = parse_markdown_resume(text)
+        self.assertEqual(ctx["projects"][0]["credit"], "Solo Project")
+        self.assertEqual(ctx["projects"][1].get("credit", ""), "")
+        html = build_resume_html(ctx)
+        self.assertIn("Tag A · Solo Project", html)
+        self.assertNotIn("Tag B ·", html)
+
+    def test_short_location_and_degree_feed_only_the_header(self):
+        text = MASTER_STYLE_RESUME.replace(
+            "- **Full Name:** Jane Doe\n",
+            "- **Full Name:** Jane Doe\n- **Location:** City, Country (Open to Remote)\n"
+            "- **Location (short):** City, Country\n- **Degree (short):** BS CS (EU)\n")
+        ctx, _ = parse_markdown_resume(text)
+        self.assertEqual(ctx["location"], "City, Country (Open to Remote)")  # full value kept
+        self.assertEqual(ctx["education_degree"], "BS Computer Science")
+        html = build_resume_html(ctx)
+        header = html.split("<header", 1)[1].split("</header>", 1)[0]
+        self.assertIn("City, Country", header)
+        self.assertNotIn("Open to Remote", header)
+        self.assertIn("BS CS (EU)", header)
+
+
 if __name__ == "__main__":
     unittest.main()
