@@ -61,5 +61,63 @@ class TestMarkdown(unittest.TestCase):
         self.assertIn("p95 is the max", text)
 
 
+class TestMissionTrace(unittest.TestCase):
+    """e2e_mission keeps each run's own timeline (4D): start/end of every instrumented
+    call relative to mission start, plus first audio. No network: a fake orchestrator."""
+
+    def test_trace_records_offsets_in_call_order(self):
+        import asyncio
+        import time
+        import types
+
+        fake = types.ModuleType("ciel_orchestrator")
+        fake.call_groq = lambda prompt, system_instruction="", **kw: time.sleep(0.02) or "{}"
+
+        async def speak_clip(*args, **kwargs):
+            await asyncio.sleep(0.03)
+            return "clip.mp3"
+
+        async def tts_bilingual(**kwargs):
+            return "full.mp3"
+
+        fake.speak_clip, fake.text_to_speech_bilingual = speak_clip, tts_bilingual
+
+        class FakeCiel:
+            def reset_memory(self):
+                pass
+
+            async def execute_mission(self, prompt, event_callback=None):
+                fake.call_groq("route", system_instruction="You are the routing core")
+                await fake.speak_clip("first sentence")
+                await event_callback({"type": "ciel_audio_chunk"})
+                fake.call_groq("write", system_instruction="synthesis")
+                return {"intent_type": "general_knowledge", "mission_id": "t1"}
+
+        bench = bench_ciel.Bench(samples={})
+        bench._ciel = FakeCiel()
+        real = sys.modules.get("ciel_orchestrator")
+        sys.modules["ciel_orchestrator"] = fake
+        try:
+            extra = asyncio.run(bench.e2e_mission())
+        finally:
+            if real is None:
+                sys.modules.pop("ciel_orchestrator", None)
+            else:
+                sys.modules["ciel_orchestrator"] = real
+
+        trace = extra["trace"]
+        self.assertEqual([s["stage"] for s in trace["spans"]], ["router_llm", "tts_clip", "synthesis_llm"])
+        for s in trace["spans"]:
+            self.assertLessEqual(0, s["start_ms"])
+            self.assertLess(s["start_ms"], s["end_ms"])
+        router, clip, synth = trace["spans"]
+        self.assertLessEqual(router["end_ms"], clip["start_ms"])
+        self.assertLessEqual(clip["end_ms"], trace["first_audio_ms"])
+        self.assertLessEqual(trace["first_audio_ms"], synth["start_ms"])
+        self.assertLessEqual(synth["end_ms"], trace["mission_ms"])
+        self.assertGreaterEqual(clip["end_ms"] - clip["start_ms"], 25)  # the 30 ms sleep, timed
+        json.dumps(extra["trace"])  # lands in the JSON report as-is
+
+
 if __name__ == "__main__":
     unittest.main()

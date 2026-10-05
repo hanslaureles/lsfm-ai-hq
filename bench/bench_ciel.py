@@ -128,7 +128,10 @@ def collect_environment():
         },
         "git": {
             "sha": _run(["git", "rev-parse", "HEAD"]),
-            "dirty": bool(_run(["git", "status", "--porcelain", "--untracked-files=no"])),
+            # Code only: the running squad rewrites tracked state files (memory/last_*_date.txt),
+            # which say nothing about the code that was measured.
+            # Scope: tracked .py files only; untracked files, dependencies and other inputs are not checked.
+            "dirty": bool(_run(["git", "status", "--porcelain", "--untracked-files=no", "--", "*.py"])),
         },
     }
     try:
@@ -384,7 +387,14 @@ class Bench:
         """
         import ciel_orchestrator as co
         calls = []
+        spans = []  # this run's timeline: each call's start/end, ms after mission start
         real_groq, real_tts, real_clip = co.call_groq, co.text_to_speech_bilingual, co.speak_clip
+
+        def record(kind, started):
+            ended = time.perf_counter()
+            calls.append((kind, (ended - started) * 1000, None))
+            spans.append({"stage": kind, "start_ms": round((started - mission_started) * 1000, 1),
+                          "end_ms": round((ended - mission_started) * 1000, 1)})
 
         def timed_groq(prompt, system_instruction="", **kwargs):
             kind = "router_llm" if "routing core" in system_instruction else "synthesis_llm"
@@ -396,20 +406,20 @@ class Bench:
                 # record them so that run counts as failed, not as a fast router.
                 calls.append((kind, None, f"{kind}: {type(e).__name__}: {e}"))
                 raise
-            calls.append((kind, (time.perf_counter() - started) * 1000, None))
+            record(kind, started)
             return reply
 
         async def timed_tts(**kwargs):
             started = time.perf_counter()
             path = await real_tts(**kwargs)
-            calls.append(("tts_bilingual", (time.perf_counter() - started) * 1000, None))
+            record("tts_bilingual", started)
             return path
 
         async def timed_clip(*args, **kwargs):
             # Streamed speech: one Edge TTS + filter call per sentence.
             started = time.perf_counter()
             path = await real_clip(*args, **kwargs)
-            calls.append(("tts_clip", (time.perf_counter() - started) * 1000, None))
+            record("tts_clip", started)
             return path
 
         # Time to first audio: mission start until the first playable audio URL is
@@ -432,6 +442,7 @@ class Bench:
             with contextlib.redirect_stdout(log):
                 mission_started = time.perf_counter()
                 result = await ciel.execute_mission(MISSION_PROMPT, event_callback=on_event)
+                mission_ms = (time.perf_counter() - mission_started) * 1000
         finally:
             co.call_groq, co.text_to_speech_bilingual, co.speak_clip = real_groq, real_tts, real_clip
         if first_audio:
@@ -449,7 +460,12 @@ class Bench:
             raise RuntimeError(result.get("error") or errors[0])
         if not any(kind == "router_llm" for kind, _, _ in calls):
             raise RuntimeError("router LLM was not called (keyword fast path?)")
-        return {"intent": result.get("intent_type"), "_sub": [(k, ms) for k, ms, _ in calls]}
+        # The run's own timeline (saved per run in the JSON report's extras): what a
+        # trace waterfall may show, unlike stage percentiles pooled across runs.
+        trace = {"mission_ms": round(mission_ms, 1),
+                 "first_audio_ms": round(first_audio[0], 1) if first_audio else None,
+                 "spans": sorted(spans, key=lambda s: s["start_ms"])}
+        return {"intent": result.get("intent_type"), "trace": trace, "_sub": [(k, ms) for k, ms, _ in calls]}
 
 
 STAGES = [
