@@ -9,10 +9,10 @@ discord.py>=2.3.2
 # Environment Variables & Configuration
 python-dotenv>=1.0.0
 
-# LLM Providers (Hybrid Cloud & Local Inference)
-groq>=0.9.0
+# LLM Providers: Gemini through its SDK. Groq and Whisper are called over HTTPS and
+# local Ollama over HTTP, all with urllib (llm_client.py, voice_engine.py), so no
+# Groq or OpenAI SDK is needed.
 google-genai>=2.27.0
-openai>=1.30.0
 
 # Google Workspace REST APIs (OAuth2 & Gmail Engine)
 google-api-python-client>=2.130.0
