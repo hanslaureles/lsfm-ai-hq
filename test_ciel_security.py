@@ -44,17 +44,29 @@ def _install_stubs():
         "llm_client": {"get_brain_status": lambda: {"mode": "test"}},
         "proactive_sentinel": {"evaluate_proactive_suggestions": lambda: []},
     }
+    saved = {name: sys.modules.get(name) for name in stubs}
     for name, attrs in stubs.items():
         mod = types.ModuleType(name)
         for key, val in attrs.items():
             setattr(mod, key, val)
         sys.modules[name] = mod
+    return saved
+
+
+def _restore(saved):
+    """ciel_server bound the fakes with from-imports, so later test files get the real modules back."""
+    for name, orig in saved.items():
+        if orig is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = orig
 
 
 os.environ["CIEL_PORT"] = "8000"
-_install_stubs()
+_saved = _install_stubs()
 sys.modules.pop("ciel_server", None)
 import ciel_server  # noqa: E402
+_restore(_saved)
 
 GOOD_HOST = {"Host": "localhost:8000"}
 GOOD_ORIGIN = {**GOOD_HOST, "Origin": "http://localhost:8000"}

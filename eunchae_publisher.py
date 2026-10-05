@@ -17,7 +17,7 @@ any unknown status and anything that looks like a path, account name or secret.
 Usage:
     python -m eunchae_publisher --dry-run              # print the payload
     python -m eunchae_publisher [--target <path>]      # write it (default: portfolio-site/data/status.json)
-Writing the file does not commit it; the portfolio repo's workflow does that (4C).
+Writing the file does not commit it; commit it by hand in the portfolio repo (D1: on demand, no background job).
 """
 
 import argparse

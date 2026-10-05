@@ -4,22 +4,11 @@ Guarantees that audit exceptions, missing assets, and unhandled errors are never
 reworded or masked as 'QA PASSED'.
 """
 
-import importlib.util
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-# Hermetic module loader: test_ciel_security leaves stubs in sys.modules
-# ("llm_client", "eunchae_engine") without __file__. Restore real modules.
-for mod_name in ["llm_client", "eunchae_engine"]:
-    if mod_name in sys.modules and not hasattr(sys.modules[mod_name], "__file__"):
-        spec = importlib.util.spec_from_file_location(mod_name, Path(__file__).with_name(f"{mod_name}.py"))
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[mod_name] = mod
-        spec.loader.exec_module(mod)
 
 import eunchae_engine
 import bot_sakura

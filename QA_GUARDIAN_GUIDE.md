@@ -64,6 +64,17 @@ In `#pc-vitals` or `#system-alerts`:
 
 ---
 
+## 📡 Public Status Publisher (`eunchae_publisher.py`)
+
+Eunchae also builds the `status.json` file behind the portfolio's Agent Overview panel (full pipeline: `SETUP_GUIDE.md` §7). The same honesty rule as the QA gatekeeper applies: nothing is reported as healthy unless it was measured.
+
+* **No invented "online":** a bot is `online` only if its heartbeat file is no older than 900 s and says so; otherwise it is `not_ready`, `stale`, `offline` or `unknown`.
+* **Measured latency only:** LLM latency comes from the newest non-mock `bench/results/*-telemetry.json`, with its sample count, date and source file. With no such file the field is empty, not estimated.
+* **Validated before writing:** `generate_status_payload()` builds only the public fields; `validate_status()` then rejects any unexpected key, unknown status or out-of-range value, any source path other than the two fixed ones (`bench/results/YYYY-MM-DD-telemetry.json`, `memory/applications_log.md`), and any text matching its leak pattern (a Windows drive or network path, the string `users` or the owner's Windows user name (one fixed string, not account names in general), an `@`, or the words token, key, secret or password).
+* **Dry run first:** `python -m eunchae_publisher --dry-run` prints the payload without writing anything.
+
+---
+
 ## 🛠️ Discord Commands Reference
 
 | Command | Channel | Description |
