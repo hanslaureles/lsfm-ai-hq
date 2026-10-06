@@ -18,6 +18,23 @@ llm_client = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(llm_client)
 
 
+class FakeClock:
+    """time.monotonic stand-in the breaker tests move by hand."""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def fresh_breakers(clock=None):
+    """Breakers live at module level (shared by every agent); each test gets its own set."""
+    kwargs = {"clock": clock} if clock else {}
+    return mock.patch.object(llm_client, "BREAKERS",
+                             {p: llm_client.CircuitBreaker(**kwargs) for p in ("groq", "gemini")})
+
+
 class TestOllamaBaseUrl(unittest.TestCase):
 
     def url_for(self, value):
@@ -149,6 +166,7 @@ class TestTypedRouting(unittest.TestCase):
         self.config.write_text(json.dumps({"mode": "cloud"}), encoding="utf-8")
         self.enterContext(mock.patch.object(llm_client, "CONFIG_FILE", self.config))
         self.enterContext(mock.patch.object(llm_client, "_config_cache", (None, None), create=True))
+        self.enterContext(fresh_breakers())
         self.calls = []
         self.enterContext(mock.patch.object(llm_client, "call_groq",
                                             lambda p, **k: self.calls.append(("groq", k["model"])) or "ok"))
@@ -375,6 +393,7 @@ class TestStructuredResult(unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {"GROQ_API_KEY": "test", "GEMINI_API_KEY": "test"}))
         self.enterContext(mock.patch("time.sleep"))
         self.enterContext(mock.patch("builtins.print"))
+        self.enterContext(fresh_breakers())
         self.sent = []
 
     def groq(self, *responses):
@@ -441,6 +460,19 @@ class TestStructuredResult(unittest.TestCase):
         self.assertIsNotNone(r.ttft_ms)
         self.assertLessEqual(r.ttft_ms, r.total_ms)
 
+    def test_a_failing_on_delta_consumer_is_not_a_provider_failure(self):
+        # Codex 5B B3: the caller's own callback raising must not trip Groq's breaker.
+        self.groq(*[SSE(["Report: ", "ok"]) for _ in range(4)])
+
+        def consumer(piece):
+            raise ValueError("consumer callback failed")
+        for _ in range(4):
+            with self.assertRaises(ValueError) as err:
+                llm_client.query_llm_structured("hi", agent="sakura", on_delta=consumer)
+            self.assertEqual(str(err.exception), "consumer callback failed")  # the caller's error, as raised
+        self.assertEqual(llm_client.BREAKERS["groq"].state(), "closed")
+        self.assertEqual(self.sent, ["qwen/qwen3.8-27b"] * 4)  # never moved to Gemini
+
     def test_local_mode_reports_ollama(self):
         self.config.write_text(json.dumps({"mode": "local"}), encoding="utf-8")
         self.enterContext(mock.patch.object(llm_client, "check_ollama_status", lambda: (True, ["qwen2.5-coder:7b"])))
@@ -466,6 +498,135 @@ class TestStructuredResult(unittest.TestCase):
         self.enterContext(mock.patch.object(llm_client, "call_groq", lambda p, **k: "stub"))
         r = llm_client.query_llm_structured("hi", agent="eunchae")
         self.assertEqual((r.text, r.provider, r.model, r.fallback_chain), ("stub", "groq", "openai/gpt-oss-20b", ()))
+
+
+class TestCircuitBreaker(unittest.TestCase):
+    """5B-1: 3 consecutive failed calls open a provider for 60 s; then one call decides."""
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.b = llm_client.CircuitBreaker(clock=self.clock)
+
+    def fail(self, n):
+        for _ in range(n):
+            self.b.record(False)
+
+    def test_two_failures_keep_it_closed(self):
+        self.fail(2)
+        self.assertEqual(self.b.state(), "closed")
+        self.assertFalse(self.b.is_open())
+
+    def test_three_consecutive_failures_open_it(self):
+        self.fail(3)
+        self.assertEqual(self.b.state(), "open")
+        self.assertTrue(self.b.is_open())
+
+    def test_a_success_resets_the_count(self):
+        self.fail(2)
+        self.b.record(True)
+        self.fail(2)
+        self.assertEqual(self.b.state(), "closed")
+
+    def test_after_the_cooldown_a_trial_success_closes_it(self):
+        self.fail(3)
+        self.clock.t += 59.9
+        self.assertTrue(self.b.is_open())
+        self.clock.t += 0.1
+        self.assertEqual(self.b.state(), "half-open")
+        self.assertFalse(self.b.is_open())
+        self.b.record(True)
+        self.assertEqual(self.b.state(), "closed")
+
+    def test_a_trial_failure_opens_it_again_at_once(self):
+        self.fail(3)
+        self.clock.t += 60
+        self.fail(1)
+        self.assertEqual(self.b.state(), "open")
+        self.clock.t += 59
+        self.assertTrue(self.b.is_open())
+
+
+class TestBreakerRouting(unittest.TestCase):
+    """5B-2/5B-3: an open breaker moves its provider to the back of the line, never out of it,
+    and a reply that already streamed is never finished by another provider."""
+
+    def setUp(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        config = tmp / "brain_mode.json"
+        config.write_text(json.dumps({"mode": "cloud"}), encoding="utf-8")
+        self.enterContext(mock.patch.object(llm_client, "CONFIG_FILE", config))
+        self.enterContext(mock.patch.object(llm_client, "_config_cache", (None, None), create=True))
+        self.enterContext(mock.patch.dict(os.environ, {"GROQ_API_KEY": "test", "GEMINI_API_KEY": "test"}))
+        self.enterContext(mock.patch.object(llm_client, "check_ollama_status", lambda: (False, [])))
+        self.clock = FakeClock()
+        self.enterContext(fresh_breakers(self.clock))
+        self.calls, self.down = [], set()
+
+        def provider(name):
+            def call(prompt, **kwargs):
+                self.calls.append(name)
+                if name in self.down:
+                    raise RuntimeError(f"{name} down")
+                return f"from {name}"
+            return call
+        self.enterContext(mock.patch.object(llm_client, "call_groq", provider("groq")))
+        self.enterContext(mock.patch.object(llm_client, "call_gemini", provider("gemini")))
+
+    def ask(self, agent="sakura"):
+        self.calls.clear()
+        return llm_client.query_llm("hi", agent=agent)
+
+    def test_a_provider_that_keeps_failing_is_asked_last(self):
+        self.down = {"groq"}
+        for _ in range(3):
+            self.assertEqual(self.ask(), "from gemini")
+            self.assertEqual(self.calls, ["groq", "gemini"])
+        self.assertEqual(self.ask(), "from gemini")
+        self.assertEqual(self.calls, ["gemini"])  # Groq no longer costs this call anything
+        self.assertEqual(llm_client.get_brain_status()["breakers"], {"groq": "open", "gemini": "closed"})
+
+    def test_after_the_cooldown_it_is_tried_first_again(self):
+        self.down = {"groq"}
+        for _ in range(3):
+            self.ask()
+        self.down = set()
+        self.clock.t += 60
+        self.assertEqual(llm_client.BREAKERS["groq"].state(), "half-open")
+        self.assertEqual(self.ask(), "from groq")
+        self.assertEqual(self.calls, ["groq"])
+        self.assertEqual(llm_client.BREAKERS["groq"].state(), "closed")
+
+    def test_yunjin_demotes_gemini_the_same_way(self):
+        self.down = {"gemini"}
+        for _ in range(3):
+            self.ask("yunjin")
+        self.assertEqual(self.ask("yunjin"), "from groq")
+        self.assertEqual(self.calls, ["groq"])
+
+    def test_with_both_open_both_are_still_tried(self):
+        self.down = {"groq", "gemini"}
+        for _ in range(3):
+            with self.assertRaises(RuntimeError):
+                self.ask()
+        self.down = {"groq"}  # Gemini recovered while both breakers were open
+        self.assertEqual(self.ask(), "from gemini")
+        self.assertEqual(self.calls, ["groq", "gemini"])
+
+    def test_a_reply_that_already_streamed_is_not_finished_by_another_provider(self):
+        def groq_breaks_mid_reply(prompt, **kwargs):
+            self.calls.append("groq")
+            kwargs["on_delta"]("Report: one. ")
+            raise RuntimeError("stream broke after partial output")
+        self.enterContext(mock.patch.object(llm_client, "call_groq", groq_breaks_mid_reply))
+        pieces = []
+        with self.assertRaises(RuntimeError) as err:
+            llm_client.query_llm_structured("hi", agent="sakura", on_delta=pieces.append)
+        self.assertEqual(self.calls, ["groq"])  # Gemini would have started the reply over
+        self.assertEqual(pieces, ["Report: one. "])
+        self.assertIn("partial output", str(err.exception))
+
+    def test_status_lists_every_breaker(self):
+        self.assertEqual(llm_client.get_brain_status()["breakers"], {"groq": "closed", "gemini": "closed"})
 
 
 def _load_rag():

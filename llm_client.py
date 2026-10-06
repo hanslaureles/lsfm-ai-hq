@@ -1,6 +1,7 @@
 import os
 import copy
 import json
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -135,8 +136,50 @@ def get_brain_status(agent: str = None) -> dict:
         "local_models_available": local_models,
         "groq_ready": groq_configured,
         "gemini_ready": gemini_configured,
+        "breakers": {name: b.state() for name, b in BREAKERS.items()},
         "hardware_target": "PowerColor RX 6600 XT (8GB VRAM) / i5-12400F"
     }
+
+
+class CircuitBreaker:
+    """
+    One per cloud provider, shared by every agent in the process (the bots run in
+    one process; they call in from asyncio.to_thread workers, hence the lock).
+    After THRESHOLD consecutive failed calls the provider is open for COOLDOWN_S:
+    query_llm asks it last instead of first. After the cooldown the next call is
+    a trial: success closes the breaker, failure opens it again at once.
+    """
+    THRESHOLD = 3
+    COOLDOWN_S = 60.0
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._failures = 0
+        self._opened_at = None
+
+    def state(self) -> str:
+        with self._lock:
+            if self._opened_at is None:
+                return "closed"
+            # ponytail: every call after the cooldown is a trial (no single-probe gate);
+            # add one if concurrent trials ever matter at bot traffic.
+            return "open" if self._clock() - self._opened_at < self.COOLDOWN_S else "half-open"
+
+    def is_open(self) -> bool:
+        return self.state() == "open"
+
+    def record(self, ok: bool):
+        with self._lock:
+            if ok:
+                self._failures, self._opened_at = 0, None
+            else:
+                self._failures += 1
+                if self._failures >= self.THRESHOLD:
+                    self._opened_at = self._clock()
+
+
+BREAKERS = {"groq": CircuitBreaker(), "gemini": CircuitBreaker()}
 
 GROQ_FALLBACK_MODELS = [
     "qwen/qwen3.8-27b",
@@ -384,6 +427,9 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
         * Eunchae: openai/gpt-oss-20b (Groq)
     - 'local': local Ollama (local_model) for every agent.
     - 'auto': local Ollama if it is running, otherwise the agent's cloud model.
+    A cloud provider whose CircuitBreaker is open (3 failed calls in a row) is
+    asked last until its cooldown ends. Once a streamed reply has started, a
+    failure raises instead of falling back to the other provider.
     """
     agent_key = agent.lower().strip() if isinstance(agent, str) else ""
     if agent_key not in AGENTS:
@@ -399,9 +445,20 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
     target_cloud_model = agent_cloud_map.get(agent_key, cfg.get("cloud_model", "qwen/qwen3.8-27b"))
     target_local_model = cfg.get("local_model", "qwen2.5-coder:7b")
 
+    streamed = []      # set once any piece reached the caller's on_delta
+    caller_error = []  # an exception from on_delta itself: the caller's, not the provider's
+
+    def _forward(piece):
+        streamed.append(True)
+        try:
+            on_delta(piece)
+        except Exception as e:
+            caller_error.append(e)
+            raise
+
     def _groq(model):
         return call_groq(prompt, system_instruction=system_instruction, model=model, temperature=temperature,
-                         on_delta=on_delta, meta=meta), "groq", model
+                         on_delta=_forward if on_delta else None, meta=meta), "groq", model
 
     def _gemini(model):
         return call_gemini(prompt, system_instruction=system_instruction, model_name=model,
@@ -411,32 +468,33 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
         return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model,
                                  meta=meta), "ollama", target_local_model
 
-    # Helper for specialized cloud dispatch
     def _dispatch_cloud():
-        # If target model is a Gemini model (like for Yunjin)
-        if target_cloud_model.startswith("gemini"):
-            if os.getenv("GEMINI_API_KEY", "").strip():
-                try:
-                    return _gemini(target_cloud_model)
-                except Exception as ge:
-                    errors.append(f"Gemini ({target_cloud_model}): {ge}")
-            # Fallback to Groq
+        # (provider, model, error label): the agent's own provider first, the other as fallback.
+        if target_cloud_model.startswith("gemini"):  # Yunjin
+            steps = [("gemini", target_cloud_model, f"Gemini ({target_cloud_model})"),
+                     ("groq", "qwen/qwen3.8-27b", "Groq Cloud fallback")]
+        else:  # Sakura, Chaewon, Kazuha, Eunchae
+            steps = [("groq", target_cloud_model, f"Groq Cloud ({target_cloud_model})"),
+                     ("gemini", "gemini-3.6-flash", "Gemini fallback")]
+        if not os.getenv("GEMINI_API_KEY", "").strip():
+            steps = [s for s in steps if s[0] != "gemini"]
+        # A provider whose breaker is open goes last, never away (sort is stable).
+        steps.sort(key=lambda s: BREAKERS[s[0]].is_open())
+
+        for provider, model, label in steps:
             try:
-                return _groq("qwen/qwen3.8-27b")
+                answer = _groq(model) if provider == "groq" else _gemini(model)
             except Exception as e:
-                errors.append(f"Groq Cloud fallback: {e}")
-        else:
-            # Target model is a Groq model (Sakura, Chaewon, Kazuha, Eunchae)
-            try:
-                return _groq(target_cloud_model)
-            except Exception as e:
-                errors.append(f"Groq Cloud ({target_cloud_model}): {e}")
-            # Fallback to Gemini
-            if os.getenv("GEMINI_API_KEY", "").strip():
-                try:
-                    return _gemini("gemini-3.6-flash")
-                except Exception as ge:
-                    errors.append(f"Gemini fallback: {ge}")
+                if caller_error:  # not this provider's fault: no breaker count, no fallback (Codex 5B B3)
+                    raise caller_error[0]
+                BREAKERS[provider].record(False)
+                errors.append(f"{label}: {e}")
+                if streamed:  # the caller already has part of this reply; another provider would restart it
+                    raise RuntimeError(f"Cloud reply broke after partial output, not falling back: "
+                                       f"{'; '.join(errors)}") from e
+                continue
+            BREAKERS[provider].record(True)
+            return answer
 
         raise RuntimeError(f"Cloud providers failed: {'; '.join(errors)}")
 
