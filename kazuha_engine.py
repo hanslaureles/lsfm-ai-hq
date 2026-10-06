@@ -353,11 +353,14 @@ status: completed
 *Ingested automatically into Obsidian Second Brain via LSFM Swarm Cron 4.*
 """
             # Create-only: a same-day re-run must not replace a digest (or Hans's edits to it).
-            if not client.create_file(obsidian_note_path, markdown_content):
-                print(f"ℹ️ [Kazuha Engine] {obsidian_note_path} already exists or could not be written; left as is.", flush=True)
+            note_saved = client.create_file(obsidian_note_path, markdown_content)
+            if not note_saved:
+                note_saved = (client.vault_path / obsidian_note_path).is_file()
+                print(f"ℹ️ [Kazuha Engine] {obsidian_note_path} "
+                      f"{'already exists; left as is' if note_saved else 'could not be written'}.", flush=True)
 
             # 2. Log session into today's daily log
-            client.log_session(
+            logged = client.log_session(
                 "Kazuha",
                 f"Applied AI Research Scout & Ingest ({len(papers)} papers)",
                 [
@@ -367,7 +370,7 @@ status: completed
                     "Synthesized architectural takeaways for local GPU inference & multi-agent swarms"
                 ]
             )
-            obsidian_synced = True
+            obsidian_synced = note_saved and logged
         except Exception as e:
             print(f"⚠️ [Kazuha Engine] Obsidian sync error: {e}", flush=True)
 

@@ -6,6 +6,7 @@ fake Discord targets, patched urlopen.
 """
 
 import asyncio
+import contextlib
 import email.message
 import http.server
 import importlib.util
@@ -180,7 +181,8 @@ class VaultWriteSafetyTest(unittest.TestCase):
             lines = (Path(vault) / "log.md").read_text(encoding="utf-8").splitlines()
         self.assertEqual(sorted(lines), sorted(f"p{n}-{i}" for n in range(4) for i in range(50)))
 
-    def test_research_digest_is_not_overwritten(self):
+    @contextlib.contextmanager
+    def _scout_env(self):
         import obsidian_client
         kazuha = _load_real("kazuha_engine")
         papers = [{"title": "T", "url": "https://example.org", "authors": "A", "upvotes": 1, "summary": "S"}]
@@ -189,11 +191,26 @@ class VaultWriteSafetyTest(unittest.TestCase):
                 mock.patch.object(obsidian_client, "OBSIDIAN_BASE_URL", OFFLINE_URL), \
                 mock.patch.object(kazuha, "fetch_latest_ai_papers", return_value=papers), \
                 mock.patch.object(kazuha, "query_llm", return_value="digest"):
+            yield kazuha, Path(vault)
+
+    def test_research_digest_is_not_overwritten(self):
+        with self._scout_env() as (kazuha, vault):
             first = kazuha.execute_research_scout()
-            note = Path(vault) / first["obsidian_note"]
+            self.assertTrue(first["obsidian_synced"])
+            note = vault / first["obsidian_note"]
             note.write_text("hand-edited", encoding="utf-8")
-            kazuha.execute_research_scout()
+            second = kazuha.execute_research_scout()
             self.assertEqual(note.read_text(encoding="utf-8"), "hand-edited")
+            self.assertTrue(second["obsidian_synced"])  # the digest is there and the run was logged
+
+    def test_research_sync_reports_failed_writes(self):
+        # Codex 6A-1 S5: "synced" only when the digest is on disk and the session was logged.
+        import obsidian_client
+        for method in ("create_file", "log_session"):  # digest write failed / session log failed
+            with self.subTest(method), self._scout_env() as (kazuha, vault), \
+                    mock.patch.object(obsidian_client.ObsidianClient, method, return_value=False):
+                res = kazuha.execute_research_scout()
+                self.assertFalse(res["obsidian_synced"])
 
 
 class FakeTarget:
