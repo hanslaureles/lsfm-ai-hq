@@ -944,10 +944,11 @@ Respond ONLY with valid JSON.
         # The reply streams in; each finished spoken sentence is voiced right away.
         clips = SpeechClips(emit, mission_id)
         loop = asyncio.get_running_loop()
+        synth_meta = {}  # call_groq fills chain / provider / model / ttft_ms; the HUD shows them (5E-4)
         try:
             raw_reply = await run_blocking(
                 call_groq, synthesis_prompt, system_instruction=CIEL_SYSTEM_PROMPT, model="qwen/qwen3.8-27b",
-                on_delta=lambda piece: loop.call_soon_threadsafe(clips.feed, piece),
+                on_delta=lambda piece: loop.call_soon_threadsafe(clips.feed, piece), meta=synth_meta,
                 timeout=SYNTHESIS_TIMEOUT_S, label="Synthesis LLM",
             )
         except BaseException:
@@ -1026,7 +1027,10 @@ Respond ONLY with valid JSON.
             "weather_data": weather_data,
             "web_results": web_search_results,
             "direct_obsidian": direct_action,
-            "memory_turns": len(self.conversation_history)
+            "memory_turns": len(self.conversation_history),
+            # Measured on this mission's synthesis call (4B field names); absent on fast paths.
+            "llm": {"provider": synth_meta.get("provider"), "model": synth_meta.get("model"),
+                    "fallback_chain": synth_meta.get("chain", []), "ttft_ms": synth_meta.get("ttft_ms")},
         }
 
         await emit("ciel_complete", final_data)
@@ -1037,10 +1041,15 @@ Respond ONLY with valid JSON.
         """Runs one subordinate's tool in a worker thread and reports its honest end state."""
         await emit("agent_state", {"agent": agent, "status": "active", "task": f"Executing delegated task: {agent}"})
         timeout = AGENT_TIMEOUTS_S.get(agent, DEFAULT_AGENT_TIMEOUT_S)
+        # The HUD shows this agent's measured time (5E-4): the work only, from the start of
+        # run_blocking to its end or timeout. Status events (a slow HUD) do not count, and
+        # an agent whose job never started has no time (None), not a made-up 0.
+        started = None
         try:
             task, work = self._agent_job(agent, user_prompt, tool_targets)
             if task:
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
+            started = time.perf_counter()
             status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize(),
                                                      heavy=agent in HEAVY_AGENTS)
         except TimeoutError:
@@ -1052,7 +1061,8 @@ Respond ONLY with valid JSON.
         except Exception as e:
             status = "failed"
             result_text = f"{agent.capitalize()} failed: {type(e).__name__}: {e}"
-        await emit("agent_state", {"agent": agent, "status": status, "result": result_text})
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1) if started is not None else None
+        await emit("agent_state", {"agent": agent, "status": status, "result": result_text, "elapsed_ms": elapsed_ms})
         return status, result_text
 
     def _agent_job(self, agent: str, user_prompt: str, tool_targets: list) -> tuple:

@@ -368,6 +368,77 @@ class TestEventLoopStaysResponsive(MissionTestCase):
         self.assertLess(elapsed, 2 * self.SLOW_S * 0.8, "agents ran one after another")
 
 
+class TestHudSignals(MissionTestCase):
+    """5E-4a: measured per-mission values the HUD shows instead of random digits."""
+
+    def patch(self, name, value):
+        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+
+    def agent_end(self, agent):
+        ends = [e for e in self.events if e["type"] == "agent_state" and e.get("agent") == agent
+                and e.get("status") != "active"]
+        self.assertEqual(len(ends), 1)
+        return ends[0]
+
+    async def test_a_finished_agent_reports_its_measured_time(self):
+        def vitals(*args, **kwargs):
+            time.sleep(0.05)
+            return {"healthy": True}
+        self.patch("get_system_vitals", vitals)
+        await self.run_mission("check vitals")
+        elapsed = self.agent_end("eunchae")["elapsed_ms"]
+        self.assertIsInstance(elapsed, float)
+        self.assertGreaterEqual(elapsed, 45)
+
+    async def test_a_timed_out_agent_reports_its_time_too(self):
+        self.enterContext(mock.patch.dict(ciel_orchestrator.AGENT_TIMEOUTS_S, {"eunchae": 0.1}))
+        self.patch("get_system_vitals", TestTimeouts.hang({"healthy": True}))
+        await self.run_mission("check vitals")
+        end = self.agent_end("eunchae")
+        self.assertEqual(end["status"], "failed")
+        self.assertGreaterEqual(end["elapsed_ms"], 90)
+        self.assertLess(end["elapsed_ms"], 400)  # the timeout ended it, not the hang
+
+    async def test_the_time_covers_the_work_not_event_delivery(self):
+        # Codex 5E-4 S1: a slow HUD callback on the "active" status events must not count.
+        self.patch("get_system_vitals", lambda *a, **k: {"healthy": True})
+
+        async def slow_status(ev):
+            self.events.append(ev)
+            if ev["type"] == "agent_state" and ev.get("status") == "active":
+                await asyncio.sleep(0.2)
+        await self.ciel.execute_mission("check vitals", event_callback=slow_status)
+        self.assertLess(self.agent_end("eunchae")["elapsed_ms"], 100)
+
+    async def test_no_work_started_means_no_time(self):
+        def broken_job(agent, prompt, targets):
+            raise RuntimeError("no tool for this agent")
+        self.enterContext(mock.patch.object(self.ciel, "_agent_job", broken_job))
+        await self.run_mission("check vitals")
+        end = self.agent_end("eunchae")
+        self.assertEqual(end["status"], "failed")
+        self.assertIsNone(end["elapsed_ms"])  # nothing ran: no measured time, not a made-up 0
+
+    async def test_complete_carries_the_synthesis_telemetry(self):
+        def groq_with_fallback(prompt, system_instruction="", **kwargs):
+            if "routing core" in system_instruction:
+                raise RuntimeError("router offline")
+            meta = kwargs.get("meta")
+            self.assertIsNotNone(meta, "synthesis must pass meta= to call_groq")
+            meta["chain"] = ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-120b"]
+            meta.update(provider="groq", model="openai/gpt-oss-120b", ttft_ms=612.0)
+            return SYNTHESIS_JSON
+        self.patch("call_groq", groq_with_fallback)
+        await self.run_mission("what is a b-tree?")
+        self.assertEqual(self.completes()[0]["llm"], {
+            "provider": "groq", "model": "openai/gpt-oss-120b",
+            "fallback_chain": ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-120b"], "ttft_ms": 612.0})
+
+    async def test_fast_paths_send_no_llm(self):
+        await self.run_mission("clear memory")
+        self.assertNotIn("llm", self.completes()[0])
+
+
 class TestTimeouts(MissionTestCase):
     """A call that hangs must end as an honest failure that names the timeout."""
 
