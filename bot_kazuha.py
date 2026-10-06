@@ -47,6 +47,8 @@ MEMORY_DIR = Path(__file__).parent.parent / "agent-memory"
 if str(MEMORY_DIR) not in sys.path:
     sys.path.insert(0, str(MEMORY_DIR))
 
+from daily_once import run_daily
+
 SWARM_MEMORY_DIR = Path(__file__).parent / "memory"
 LAST_SCOUT_DATE_FILE = SWARM_MEMORY_DIR / "last_research_scout_date.txt"
 
@@ -75,29 +77,26 @@ async def post_research_scout_if_due(force: bool = False, target_channel=None):
             return
         if not (now.hour > 9 or (now.hour == 9 and now.minute >= 30)):
             return
-        if LAST_SCOUT_DATE_FILE.exists():
-            last_date = LAST_SCOUT_DATE_FILE.read_text(encoding="utf-8").strip()
-            if last_date == today_str:
-                return
 
-    print(f"💻 [Kazuha] Executing Applied AI Research Scout (Date: {today_str})...", flush=True)
-    loop = asyncio.get_running_loop()
-    try:
-        res = await loop.run_in_executor(None, execute_research_scout, "applied-ai", True)
+    channel = target_channel
+    if not channel:
+        for guild in bot.guilds:
+            for ch in guild.text_channels:
+                if ch.name.lower() in ["frontend-lab", "command-center"]:
+                    channel = ch
+                    break
+            if channel:
+                break
+
+    async def prepare():
+        print(f"💻 [Kazuha] Executing Applied AI Research Scout (Date: {today_str})...", flush=True)
+        res = await asyncio.get_running_loop().run_in_executor(None, execute_research_scout, "applied-ai", True)
         if not res.get("success"):
             print("⚠️ [Kazuha] Research scout synthesis failed.", flush=True)
-            return
+            return None
+        return res
 
-        channel = target_channel
-        if not channel:
-            for guild in bot.guilds:
-                for ch in guild.text_channels:
-                    if ch.name.lower() in ["frontend-lab", "command-center"]:
-                        channel = ch
-                        break
-                if channel:
-                    break
-
+    async def deliver(res):
         if channel:
             await send_clean_embeds(
                 target=channel,
@@ -108,10 +107,9 @@ async def post_research_scout_if_due(force: bool = False, target_channel=None):
             )
             print(f"✅ [Kazuha] Delivered Applied AI Research Digest to #{channel.name}!", flush=True)
 
-        SWARM_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-        LAST_SCOUT_DATE_FILE.write_text(today_str, encoding="utf-8")
-    except Exception as e:
-        print(f"⚠️ [Kazuha] Research scout scheduled loop exception: {e}", flush=True)
+    # At most once per day (6B); !research forces a run whatever the state says.
+    await run_daily(LAST_SCOUT_DATE_FILE, today_str, "research digest (!research)", prepare, deliver,
+                    notify=channel.send if channel else None, due=(lambda last: True) if force else None)
 
 @tasks.loop(minutes=30)
 async def scheduled_scout_loop():
@@ -774,5 +772,7 @@ if __name__ == "__main__":
     if not TOKEN:
         print("❌ Error: KAZUHA_BOT_TOKEN not found in .env file!", flush=True)
         exit(1)
+    from instance_lock import require_single_instance
+    require_single_instance()  # refuses while run_all.py or another bot runs (6B)
     bot.run(TOKEN)
 

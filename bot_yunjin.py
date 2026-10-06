@@ -27,6 +27,7 @@ health_recorder.attach(bot, "yunjin")  # memory/health/yunjin.json (4B-2)
 
 from yunjin_engine import audit_full_portfolio, critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
 from discord_utils import send_clean_embeds
+from daily_once import run_daily
 from llm_client import get_brain_status
 
 AUDIT_DATE_FILE = MEMORY_DIR / "last_portfolio_audit_date.txt"
@@ -40,51 +41,47 @@ def find_channel_by_name(guild: discord.Guild, name: str):
             return ch
     return None
 
+def audit_due(last_date_str: str, today: datetime.date) -> bool:
+    """Run once every 7 days; a missing or malformed stored date counts as never run."""
+    try:
+        return (today - datetime.datetime.strptime(last_date_str, "%Y-%m-%d").date()).days >= 7
+    except ValueError:  # quiet: malformed or empty stored date: treated as never run
+        return True
+
+
 async def post_portfolio_audit_if_due():
+    # Weekly, at most once (6B).
     now = datetime.datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    last_date_str = AUDIT_DATE_FILE.read_text().strip() if AUDIT_DATE_FILE.exists() else ""
+    channel = next((c for c in (find_channel_by_name(g, "portfolio-audits") for g in bot.guilds) if c), None)
+    if not channel:
+        return
 
-    days_since = 999
-    if last_date_str:
-        try:
-            last_d = datetime.datetime.strptime(last_date_str, "%Y-%m-%d").date()
-            days_since = (now.date() - last_d).days
-        except Exception:  # quiet: malformed stored date: treated as never run
-            pass
+    async def prepare():
+        res = await asyncio.get_running_loop().run_in_executor(None, audit_full_portfolio)
+        return res if res.get("success") else None
 
-    # Run once every 7 days
-    if days_since >= 7:
-        for guild in bot.guilds:
-            channel = find_channel_by_name(guild, "portfolio-audits")
-            if channel:
-                try:
-                    loop = asyncio.get_running_loop()
-                    res = await loop.run_in_executor(None, audit_full_portfolio)
-                    if not res.get("success"):
-                        break
-                    score = res["score"]
-                    color = 0x57F287 if score >= 90 else (0xFEE75C if score >= 80 else 0xED4245)
-                    embed = discord.Embed(
-                        title=f"🎨 Scheduled Portfolio Health Audit — Score: {score}%",
-                        description=f"### Weekly Health Check: **{now.strftime('%A, %b %d')}**\n"
-                                    f"**Broken Images Detected:** {res['broken_images_count']}\n"
-                                    f"**Audited Directory:** `portfolio-site/`\n\n"
-                                    f"{res['report'][:1600]}",
-                        color=color
-                    )
-                    embed.set_footer(text="Yunjin • Senior UX Critic • Scheduled Weekly Review")
-                    saved_file = Path(res["saved_file"])
-                    if saved_file.exists():
-                        discord_file = discord.File(str(saved_file), filename=res["filename"])
-                        await channel.send(embed=embed, file=discord_file)
-                    else:
-                        await channel.send(embed=embed)
-                    AUDIT_DATE_FILE.write_text(today_str, encoding="utf-8")
-                    print(f"🎨 [Yunjin] Scheduled weekly portfolio audit delivered to #{channel.name}", flush=True)
-                    break
-                except Exception as e:
-                    print(f"⚠️ [Yunjin] Failed to post scheduled audit: {e}", flush=True)
+    async def deliver(res):
+        score = res["score"]
+        color = 0x57F287 if score >= 90 else (0xFEE75C if score >= 80 else 0xED4245)
+        embed = discord.Embed(
+            title=f"🎨 Scheduled Portfolio Health Audit — Score: {score}%",
+            description=f"### Weekly Health Check: **{now.strftime('%A, %b %d')}**\n"
+                        f"**Broken Images Detected:** {res['broken_images_count']}\n"
+                        f"**Audited Directory:** `portfolio-site/`\n\n"
+                        f"{res['report'][:1600]}",
+            color=color
+        )
+        embed.set_footer(text="Yunjin • Senior UX Critic • Scheduled Weekly Review")
+        saved_file = Path(res["saved_file"])
+        if saved_file.exists():
+            discord_file = discord.File(str(saved_file), filename=res["filename"])
+            await channel.send(embed=embed, file=discord_file)
+        else:
+            await channel.send(embed=embed)
+        print(f"🎨 [Yunjin] Scheduled weekly portfolio audit delivered to #{channel.name}", flush=True)
+
+    await run_daily(AUDIT_DATE_FILE, now.strftime("%Y-%m-%d"), "portfolio audit (!audit)", prepare, deliver,
+                    notify=channel.send, due=lambda last: audit_due(last, now.date()))
 
 
 @tasks.loop(hours=6)
@@ -358,4 +355,6 @@ async def critique(ctx, project: str = None):
 
 if __name__ == "__main__":
     print("🚀 Starting Yunjin (Portfolio Agent)...", flush=True)
+    from instance_lock import require_single_instance
+    require_single_instance()  # refuses while run_all.py or another bot runs (6B)
     bot.run(TOKEN)

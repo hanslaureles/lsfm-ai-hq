@@ -2,11 +2,11 @@ import asyncio
 import os
 import random
 import sys
-import time
 from time import monotonic
-import psutil
 import discord
 from dotenv import load_dotenv
+
+from instance_lock import require_single_instance
 
 # Ensure UTF-8 output on Windows consoles
 if sys.platform == "win32":
@@ -15,36 +15,6 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
-
-def enforce_single_instance():
-    """
-    Terminates any previously running instances of run_all.py or individual bot scripts.
-    This guarantees that Discord Gateway will only have ONE active session per bot,
-    permanently preventing duplicate / double-sent messages.
-    """
-    current_pid = os.getpid()
-    parent_pid = os.getppid()
-    terminated_count = 0
-    target_scripts = ["run_all.py", "bot_chaewon.py", "bot_yunjin.py", "bot_sakura.py", "bot_kazuha.py", "bot_eunchae.py"]
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-        try:
-            pid = proc.info['pid']
-            pname = (proc.info.get('name') or '').lower()
-            if pid in (current_pid, parent_pid):
-                continue
-            # ONLY target Python processes, never kill calling PowerShell or cmd shells
-            if not pname.startswith("python"):
-                continue
-            cmdline = proc.info.get('cmdline') or []
-            cmdline_str = " ".join(cmdline).lower()
-            if any(ts in cmdline_str for ts in target_scripts):
-                print(f"🧹 [Process Guard] Terminating stale bot process (PID {pid}: {pname}) to prevent duplicate messages...", flush=True)
-                proc.kill()
-                terminated_count += 1
-        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-            pass
-    if terminated_count > 0:
-        time.sleep(1.5)
 
 BACKOFF_START = 3.0
 BACKOFF_MAX = 15.0
@@ -106,7 +76,8 @@ async def run_bot_resilient(bot_instance, token: str, name: str):
 
 async def main():
     # Side effects live here, not at import time, so tests can import this module.
-    enforce_single_instance()
+    # One bot process at a time (6B): a second start is refused; nothing is killed.
+    require_single_instance()
     load_dotenv()
     from obsidian_client import ObsidianClient
     print(f"🗂️ [Vault] {ObsidianClient().check_vault_consistency()}", flush=True)

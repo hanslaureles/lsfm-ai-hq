@@ -61,6 +61,20 @@ LOCK_TIMEOUT_S = 5.0
 _ANY = object()  # _disk_write: no precondition on the note's current content
 
 
+def try_lock(fh) -> bool:
+    """Non-blocking exclusive OS lock on byte 0 of an open binary file; False if another holder has it.
+    The OS releases it when the handle closes or the process dies. Shared with instance_lock.py."""
+    try:
+        if os.name == "nt":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
 @contextlib.contextmanager
 def _vault_lock(vault_path):
     """
@@ -71,18 +85,10 @@ def _vault_lock(vault_path):
     """
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     with open(Path(vault_path) / ".vault-write.lock", "a+b") as fh:
-        while True:
-            try:
-                if os.name == "nt":
-                    fh.seek(0)
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f"vault write lock busy for {LOCK_TIMEOUT_S} s")
-                time.sleep(0.02)
+        while not try_lock(fh):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"vault write lock busy for {LOCK_TIMEOUT_S} s")
+            time.sleep(0.02)
         try:
             yield
         finally:

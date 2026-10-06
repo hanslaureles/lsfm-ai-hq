@@ -43,6 +43,7 @@ import re
 from kazuha_engine import generate_tech_pitch
 from web_tools import find_url_in_text, scrape_job_url
 from discord_utils import send_clean_embeds
+from daily_once import run_daily
 
 APPLICATIONS_DIR = Path(__file__).parent / "applications"
 BRIEFING_DATE_FILE = MEMORY_DIR / "last_briefing_date.txt"
@@ -58,31 +59,38 @@ def find_channel_by_name(guild: discord.Guild, name: str):
     return None
 
 
-async def post_daily_briefing_if_due():
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    last_date = BRIEFING_DATE_FILE.read_text().strip() if BRIEFING_DATE_FILE.exists() else ""
-    now = datetime.datetime.now()
-
-    # Deliver briefing once per day when PC is on (at or after 8:00 AM)
-    if last_date != today_str and now.hour >= 8:
-        for guild in bot.guilds:
-            channel = find_channel_by_name(guild, "daily-briefing")
+def first_channel(*names):
+    """The first text channel across the bot's guilds matching one of names, or None."""
+    for guild in bot.guilds:
+        for name in names:
+            channel = find_channel_by_name(guild, name)
             if channel:
-                try:
-                    loop = asyncio.get_running_loop()
-                    briefing_text = await loop.run_in_executor(None, generate_morning_briefing)
-                    await send_clean_embeds(
-                        target=channel,
-                        title=f"🌅 Daily Executive Morning Briefing — {now.strftime('%A, %b %d')}",
-                        content=briefing_text,
-                        color=0xF472B6,
-                        footer_text="Sakura • Chief of Staff • Daily Scheduled Pulse"
-                    )
-                    BRIEFING_DATE_FILE.write_text(today_str, encoding="utf-8")
-                    print(f"🌸 [Sakura] Scheduled morning briefing delivered to #{channel.name}", flush=True)
-                    break
-                except Exception as e:
-                    print(f"⚠️ [Sakura] Failed to post scheduled briefing: {e}", flush=True)
+                return channel
+    return None
+
+
+async def post_daily_briefing_if_due():
+    # Deliver briefing once per day when PC is on (at or after 8:00 AM); at most once (6B).
+    now = datetime.datetime.now()
+    channel = first_channel("daily-briefing") if now.hour >= 8 else None
+    if not channel:
+        return
+
+    async def prepare():
+        return await asyncio.get_running_loop().run_in_executor(None, generate_morning_briefing)
+
+    async def deliver(briefing_text):
+        await send_clean_embeds(
+            target=channel,
+            title=f"🌅 Daily Executive Morning Briefing — {now.strftime('%A, %b %d')}",
+            content=briefing_text,
+            color=0xF472B6,
+            footer_text="Sakura • Chief of Staff • Daily Scheduled Pulse"
+        )
+        print(f"🌸 [Sakura] Scheduled morning briefing delivered to #{channel.name}", flush=True)
+
+    await run_daily(BRIEFING_DATE_FILE, now.strftime("%Y-%m-%d"), "morning briefing (!briefing)",
+                    prepare, deliver, notify=channel.send)
 
 
 @tasks.loop(minutes=30)
@@ -92,30 +100,28 @@ async def scheduled_briefing_loop():
 
 
 async def post_evening_rollup_if_due():
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    last_date = ROLLUP_DATE_FILE.read_text().strip() if ROLLUP_DATE_FILE.exists() else ""
+    # Deliver evening rollup once per day when PC is on (at or after 8:00 PM / 20:00); at most once (6B).
     now = datetime.datetime.now()
+    channel = first_channel("daily-briefing", "command-center") if now.hour >= 20 else None
+    if not channel:
+        return
 
-    # Deliver evening rollup once per day when PC is on (at or after 8:00 PM / 20:00)
-    if last_date != today_str and now.hour >= 20:
-        for guild in bot.guilds:
-            channel = find_channel_by_name(guild, "daily-briefing") or find_channel_by_name(guild, "command-center")
-            if channel:
-                try:
-                    loop = asyncio.get_running_loop()
-                    res = await loop.run_in_executor(None, execute_evening_rollup, True)
-                    await send_clean_embeds(
-                        target=channel,
-                        title=f"🌆 Evening Standup & Daily Rollup — {now.strftime('%A, %b %d')}",
-                        content=res["rollup_text"],
-                        color=0x9B59B6,
-                        footer_text="Sakura • Chief of Staff • Daily Standup Sealed in Obsidian"
-                    )
-                    ROLLUP_DATE_FILE.write_text(today_str, encoding="utf-8")
-                    print(f"🌸 [Sakura] Scheduled evening rollup delivered to #{channel.name}", flush=True)
-                    break
-                except Exception as e:
-                    print(f"⚠️ [Sakura] Failed to post scheduled evening rollup: {e}", flush=True)
+    async def prepare():
+        res = await asyncio.get_running_loop().run_in_executor(None, execute_evening_rollup, True)
+        return res["rollup_text"]
+
+    async def deliver(rollup_text):
+        await send_clean_embeds(
+            target=channel,
+            title=f"🌆 Evening Standup & Daily Rollup — {now.strftime('%A, %b %d')}",
+            content=rollup_text,
+            color=0x9B59B6,
+            footer_text="Sakura • Chief of Staff • Daily Standup Sealed in Obsidian"
+        )
+        print(f"🌸 [Sakura] Scheduled evening rollup delivered to #{channel.name}", flush=True)
+
+    await run_daily(ROLLUP_DATE_FILE, now.strftime("%Y-%m-%d"), "evening rollup (!rollup)",
+                    prepare, deliver, notify=channel.send)
 
 
 @tasks.loop(minutes=30)
@@ -1234,4 +1240,6 @@ async def mass_sort_command(ctx):
 
 if __name__ == "__main__":
     print("🚀 Starting Sakura (Chief of Staff)...", flush=True)
+    from instance_lock import require_single_instance
+    require_single_instance()  # refuses while run_all.py or another bot runs (6B)
     bot.run(TOKEN)

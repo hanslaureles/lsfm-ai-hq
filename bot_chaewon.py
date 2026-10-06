@@ -32,6 +32,7 @@ health_recorder.attach(bot, "chaewon")  # memory/health/chaewon.json (4B-2)
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
 from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, get_portal_search_links
 from discord_utils import send_clean_embeds
+from daily_once import run_daily
 from pdf_engine import compile_master_resume, OWNER_EMAIL
 from llm_client import get_brain_status
 
@@ -50,33 +51,29 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
     if not force:
         if now.weekday() != 6 or now.hour < 22:
             return
-        if LAST_REBUILD_DATE_FILE.exists():
-            last_date = LAST_REBUILD_DATE_FILE.read_text(encoding="utf-8").strip()
-            if last_date == today_str:
-                return
 
-    print(f"⭐ [Chaewon] Executing Weekly Vector Resume Rebuild (Date: {today_str})...", flush=True)
-    loop = asyncio.get_running_loop()
-    try:
+    # Channel resolution
+    channel = target_channel
+    if not channel:
+        for guild in bot.guilds:
+            for ch in guild.text_channels:
+                if ch.name.lower() in ["application-docs", "job-tailoring", "command-center"]:
+                    channel = ch
+                    break
+            if channel:
+                break
+
+    async def prepare():
+        print(f"⭐ [Chaewon] Executing Weekly Vector Resume Rebuild (Date: {today_str})...", flush=True)
         res = await run_heavy(compile_master_resume, True, True, True)
         if not res.get("success"):
             print(f"⚠️ [Chaewon] Resume compilation failed: {res.get('error')}", flush=True)
-            return
+            return None
+        return res
 
+    async def deliver(res):
         pdf_path = res["pdf_path"]
         size_kb = res["size_kb"]
-
-        # Channel resolution
-        channel = target_channel
-        if not channel:
-            for guild in bot.guilds:
-                for ch in guild.text_channels:
-                    if ch.name.lower() in ["application-docs", "job-tailoring", "command-center"]:
-                        channel = ch
-                        break
-                if channel:
-                    break
-
         if channel:
             embed = discord.Embed(
                 title="📄 Sunday Master Vector Resume Rebuild & Archive (Cron 3)",
@@ -96,9 +93,9 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
             await channel.send(embed=embed, file=file)
             print(f"✅ [Chaewon] Delivered rebuilt resume to #{channel.name}!", flush=True)
 
-        LAST_REBUILD_DATE_FILE.write_text(today_str, encoding="utf-8")
-    except Exception as e:
-        print(f"⚠️ [Chaewon] Weekly resume rebuild exception: {e}", flush=True)
+    # At most once per Sunday (6B); !resume forces a run whatever the state says.
+    await run_daily(LAST_REBUILD_DATE_FILE, today_str, "resume rebuild (!resume)", prepare, deliver,
+                    notify=channel.send if channel else None, due=(lambda last: True) if force else None)
 
 @tasks.loop(minutes=30)
 async def scheduled_resume_loop():
@@ -588,5 +585,7 @@ async def cmd_rebuild_resume(ctx):
 
 if __name__ == "__main__":
     print("🚀 Starting Chaewon (Career Agent)...", flush=True)
+    from instance_lock import require_single_instance
+    require_single_instance()  # refuses while run_all.py or another bot runs (6B)
     bot.run(TOKEN)
 

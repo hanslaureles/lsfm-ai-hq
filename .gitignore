@@ -34,3 +34,6 @@ audio_cache/
 
 # Per-bot heartbeat files (written at run time by health_recorder)
 memory/health/
+# Single-instance lock and PID of the running bots (instance_lock.py, 6B)
+memory/lsfm-bots.lock
+memory/lsfm-bots.pid

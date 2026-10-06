@@ -36,6 +36,7 @@ from eunchae_engine import (
     check_obsidian_heartbeat
 )
 from discord_utils import send_clean_embeds
+from daily_once import run_daily
 
 MEMORY_DIR = Path(__file__).parent / "memory"
 VITALS_DATE_FILE = MEMORY_DIR / "last_vitals_post_date.txt"
@@ -82,29 +83,33 @@ async def watchdog_loop():
                 print(f"🛡️ [Eunchae] High resource alert dispatched to #{channel.name}", flush=True)
                 break
 
-    # 2. Daily routine vitals card posted to #pc-vitals (once per day after 8am)
+    # 2. Daily routine vitals card posted to #pc-vitals (once per day after 8am; at most once, 6B)
     now = datetime.datetime.now()
-    today_str = now.strftime("%Y-%m-%d")
-    last_vitals_date = VITALS_DATE_FILE.read_text().strip() if VITALS_DATE_FILE.exists() else ""
+    channel = None
+    if now.hour >= 8:
+        channel = next((c for c in (find_channel_by_name(g, "pc-vitals") for g in bot.guilds) if c), None)
+    if not channel:
+        return
 
-    if last_vitals_date != today_str and now.hour >= 8:
-        for guild in bot.guilds:
-            channel = find_channel_by_name(guild, "pc-vitals")
-            if channel:
-                embed = discord.Embed(
-                    title=f"🛡️ Daily System Vitals Checkup — {'🟢 Nominal' if v['healthy'] else '⚠️ Heavy Load'}",
-                    description="Routine hardware diagnostic from Hans's host Windows machine:",
-                    color=0x57F287 if v["healthy"] else 0xED4245
-                )
-                embed.add_field(name="🧠 CPU Usage", value=f"**{v['cpu_pct']}%** ({v['cpu_count']} Cores)", inline=True)
-                embed.add_field(name="💾 RAM Memory", value=f"**{v['ram_used_gb']} GB** / {v['ram_total_gb']} GB ({v['ram_pct']}%)", inline=True)
-                embed.add_field(name="💽 C: Drive Free", value=f"**{v['disk_free_gb']} GB** Free", inline=True)
-                embed.add_field(name="⏱️ System Uptime", value=f"**{v['uptime_str']}**", inline=True)
-                embed.set_footer(text="Eunchae • Routine System Pulse • LE SSERAFIM AI HQ")
-                await channel.send(embed=embed)
-                VITALS_DATE_FILE.write_text(today_str, encoding="utf-8")
-                print(f"🛡️ [Eunchae] Daily vitals pulse delivered to #{channel.name}", flush=True)
-                break
+    async def prepare():
+        return v
+
+    async def deliver(v):
+        embed = discord.Embed(
+            title=f"🛡️ Daily System Vitals Checkup — {'🟢 Nominal' if v['healthy'] else '⚠️ Heavy Load'}",
+            description="Routine hardware diagnostic from Hans's host Windows machine:",
+            color=0x57F287 if v["healthy"] else 0xED4245
+        )
+        embed.add_field(name="🧠 CPU Usage", value=f"**{v['cpu_pct']}%** ({v['cpu_count']} Cores)", inline=True)
+        embed.add_field(name="💾 RAM Memory", value=f"**{v['ram_used_gb']} GB** / {v['ram_total_gb']} GB ({v['ram_pct']}%)", inline=True)
+        embed.add_field(name="💽 C: Drive Free", value=f"**{v['disk_free_gb']} GB** Free", inline=True)
+        embed.add_field(name="⏱️ System Uptime", value=f"**{v['uptime_str']}**", inline=True)
+        embed.set_footer(text="Eunchae • Routine System Pulse • LE SSERAFIM AI HQ")
+        await channel.send(embed=embed)
+        print(f"🛡️ [Eunchae] Daily vitals pulse delivered to #{channel.name}", flush=True)
+
+    await run_daily(VITALS_DATE_FILE, now.strftime("%Y-%m-%d"), "vitals card (!vitals)",
+                    prepare, deliver, notify=channel.send)
 
 
 @tasks.loop(minutes=15)
@@ -595,5 +600,7 @@ if __name__ == "__main__":
     if not TOKEN:
         print("❌ Error: EUNCHAE_BOT_TOKEN not found in .env file!", flush=True)
         exit(1)
+    from instance_lock import require_single_instance
+    require_single_instance()  # refuses while run_all.py or another bot runs (6B)
     bot.run(TOKEN)
 

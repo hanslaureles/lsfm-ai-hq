@@ -5,10 +5,8 @@ echo ============================================================
 echo   LE SSERAFIM AI HQ — Starting Squad ^& Brain...
 echo ============================================================
 
-:: Ensure no duplicate / ghost squad instances are already running
-taskkill /F /IM python.exe 2>nul
-taskkill /F /IM python3.11.exe 2>nul
-taskkill /F /IM python3.exe 2>nul
+:: No duplicate squad: run_all.py refuses to start while another bot process holds
+:: memory\lsfm-bots.lock (6B). Run stop_squad.bat first to restart.
 
 :: Check if Ollama is running, if not start it minimized
 tasklist /fi "imagename eq ollama.exe" 2>nul | findstr /i "ollama.exe" >nul
