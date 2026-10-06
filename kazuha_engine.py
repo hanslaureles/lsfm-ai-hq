@@ -352,7 +352,9 @@ status: completed
 ---
 *Ingested automatically into Obsidian Second Brain via LSFM Swarm Cron 4.*
 """
-            client.put_file(obsidian_note_path, markdown_content)
+            # Create-only: a same-day re-run must not replace a digest (or Hans's edits to it).
+            if not client.create_file(obsidian_note_path, markdown_content):
+                print(f"ℹ️ [Kazuha Engine] {obsidian_note_path} already exists or could not be written; left as is.", flush=True)
 
             # 2. Log session into today's daily log
             client.log_session(

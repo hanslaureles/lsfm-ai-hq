@@ -14,6 +14,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -80,6 +81,119 @@ class DiskAppendTest(unittest.TestCase):
             lines = (Path(vault) / "log.md").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), threads_n * per_thread)
         self.assertEqual(len(set(lines)), threads_n * per_thread)
+
+
+_HOLD_LOCK = (
+    "import sys, time, obsidian_client as o\n"
+    "with o._vault_lock(sys.argv[1]):\n"
+    "    print('locked', flush=True)\n"
+    "    time.sleep(30)\n"
+)
+
+_APPEND_MANY = (
+    "import sys, obsidian_client as o\n"
+    "c = o.ObsidianClient(base_url=sys.argv[2], vault_path=sys.argv[1])\n"
+    "for i in range(50):\n"
+    "    assert c.append_file('log.md', f'{sys.argv[3]}-{i}\\n')\n"
+)
+
+
+class VaultWriteSafetyTest(unittest.TestCase):
+    """6A-1: a vault write never destroys a note and never lands twice."""
+
+    def test_existing_daily_log_survives_a_failed_listing(self):
+        # Before 6A-1 an empty listing (REST 404, wrong path) made ensure_daily_log
+        # write the template over the day's log.
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            log = Path(vault) / "05 - Daily Logs" / "2026-01-02.md"
+            log.parent.mkdir()
+            log.write_text("today's entries", encoding="utf-8")
+            with mock.patch.object(client, "list_dir", return_value=[]):
+                rel = client.ensure_daily_log("2026-01-02")
+            self.assertEqual(rel, "05 - Daily Logs/2026-01-02.md")
+            self.assertEqual(log.read_text(encoding="utf-8"), "today's entries")
+
+    def test_create_file_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            self.assertTrue(client.create_file("notes/a.md", "first"))
+            self.assertFalse(client.create_file("notes/a.md", "second"))
+            self.assertEqual((Path(vault) / "notes" / "a.md").read_text(encoding="utf-8"), "first")
+            with self.assertRaises(ValueError):
+                client.create_file("../outside.md", "x")
+
+    def test_writes_never_go_through_rest(self):
+        # A REST write that times out after it landed used to be retried on disk,
+        # so the entry was written twice. Writes now go to disk only.
+        seen = []
+
+        class Recorder(_StubHandler):
+            mode = "hang"
+
+            def _reply(self):
+                seen.append(self.command)
+                super()._reply()
+
+            do_GET = do_PUT = do_POST = _reply
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Recorder)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as vault:
+            client = ObsidianClient(base_url=f"http://127.0.0.1:{server.server_address[1]}", vault_path=vault)
+            self.assertTrue(client.is_rest_api_online())
+            self.assertTrue(client.put_file("a.md", "one\n"))
+            self.assertTrue(client.append_file("a.md", "two\n"))
+            self.assertEqual((Path(vault) / "a.md").read_text(encoding="utf-8"), "one\ntwo\n")
+        self.assertNotIn("PUT", seen)
+        self.assertNotIn("POST", seen)
+
+    def test_append_waits_for_another_process_and_gives_up_cleanly(self):
+        import obsidian_client
+        with tempfile.TemporaryDirectory() as vault:
+            (Path(vault) / "log.md").write_text("kept\n", encoding="utf-8")
+            holder = subprocess.Popen([sys.executable, "-c", _HOLD_LOCK, vault], cwd=ROOT,
+                                      stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "locked")
+                client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+                with mock.patch.object(obsidian_client, "LOCK_TIMEOUT_S", 0.3):
+                    self.assertFalse(client.append_file("log.md", "lost?\n"))
+                    self.assertFalse(client.put_file("log.md", "overwrite?\n"))
+                self.assertEqual((Path(vault) / "log.md").read_text(encoding="utf-8"), "kept\n")
+            finally:
+                holder.kill()  # before the temp vault is removed: Windows keeps an open lock file
+                holder.wait()
+                holder.stdout.close()
+            # The lock dies with its holder.
+            self.assertTrue(client.append_file("log.md", "after\n"))
+
+    def test_appends_from_separate_processes_all_land(self):
+        with tempfile.TemporaryDirectory() as vault:
+            procs = [subprocess.Popen([sys.executable, "-c", _APPEND_MANY, vault, OFFLINE_URL, f"p{n}"], cwd=ROOT)
+                     for n in range(4)]
+            for p in procs:
+                self.assertEqual(p.wait(timeout=60), 0)
+            lines = (Path(vault) / "log.md").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(sorted(lines), sorted(f"p{n}-{i}" for n in range(4) for i in range(50)))
+
+    def test_research_digest_is_not_overwritten(self):
+        import obsidian_client
+        kazuha = _load_real("kazuha_engine")
+        papers = [{"title": "T", "url": "https://example.org", "authors": "A", "upvotes": 1, "summary": "S"}]
+        with tempfile.TemporaryDirectory() as vault, \
+                mock.patch.object(obsidian_client, "DEFAULT_VAULT_PATH", vault), \
+                mock.patch.object(obsidian_client, "OBSIDIAN_BASE_URL", OFFLINE_URL), \
+                mock.patch.object(kazuha, "fetch_latest_ai_papers", return_value=papers), \
+                mock.patch.object(kazuha, "query_llm", return_value="digest"):
+            first = kazuha.execute_research_scout()
+            note = Path(vault) / first["obsidian_note"]
+            note.write_text("hand-edited", encoding="utf-8")
+            kazuha.execute_research_scout()
+            self.assertEqual(note.read_text(encoding="utf-8"), "hand-edited")
 
 
 class FakeTarget:
@@ -492,7 +606,7 @@ class _StubHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ObsidianHttpStubTest(unittest.TestCase):
-    """REST up but failing (500) or hanging: reads and writes fall back to the vault on disk."""
+    """REST up but failing (500) or hanging: reads fall back to the vault on disk; writes only use the disk."""
 
     def serve(self, mode):
         handler = type("H", (_StubHandler,), {"mode": mode})

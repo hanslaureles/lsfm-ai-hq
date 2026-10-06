@@ -2,16 +2,18 @@
 Obsidian Second Brain Client for LSFM Multi-Agent Swarm
 Enables Sakura, Chaewon, Yunjin, Kazuha, and Eunchae to read, query,
 and log operational data directly into the user's Obsidian vault.
-Includes seamless local filesystem fallback when Obsidian.exe is closed.
+Reads try the Local REST API first and fall back to the vault on disk. Writes go
+to disk only, under a cross-process lock (6A-1): a REST write that timed out
+after it landed was retried on disk, so the entry was written twice.
 """
 
+import contextlib
 import os
 import sys
 import ssl
 import time
 import socket
 import json
-import threading
 import urllib.request
 import urllib.parse
 from datetime import datetime
@@ -38,7 +40,42 @@ SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
-_APPEND_LOCK = threading.Lock()
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+LOCK_TIMEOUT_S = 5.0
+
+
+@contextlib.contextmanager
+def _vault_lock(vault_path):
+    """
+    Exclusive lock shared by every process that writes the vault (the bots,
+    ciel_server, the daily job, vault_log). Each holder opens its own handle,
+    so threads in one process are serialised too. The OS drops the lock if a
+    holder dies. Raises TimeoutError after LOCK_TIMEOUT_S.
+    """
+    deadline = time.monotonic() + LOCK_TIMEOUT_S
+    with open(Path(vault_path) / ".vault-write.lock", "a+b") as fh:
+        while True:
+            try:
+                if os.name == "nt":
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"vault write lock busy for {LOCK_TIMEOUT_S} s")
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class ObsidianClient:
@@ -138,71 +175,40 @@ class ObsidianClient:
 
         raise RuntimeError(f"Failed to get {filepath}: Not reachable via REST API and file not found on disk ({self.vault_path / clean_path})")
 
-    def put_file(self, filepath: str, content: str) -> bool:
-        """Create or completely overwrite a file in the vault (via REST or disk fallback)."""
+    def _disk_write(self, filepath: str, content: str, mode: str) -> bool:
+        """
+        Write to the vault on disk under the vault lock. mode "w" overwrites,
+        "a" appends, "x" creates only (False if the note exists). The lock is
+        needed on top of append mode: the Windows CRT seeks to EOF and writes
+        as two steps, so two writers can land on the same offset.
+        """
         clean_path = self._vault_rel(filepath)
-        # Try REST API first if online
-        if self.is_rest_api_online():
-            try:
-                encoded_path = urllib.parse.quote(clean_path, safe="/")
-                res = self._request(
-                    "PUT",
-                    f"/vault/{encoded_path}",
-                    data=content.encode("utf-8"),
-                    extra_headers={"Content-Type": "text/markdown"}
-                )
-                if res.get("status") in (200, 204):
-                    return True
-            except Exception as _exc:
-                print(f"⚠️ [obsidian_client.put_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
+        if not self.vault_path.is_dir():
+            print(f"⚠️ [ObsidianClient] vault not found: {self.vault_path}", flush=True)
+            return False
+        try:
+            disk_file = self.vault_path / clean_path
+            disk_file.parent.mkdir(parents=True, exist_ok=True)
+            with _vault_lock(self.vault_path), open(disk_file, mode, encoding="utf-8") as f:
+                f.write(content)
+            return True
+        except FileExistsError:
+            return False
+        except Exception as e:
+            print(f"⚠️ [ObsidianClient] Disk write error ({mode}) {clean_path}: {type(e).__name__}: {e}", flush=True)
+            return False
 
-        # Filesystem fallback
-        if self.vault_path and self.vault_path.exists():
-            try:
-                disk_file = self.vault_path / clean_path
-                disk_file.parent.mkdir(parents=True, exist_ok=True)
-                disk_file.write_text(content, encoding="utf-8")
-                return True
-            except Exception as e:
-                print(f"⚠️ [ObsidianClient] Disk write error: {e}", flush=True)
+    def put_file(self, filepath: str, content: str) -> bool:
+        """Create or completely overwrite a note. Use create_file where an overwrite would lose data."""
+        return self._disk_write(filepath, content, "w")
 
-        return False
+    def create_file(self, filepath: str, content: str) -> bool:
+        """Create a note only if it does not exist yet. Never overwrites; False if it exists."""
+        return self._disk_write(filepath, content, "x")
 
     def append_file(self, filepath: str, content: str) -> bool:
-        """Append content to a file in the vault (via REST or disk fallback)."""
-        clean_path = self._vault_rel(filepath)
-        # Try REST API first if online
-        if self.is_rest_api_online():
-            try:
-                encoded_path = urllib.parse.quote(clean_path, safe="/")
-                res = self._request(
-                    "POST",
-                    f"/vault/{encoded_path}",
-                    data=content.encode("utf-8"),
-                    extra_headers={"Content-Type": "text/markdown"}
-                )
-                if res.get("status") in (200, 204):
-                    return True
-            except Exception as _exc:
-                print(f"⚠️ [obsidian_client.append_file] suppressed {type(_exc).__name__}: {_exc}", flush=True)
-
-        # Filesystem fallback
-        if self.vault_path and self.vault_path.exists():
-            try:
-                disk_file = self.vault_path / clean_path
-                disk_file.parent.mkdir(parents=True, exist_ok=True)
-                # All bots share one process, so two agents logging at once must not
-                # overwrite each other's entry. The lock is needed on top of append
-                # mode: the Windows CRT seeks to EOF and writes as two steps.
-                # ponytail: in-process lock only; separate scripts writing the same
-                # note can still race. Add a lockfile if that ever shows up.
-                with _APPEND_LOCK, open(disk_file, "a", encoding="utf-8") as f:
-                    f.write(content)
-                return True
-            except Exception as e:
-                print(f"⚠️ [ObsidianClient] Disk append error: {e}", flush=True)
-
-        return False
+        """Append content to a note (created if missing)."""
+        return self._disk_write(filepath, content, "a")
 
     def check_vault_consistency(self) -> str:
         """
@@ -323,19 +329,11 @@ class ObsidianClient:
         """
         Ensures today's daily log exists in 05 - Daily Logs/, creating it with standard template if missing.
         Returns the relative vault path (e.g. '05 - Daily Logs/2026-09-24.md').
+        Create-only: an existing log is never touched, whatever a listing says.
         """
         now = datetime.now()
         today = date_str or now.strftime("%Y-%m-%d")
-
-        # Check if any log for today already exists
-        files = self.list_dir("05 - Daily Logs")
-        for f in files:
-            if f.startswith(today) and f.endswith(".md"):
-                return f"05 - Daily Logs/{f}"
-
-        # Create new daily log
-        filename = f"{today}.md"
-        filepath = f"05 - Daily Logs/{filename}"
+        filepath = f"05 - Daily Logs/{today}.md"
 
         # Structure only: no status, scores or counts. Anything stated here would be
         # written before any agent has checked it (Phase 3A-2). Real results are
@@ -355,9 +353,9 @@ class ObsidianClient:
 
 ---
 
-## 🤖 Swarm Activity & Session Dispatches
+## 🤖 Agent Activity
 """
-        self.put_file(filepath, template)
+        self.create_file(filepath, template)
         return filepath
 
     def log_session(self, agent_name: str, summary: str, details: list = None) -> bool:
