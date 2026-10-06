@@ -53,8 +53,9 @@ def require_single_instance(lock_file: Path = LOCK_FILE, pid_file: Path = PID_FI
 def stop(lock_file: Path = LOCK_FILE, pid_file: Path = PID_FILE) -> str:
     """
     Stop the process that holds the lock, and only that process and its children.
-    The PID is checked against the bots' command line first, so a stale PID file
-    can never kill an unrelated process that reused the number.
+    The PID file is only a hint: the process must have the lock file open (proof it
+    holds the lock, Codex 6B B3) and a bot's command line, so a stale or wrong PID
+    file can never kill another process.
     """
     probe = open(lock_file, "a+b") if lock_file.parent.is_dir() else None
     if probe is None or try_lock(probe):
@@ -66,8 +67,12 @@ def stop(lock_file: Path = LOCK_FILE, pid_file: Path = PID_FILE) -> str:
     try:
         proc = psutil.Process(int(holder_pid(pid_file)))
         cmdline = " ".join(proc.cmdline()).lower()
+        lock_path = os.path.normcase(os.path.realpath(lock_file))
+        holds = any(os.path.normcase(os.path.realpath(f.path)) == lock_path for f in proc.open_files())
     except (ValueError, psutil.Error) as e:
         return f"lock is held but PID {holder_pid(pid_file)} is not readable ({type(e).__name__}); nothing stopped"
+    if not holds:
+        return f"PID {proc.pid} does not hold {lock_file.name}; nothing stopped"
     if not any(m in cmdline for m in BOT_MARKERS):
         return f"PID {proc.pid} is not an LSFM bot process ({cmdline[:80]}); nothing stopped"
     family = proc.children(recursive=True) + [proc]

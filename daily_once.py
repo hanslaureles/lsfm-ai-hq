@@ -45,7 +45,8 @@ async def run_daily(state_file: Path, today: str, label: str, prepare, deliver, 
     the job is due (default: last != today); return one of the status constants.
     notify(text) is an optional async best-effort notice after a failed delivery.
     """
-    if not (due(read_state(state_file)) if due else read_state(state_file) != today):
+    is_due = due or (lambda last: last != today)
+    if not is_due(read_state(state_file)):
         return SKIPPED
     try:
         prepared = await prepare()
@@ -54,6 +55,12 @@ async def run_daily(state_file: Path, today: str, label: str, prepare, deliver, 
         return NOT_READY
     if prepared is None:
         return NOT_READY
+    # Check again: another run of this job may have claimed the day while this one was
+    # preparing (Codex 6B B1). There is no await between this check and the write in
+    # claim(), so nothing else in the event loop can claim in between; instance_lock
+    # keeps the bots to one process.
+    if not is_due(read_state(state_file)):
+        return SKIPPED
     if not claim(state_file, today):
         return CLAIM_FAILED  # never send without a claim, or a retry could send it twice
     try:

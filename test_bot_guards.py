@@ -138,6 +138,29 @@ class RunDailyTest(unittest.TestCase):
         self.assertEqual(self.run_job(self.returns("text")), self.d.CLAIM_FAILED)
         self.assertEqual(self.sent, [])
 
+    def test_two_overlapping_runs_deliver_once(self):
+        # Codex 6B B1: both passed the first check during prepare, then both claimed.
+        async def both():
+            gate = asyncio.Event()
+            arrived = []
+
+            async def prepare():
+                arrived.append(1)
+                if len(arrived) == 2:
+                    gate.set()
+                await gate.wait()  # both runs are past the first check before either claims
+                return "text"
+
+            async def deliver(x):
+                self.sent.append(x)
+
+            return await asyncio.gather(*(self.d.run_daily(self.state, "2026-01-05", "test job (!x)", prepare, deliver)
+                                          for _ in range(2)))
+
+        results = asyncio.run(both())
+        self.assertEqual(sorted(results), sorted([self.d.DELIVERED, self.d.SKIPPED]))
+        self.assertEqual(self.sent, ["text"])
+
     def test_due_rule_and_next_day(self):
         self.run_job(self.returns("a"))
         self.assertEqual(self.run_job(self.returns("b"), today="2026-01-06"), self.d.DELIVERED)
@@ -231,6 +254,22 @@ class InstanceLockTest(unittest.TestCase):
         bot = self.holder("run_all.py")  # "run_all.py" in its command line
         self.assertIn(f"stopped PID {bot.pid}", self.lk.stop(self.lock, self.pid))
         self.assertIsNotNone(bot.wait(timeout=10))
+
+    def test_stop_never_kills_a_process_that_does_not_hold_the_lock(self):
+        # Codex 6B B3: a stale PID file naming another bot-looking process got that process killed.
+        import subprocess
+        import sys
+        holder = self.holder("run_all.py")
+        bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "run_all.py"])
+        self.addCleanup(lambda: (bystander.kill(), bystander.wait()))
+        self.pid.write_text(str(bystander.pid), encoding="utf-8")  # stale / wrong PID file
+        self.assertIn("nothing stopped", self.lk.stop(self.lock, self.pid))
+        self.assertIsNone(bystander.poll())
+        self.assertIsNone(holder.poll())
+        self.pid.write_text(str(holder.pid), encoding="utf-8")
+        self.assertIn(f"stopped PID {holder.pid}", self.lk.stop(self.lock, self.pid))
+        self.assertIsNotNone(holder.wait(timeout=10))
+        self.assertIsNone(bystander.poll())
 
     def test_run_all_kills_nothing_and_refuses_a_second_start(self):
         import run_all
