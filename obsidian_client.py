@@ -58,6 +58,7 @@ else:
     import fcntl
 
 LOCK_TIMEOUT_S = 5.0
+_ANY = object()  # _disk_write: no precondition on the note's current content
 
 
 @contextlib.contextmanager
@@ -187,12 +188,16 @@ class ObsidianClient:
 
         raise RuntimeError(f"Failed to get {filepath}: Not reachable via REST API and file not found on disk ({self.vault_path / clean_path})")
 
-    def _disk_write(self, filepath: str, content: str, mode: str) -> bool:
+    def _disk_write(self, filepath: str, content: str, mode: str, expect=_ANY) -> bool:
         """
         Write to the vault on disk under the vault lock. mode "w" overwrites,
         "a" appends, "x" creates only (False if the note exists). The lock is
         needed on top of append mode: the Windows CRT seeks to EOF and writes
         as two steps, so two writers can land on the same offset.
+        expect: if given, write only when the note still holds exactly this
+        text (None: does not exist), checked inside the lock; False otherwise.
+        newline="": the bytes written are the caller's; text mode on Windows
+        would turn "\\n" into "\\r\\n" (a mirrored copy would never match its source).
         """
         clean_path = self._vault_rel(filepath)
         if not self.vault_path.is_dir():
@@ -201,8 +206,13 @@ class ObsidianClient:
         try:
             disk_file = self.vault_path / clean_path
             disk_file.parent.mkdir(parents=True, exist_ok=True)
-            with _vault_lock(self.vault_path), open(disk_file, mode, encoding="utf-8") as f:
-                f.write(content)
+            with _vault_lock(self.vault_path):
+                if expect is not _ANY:
+                    current = disk_file.read_bytes().decode("utf-8") if disk_file.is_file() else None
+                    if current != expect:
+                        return False
+                with open(disk_file, mode, encoding="utf-8", newline="") as f:
+                    f.write(content)
             return True
         except FileExistsError:
             return False
@@ -213,6 +223,16 @@ class ObsidianClient:
     def put_file(self, filepath: str, content: str) -> bool:
         """Create or completely overwrite a note. Use create_file where an overwrite would lose data."""
         return self._disk_write(filepath, content, "w")
+
+    def replace_file(self, filepath: str, content: str, expected) -> bool:
+        """
+        Overwrite a note only if it still holds `expected` (None: only if it does not
+        exist yet). The check and the write happen under the vault lock, so another
+        writer that takes the lock cannot slip in between.
+        ponytail: Obsidian itself does not take the lock; an edit saved in the few ms
+        inside it can still be overwritten. The vault's git history is the backstop.
+        """
+        return self._disk_write(filepath, content, "w", expect=expected)
 
     def create_file(self, filepath: str, content: str) -> bool:
         """Create a note only if it does not exist yet. Never overwrites; False if it exists."""
