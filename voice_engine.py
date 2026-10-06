@@ -71,9 +71,9 @@ def prune_audio_cache(max_files: int = 35) -> int:
 
 def normalize_audio_for_transcription(audio_bytes: bytes) -> bytes:
     """
-    Uses FFmpeg to convert incoming audio (WebM/Opus, Ogg, raw WAV) into clean,
-    normalized 16kHz mono WAV with volume leveling and voice-band filtering.
-    Takes ~25-40ms on local CPU.
+    Uses FFmpeg to convert incoming audio (WebM/Opus, Ogg, raw WAV) into 16 kHz
+    mono WAV with a fixed gain (volume=1.8) and an 80 Hz-7.5 kHz band-pass (no
+    loudness normalisation). 32 ms p50, N=10 (bench/results/2026-10-01.md, ffmpeg_inbound).
     """
     try:
         cmd = [
