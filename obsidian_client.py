@@ -40,6 +40,17 @@ SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
+# Every vault location the code uses, and the only place that names a vault
+# folder (test_reliability.VaultPathMapTest checks that). Layout from 6A-2.
+VAULT_PATHS = {
+    "daily_logs": "05 Daily Logs",
+    "research": "02 Research/AI Research",
+    "profile": "03 Knowledge/Profile.md",
+    "preferences": "03 Knowledge/Preferences.md",
+    "learned_rules": "03 Knowledge/Learned_Rules.md",
+    "agents": "06 Agent Documentation/Agents",
+}
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -299,41 +310,25 @@ class ObsidianClient:
 
     def get_agent_profile(self, agent_name: str) -> str:
         """Retrieve the dossier for an agent (e.g., 'Sakura', 'Yunjin')."""
-        target = f"{agent_name.capitalize()}.md"
-        candidates = [
-            f"02 - Agents/{target}",
-            f"01 Projects/Legacy AI Brain/02 - Agents/{target}",
-            f"06 Agent Documentation/{target}",
-        ]
-        for c in candidates:
-            try:
-                return self.get_file(c)
-            except Exception:  # quiet: tries the next candidate path
-                continue
-        return self.get_file(f"02 - Agents/{target}")
+        return self.get_file(f"{VAULT_PATHS['agents']}/{agent_name.capitalize()}.md")
 
     def get_learned_rules(self) -> str:
-        """Retrieve the current learned rules and heuristics from 03 - Rules & Memory."""
-        candidates = [
-            "03 - Rules & Memory/Learned_Rules.md",
-            "01 Projects/Legacy AI Brain/03 - Rules & Memory/Learned_Rules.md",
-        ]
-        for c in candidates:
-            try:
-                return self.get_file(c)
-            except Exception:  # quiet: tries the next candidate path
-                continue
-        return self.get_file("03 - Rules & Memory/Learned_Rules.md")
+        """Retrieve the current learned rules and heuristics."""
+        return self.get_file(VAULT_PATHS["learned_rules"])
+
+    def daily_log_path(self, date_str: str = None) -> str:
+        """Vault path of the daily log for date_str (YYYY-MM-DD, default today)."""
+        return f"{VAULT_PATHS['daily_logs']}/{date_str or datetime.now().strftime('%Y-%m-%d')}.md"
 
     def ensure_daily_log(self, date_str: str = None) -> str:
         """
-        Ensures today's daily log exists in 05 - Daily Logs/, creating it with standard template if missing.
-        Returns the relative vault path (e.g. '05 - Daily Logs/2026-09-24.md').
+        Ensures the daily log exists, creating it with the standard template if missing.
+        Returns its vault path (see daily_log_path).
         Create-only: an existing log is never touched, whatever a listing says.
         """
         now = datetime.now()
         today = date_str or now.strftime("%Y-%m-%d")
-        filepath = f"05 - Daily Logs/{today}.md"
+        filepath = self.daily_log_path(today)
 
         # Structure only: no status, scores or counts. Anything stated here would be
         # written before any agent has checked it (Phase 3A-2). Real results are

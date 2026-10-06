@@ -152,7 +152,7 @@ def check_obsidian_sentinel() -> list[dict]:
     try:
         obs = ObsidianClient()
         today = datetime.now().strftime("%Y-%m-%d")
-        daily_rel_path = f"05 - Daily Logs/{today}.md"
+        daily_rel_path = obs.daily_log_path(today)
         
         # Check if today's log exists
         content = ""

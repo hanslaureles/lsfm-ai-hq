@@ -7,7 +7,7 @@ import os
 import unittest
 import py_compile
 from pathlib import Path
-from obsidian_client import ObsidianClient
+from obsidian_client import ObsidianClient, VAULT_PATHS
 
 ROOT = Path(__file__).resolve().parent
 
@@ -54,14 +54,13 @@ class TestLSFMHQSmoke(unittest.TestCase):
             self.assertIn(req, keys, f"Missing required configuration key: {req}")
 
     def test_03_obsidian_client_filesystem_fallback(self):
-        """Verify ObsidianClient can access vault and resolve daily log and agent profile."""
+        """The real vault has every location in VAULT_PATHS, and the agent profile reads. Read-only."""
         client = ObsidianClient()
         if not client.vault_path.exists():
             self.skipTest(f"Obsidian vault {client.vault_path} is not on this machine (CI checkout)")
 
-        # Verify daily log ensure logic
-        log_path = client.ensure_daily_log()
-        self.assertTrue(log_path.startswith("05 - Daily Logs/"), f"Unexpected log path: {log_path}")
+        for key, rel in VAULT_PATHS.items():
+            self.assertTrue((client.vault_path / rel).exists(), f"VAULT_PATHS[{key!r}] = {rel!r} is not in the vault")
 
         # Verify agent profile lookup (Kazuha)
         profile = client.get_agent_profile("Kazuha")

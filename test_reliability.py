@@ -31,7 +31,7 @@ import bot_kazuha
 import llm_client
 import run_all
 from discord_utils import send_clean_embeds, split_smart_chunks
-from obsidian_client import ObsidianClient
+from obsidian_client import VAULT_PATHS, ObsidianClient
 
 ROOT = Path(__file__).resolve().parent
 
@@ -107,12 +107,12 @@ class VaultWriteSafetyTest(unittest.TestCase):
         # write the template over the day's log.
         with tempfile.TemporaryDirectory() as vault:
             client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
-            log = Path(vault) / "05 - Daily Logs" / "2026-01-02.md"
+            log = Path(vault) / VAULT_PATHS["daily_logs"] / "2026-01-02.md"
             log.parent.mkdir()
             log.write_text("today's entries", encoding="utf-8")
             with mock.patch.object(client, "list_dir", return_value=[]):
                 rel = client.ensure_daily_log("2026-01-02")
-            self.assertEqual(rel, "05 - Daily Logs/2026-01-02.md")
+            self.assertEqual(rel, f"{VAULT_PATHS['daily_logs']}/2026-01-02.md")
             self.assertEqual(log.read_text(encoding="utf-8"), "today's entries")
 
     def test_create_file_never_overwrites(self):
@@ -211,6 +211,40 @@ class VaultWriteSafetyTest(unittest.TestCase):
                     mock.patch.object(obsidian_client.ObsidianClient, method, return_value=False):
                 res = kazuha.execute_research_scout()
                 self.assertFalse(res["obsidian_synced"])
+
+
+class VaultPathMapTest(unittest.TestCase):
+    """6A-2: one map names every vault location; the code reads through it."""
+
+    FOLDER = re.compile(r"\b0[0-8] (- )?(Inbox|Projects|Research|Knowledge|Decisions|Daily Logs|"
+                        r"Agent Documentation|Meeting Notes|Prompts|User|Agents|Rules|Resources|Hub)\b")
+
+    def test_no_vault_folder_is_named_outside_the_map(self):
+        found = []
+        for path in [*ROOT.glob("*.py"), *ROOT.glob("scripts/*.py"), *ROOT.glob("bench/*.py")]:
+            if path.name.startswith("test_"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            if path.name == "obsidian_client.py":
+                text = re.sub(r"VAULT_PATHS = \{.*?\n\}", "", text, flags=re.S)
+            found += [f"{path.relative_to(ROOT)}:{n}" for n, line in enumerate(text.splitlines(), 1)
+                      if self.FOLDER.search(line)]
+        self.assertEqual(found, [])
+
+    def test_helpers_read_from_the_map(self):
+        with tempfile.TemporaryDirectory() as vault:
+            for key in ("learned_rules", "profile", "preferences"):
+                note = Path(vault) / VAULT_PATHS[key]
+                note.parent.mkdir(parents=True, exist_ok=True)
+                note.write_text(key, encoding="utf-8")
+            agent = Path(vault) / VAULT_PATHS["agents"] / "Kazuha.md"
+            agent.parent.mkdir(parents=True)
+            agent.write_text("kazuha", encoding="utf-8")
+            client = ObsidianClient(base_url=OFFLINE_URL, vault_path=vault)
+            self.assertEqual(client.get_learned_rules(), "learned_rules")
+            self.assertEqual(client.get_agent_profile("kazuha"), "kazuha")
+            self.assertEqual(client.ensure_daily_log("2026-01-02"), f"{VAULT_PATHS['daily_logs']}/2026-01-02.md")
+            self.assertTrue((Path(vault) / VAULT_PATHS["daily_logs"] / "2026-01-02.md").is_file())
 
 
 class FakeTarget:

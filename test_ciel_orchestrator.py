@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from obsidian_client import VAULT_PATHS  # the real path map; the client itself is stubbed below
+
 SYNTHESIS_JSON = json.dumps({
     "japanese_voice": "「告。」完了。",
     "english_voice": "Notice: Done.",
@@ -43,7 +45,7 @@ class FakeObsidian:
 
     def ensure_daily_log(self):
         self._maybe_fail()
-        return "05 - Daily Logs/today.md"
+        return f"{VAULT_PATHS['daily_logs']}/today.md"
 
     def list_dir(self, path):
         self._maybe_fail()
@@ -86,7 +88,7 @@ async def _concat_clips(clip_filenames, output_filename):
 STUBS = {
     "llm_client": {"query_llm": lambda *a, **k: "", "call_groq": _call_groq,
                    "get_brain_status": lambda: {"mode": "test"}},
-    "obsidian_client": {"ObsidianClient": FakeObsidian},
+    "obsidian_client": {"ObsidianClient": FakeObsidian, "VAULT_PATHS": VAULT_PATHS},
     "voice_engine": {"text_to_speech": _tts_bilingual, "text_to_speech_bilingual": _tts_bilingual,
                      "speak_clip": _speak_clip, "concat_clips": _concat_clips},
     "proactive_sentinel": {"evaluate_proactive_suggestions": lambda: [],
@@ -366,6 +368,26 @@ class TestEventLoopStaysResponsive(MissionTestCase):
         self.assertEqual(result["agent_status"], {"eunchae": "done", "kazuha": "done"})
         self.assertEqual(list(result["agent_results"]), ["eunchae", "kazuha"])
         self.assertLess(elapsed, 2 * self.SLOW_S * 0.8, "agents ran one after another")
+
+
+class TestVaultPaths(MissionTestCase):
+    """6A-2: Ciel's profile / preferences / rules reads go to the notes' real home."""
+
+    async def test_brain_reads_use_the_vault_path_map(self):
+        reads = []
+
+        def get_file(path):
+            reads.append(path)
+            return f"note at {path}"
+
+        async def plan(prompt):
+            return {"intent_type": "obsidian_brain", "agents_needed": [], "direct_obsidian": None,
+                    "tool_targets": ["ciel_read_rules", "ciel_read_profile", "ciel_read_preferences"]}
+
+        self.ciel.obsidian.get_file = get_file
+        self.ciel.analyze_and_plan = plan
+        await self.run_mission("read my rules, profile and preferences")
+        self.assertEqual(sorted(reads), sorted(VAULT_PATHS[k] for k in ("learned_rules", "profile", "preferences")))
 
 
 class TestHudSignals(MissionTestCase):

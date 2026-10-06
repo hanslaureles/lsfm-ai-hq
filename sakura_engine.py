@@ -102,7 +102,7 @@ def execute_morning_launchpad(sync_obsidian: bool = True) -> dict:
     2. Probes host hardware vitals via Eunchae engine.
     3. Counts active applications in memory & verifies 6 case studies.
     4. Generates an executive daily morning briefing via LLM.
-    5. Synchronizes with Obsidian 05 - Daily Logs/ note.
+    5. Synchronizes with the Obsidian daily log note.
     """
     now = datetime.datetime.now()
     today_str = now.strftime("%A, %B %d, %Y")

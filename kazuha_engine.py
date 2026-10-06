@@ -271,7 +271,7 @@ def execute_research_scout(topic: str = "applied-ai", sync_obsidian: bool = True
     Cron 4: Kazuha Applied AI Research Scout & Obsidian Ingest (MWF 09:30 AM).
     1. Fetches top trending applied AI research papers.
     2. Synthesizes an executive technical digest via Kazuha LLM.
-    3. Saves structured note to Obsidian: 04 - Resources/AI Research/AI_Research_Digest_{YYYY-MM-DD}.md.
+    3. Saves structured note to Obsidian: <VAULT_PATHS["research"]>/AI_Research_Digest_{YYYY-MM-DD}.md.
     4. Logs operational entry into today's daily log.
     """
     from datetime import datetime
@@ -320,14 +320,15 @@ Formatting: Discord Markdown with clean bullet points and clear hierarchy.
     digest_text = query_llm(prompt, temperature=0.2, agent="kazuha")
 
     obsidian_synced = False
-    obsidian_note_path = f"04 - Resources/AI Research/AI_Research_Digest_{date_str}.md"
+    from obsidian_client import VAULT_PATHS
+    obsidian_note_path = f"{VAULT_PATHS['research']}/AI_Research_Digest_{date_str}.md"
 
     if sync_obsidian:
         try:
             from obsidian_client import ObsidianClient
             client = ObsidianClient()
 
-            # 1. Create full research note in 04 - Resources/AI Research/
+            # 1. Create the full research note
             markdown_content = f"""---
 title: "Applied AI Research Digest — {date_str}"
 date: {date_str}

@@ -26,7 +26,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from llm_client import query_llm, call_groq, get_brain_status
-from obsidian_client import ObsidianClient
+from obsidian_client import ObsidianClient, VAULT_PATHS
 from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
 from speech_stream import VoiceStream, split_sentences
 from heavy_jobs import run_heavy
@@ -259,7 +259,7 @@ class CielOrchestrator:
             return False
 
     def ciel_append_to_note(self, rel_path: str, text: str) -> bool:
-        """Appends text to a specific note in the Obsidian Brain (e.g. 01 - User/Preferences.md)."""
+        """Appends text to a specific note in the Obsidian Brain (e.g. a path from obsidian_client.VAULT_PATHS)."""
         clean_path = rel_path.strip("/\\")
         if not clean_path.endswith(".md"):
             clean_path += ".md"
@@ -474,9 +474,9 @@ The user is asking a general question, seeking technical explanations, requestin
 
 4. DIRECT_OBSIDIAN_BRAIN:
 Queries specifically targeting Hans's personal Obsidian Second Brain vault:
-- "ciel_read_rules": Read workspace learned rules & heuristics (03 - Rules & Memory/Learned_Rules.md).
-- "ciel_read_profile": Read Hans's professional profile & identity (01 - User/Profile.md).
-- "ciel_read_preferences": Read Hans's working style & communication preferences (01 - User/Preferences.md).
+- "ciel_read_rules": Read workspace learned rules & heuristics ({VAULT_PATHS["learned_rules"]}).
+- "ciel_read_profile": Read Hans's professional profile & identity ({VAULT_PATHS["profile"]}).
+- "ciel_read_preferences": Read Hans's working style & communication preferences ({VAULT_PATHS["preferences"]}).
 - "ciel_search_vault": Search Obsidian vault notes for a specific personal note or topic.
 - "ciel_save_to_daily": Save previous findings or user notes to today's Obsidian daily log.
 - "intent_type": "obsidian_brain"
@@ -798,17 +798,17 @@ Respond ONLY with valid JSON.
         direct_vault_results = {}
         if direct_action == "ciel_read_rules" or "ciel_read_rules" in tool_targets:
             await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Reading Learned Rules & Heuristics..."})
-            rules_doc = await vault(self.ciel_read_note, "03 - Rules & Memory/Learned_Rules.md")
+            rules_doc = await vault(self.ciel_read_note, VAULT_PATHS["learned_rules"])
             direct_vault_results["learned_rules"] = rules_doc
 
         if direct_action == "ciel_read_profile" or "ciel_read_profile" in tool_targets:
             await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Reading Candidate Profile..."})
-            profile_doc = await vault(self.ciel_read_note, "01 - User/Profile.md")
+            profile_doc = await vault(self.ciel_read_note, VAULT_PATHS["profile"])
             direct_vault_results["candidate_profile"] = profile_doc
 
         if direct_action == "ciel_read_preferences" or "ciel_read_preferences" in tool_targets:
             await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Reading Working Preferences..."})
-            pref_doc = await vault(self.ciel_read_note, "01 - User/Preferences.md")
+            pref_doc = await vault(self.ciel_read_note, VAULT_PATHS["preferences"])
             direct_vault_results["user_preferences"] = pref_doc
 
         if direct_action == "ciel_search_vault" or "ciel_search_vault" in tool_targets:
@@ -1216,10 +1216,10 @@ Respond ONLY with valid JSON.
 
             def run():
                 try:
-                    files = self.obsidian.list_dir("05 - Daily Logs")
+                    files = self.obsidian.list_dir(VAULT_PATHS["daily_logs"])
                 except Exception as le:
                     return "failed", f"Obsidian Second Brain unreachable: {le}"
-                return "done", f"Obsidian Second Brain online: {len(files)} daily logs indexed. Synchronized with loopback HTTPS port 27124."
+                return "done", f"Obsidian Second Brain online: {len(files)} daily logs found."
 
         def run_and_log():
             status, result_text = run()
