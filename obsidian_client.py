@@ -49,6 +49,7 @@ VAULT_PATHS = {
     "preferences": "03 Knowledge/Preferences.md",
     "learned_rules": "03 Knowledge/Learned_Rules.md",
     "agents": "06 Agent Documentation/Agents",
+    "planning": "01 Projects/Planning",  # vault_daily mirrors archive/reports here
 }
 
 if os.name == "nt":
@@ -326,8 +327,8 @@ class ObsidianClient:
         Returns its vault path (see daily_log_path).
         Create-only: an existing log is never touched, whatever a listing says.
         """
-        now = datetime.now()
-        today = date_str or now.strftime("%Y-%m-%d")
+        today = date_str or datetime.now().strftime("%Y-%m-%d")
+        day = datetime.strptime(today, "%Y-%m-%d")  # the log's own date, not the day it is created
         filepath = self.daily_log_path(today)
 
         # Structure only: no status, scores or counts. Anything stated here would be
@@ -335,7 +336,7 @@ class ObsidianClient:
         # appended below by log_session().
         template = f"""# 📅 Daily Log — {today}
 
-> **Date:** {now.strftime('%A, %B %d, %Y')}
+> **Date:** {day.strftime('%A, %B %d, %Y')}
 
 ---
 
