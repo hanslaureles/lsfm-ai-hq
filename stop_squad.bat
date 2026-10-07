@@ -1,7 +1,7 @@
 @echo off
-title LE SSERAFIM AI HQ — Stop Squad
+title LE SSERAFIM AI HQ - Stop Squad
 echo ============================================================
-echo   Stopping all LE SSERAFIM bots (Freeing RAM & GPU for Gaming)...
+echo   Stopping all LE SSERAFIM bots (Freeing RAM ^& GPU for Gaming)...
 echo ============================================================
 
 :: Stop only the bots' own process tree (the PID holding memory\lsfm-bots.lock),

@@ -1,8 +1,8 @@
 @echo off
-title LE SSERAFIM AI HQ — Squad Runner
+title LE SSERAFIM AI HQ - Squad Runner
 cd /d "%~dp0"
 echo ============================================================
-echo   LE SSERAFIM AI HQ — Starting Squad ^& Brain...
+echo   LE SSERAFIM AI HQ - Starting Squad ^& Brain...
 echo ============================================================
 
 :: No duplicate squad: run_all.py refuses to start while another bot process holds

@@ -287,6 +287,23 @@ class InstanceLockTest(unittest.TestCase):
                 self.assertNotIn("/im python", text)
         self.assertIn("instance_lock.py\" stop", (root / "stop_squad.bat").read_text(encoding="utf-8"))
 
+    def test_batch_files_are_plain_ascii(self):
+        # cmd shows a .bat in the console's code page: a UTF-8 "—" became "ΓÇö" in the window title.
+        root = Path(__file__).resolve().parent
+        for bat in ("start_squad.bat", "stop_squad.bat"):
+            with self.subTest(bat):
+                self.assertTrue((root / bat).read_bytes().isascii())
+
+    def test_echo_lines_escape_ampersands(self):
+        # A bare & in echo starts a second command: "Freeing RAM & GPU" printed half and ran "GPU".
+        import re
+        root = Path(__file__).resolve().parent
+        for bat in ("start_squad.bat", "stop_squad.bat"):
+            for line in (root / bat).read_text(encoding="utf-8").splitlines():
+                if line.lstrip().lower().startswith("echo"):
+                    with self.subTest(bat=bat, line=line):
+                        self.assertIsNone(re.search(r"(?<!\^)&", line))
+
     def test_without_a_console_output_goes_to_the_log_file(self):
         # 7A-3: the logon task runs pythonw (no window), where sys.stdout and sys.stderr are None.
         import sys
