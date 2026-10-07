@@ -7,16 +7,8 @@ echo ============================================================
 
 :: No duplicate squad: run_all.py refuses to start while another bot process holds
 :: memory\lsfm-bots.lock (6B). Run stop_squad.bat first to restart.
-
-:: Logon task (7A-2, scripts\register_bot_task.ps1): no Ollama (cloud models are the
-:: default; run this file by hand before !mode local), no pause, output appended to
-:: memory\bots.log. ponytail: the log never rotates; trim it when it passes a few MB.
-if /i not "%~1"=="--autostart" goto by_hand
-echo ===== %date% %time% logon start>> "memory\bots.log"
-python -u run_all.py >> "memory\bots.log" 2>&1
-exit /b %errorlevel%
-
-:by_hand
+:: At logon the bots start without a window and without Ollama (7A-3,
+:: scripts\register_bot_task.ps1); run this file by hand before !mode local.
 
 :: Check if Ollama is running, if not start it minimized
 tasklist /fi "imagename eq ollama.exe" 2>nul | findstr /i "ollama.exe" >nul

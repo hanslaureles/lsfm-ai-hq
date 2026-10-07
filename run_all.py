@@ -2,6 +2,8 @@ import asyncio
 import os
 import random
 import sys
+from datetime import datetime
+from pathlib import Path
 from time import monotonic
 import discord
 from dotenv import load_dotenv
@@ -15,6 +17,27 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:  # quiet: no console to reconfigure (pythonw, redirected stream)
         pass
+
+BOTS_LOG = Path(__file__).resolve().parent / "memory" / "bots.log"
+
+
+def log_to_file_without_console(log_path: Path = BOTS_LOG):
+    """
+    The logon task (7A-3, scripts/register_bot_task.ps1) runs pythonw: no window, and
+    sys.stdout / sys.stderr are None, so every print would be lost. Send both to the
+    log file instead. With a console nothing changes and None is returned.
+    ponytail: the log never rotates; trim it when it passes a few MB.
+    """
+    if sys.stdout is not None:
+        return None
+    try:
+        log = open(log_path, "a", encoding="utf-8", buffering=1)
+    except OSError:  # held by another process (a cmd >> redirect locks it): never stop the start
+        log = open(log_path.with_name(f"bots-{os.getpid()}.log"), "a", encoding="utf-8", buffering=1)
+    log.write(f"===== {datetime.now():%Y-%m-%d %H:%M:%S} start (no console)\n")
+    sys.stdout = sys.stderr = log
+    return log
+
 
 BACKOFF_START = 3.0
 BACKOFF_MAX = 15.0
@@ -116,6 +139,7 @@ async def main():
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
+    log_to_file_without_console()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

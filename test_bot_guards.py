@@ -287,17 +287,44 @@ class InstanceLockTest(unittest.TestCase):
                 self.assertNotIn("/im python", text)
         self.assertIn("instance_lock.py\" stop", (root / "stop_squad.bat").read_text(encoding="utf-8"))
 
-    def test_autostart_logs_to_a_file_without_ollama_or_pause(self):
-        # 7A-2: the logon task runs start_squad.bat --autostart; nobody is there to press a key.
-        text = (Path(__file__).resolve().parent / "start_squad.bat").read_text(encoding="utf-8").lower()
-        start = text.index('if /i not "%~1"=="--autostart" goto by_hand')
-        branch = text[start:text.index("\n:by_hand", start)]
-        self.assertLess(start, text.index("ollama.exe"), "autostart must branch off before Ollama starts")
-        self.assertIn('python -u run_all.py >> "memory\\bots.log" 2>&1', branch)
-        self.assertIn("exit /b %errorlevel%", branch)
-        for word in ("pause", "ollama"):
-            self.assertNotIn(word, branch)
-        self.assertIn("pause", text[start:], "a hand start keeps its pause")
+    def test_without_a_console_output_goes_to_the_log_file(self):
+        # 7A-3: the logon task runs pythonw (no window), where sys.stdout and sys.stderr are None.
+        import sys
+        import run_all
+        with tempfile.TemporaryDirectory() as d:
+            log_path = Path(d) / "bots.log"
+            with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+                log = run_all.log_to_file_without_console(log_path)
+                print("⚠️ LSFM bots are already running (PID 1).")
+                print("traceback line", file=sys.stderr)
+            log.close()
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+        self.assertRegex(lines[0], r"^===== \d{4}-\d\d-\d\d \d\d:\d\d:\d\d start \(no console\)$")
+        self.assertEqual(lines[1:], ["⚠️ LSFM bots are already running (PID 1).", "traceback line"])
+
+    def test_a_log_that_cannot_be_opened_never_stops_the_start(self):
+        # Another process may hold bots.log (a cmd >> redirect locks it): write a per-process file.
+        import os
+        import sys
+        import run_all
+        with tempfile.TemporaryDirectory() as d:
+            blocked = Path(d) / "bots.log"
+            blocked.mkdir()  # opening a directory for append fails on Windows and Linux
+            with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+                log = run_all.log_to_file_without_console(blocked)
+                print("still logged")
+            log.close()
+            text = (Path(d) / f"bots-{os.getpid()}.log").read_text(encoding="utf-8")
+        self.assertTrue(text.endswith("still logged\n"))
+
+    def test_with_a_console_nothing_is_redirected(self):
+        import sys
+        import run_all
+        with tempfile.TemporaryDirectory() as d:
+            before = sys.stdout
+            self.assertIsNone(run_all.log_to_file_without_console(Path(d) / "bots.log"))
+            self.assertIs(sys.stdout, before)
+            self.assertFalse((Path(d) / "bots.log").exists())
 
 
 if __name__ == "__main__":
