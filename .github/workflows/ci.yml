@@ -29,10 +29,12 @@ jobs:
       # Hermetic: engines, LLMs, TTS and Obsidian are stubbed, so no secrets are
       # needed. scripts/test_*.py are excluded on purpose: they hit live Gmail
       # and Discord with real credentials. The .env and vault checks in
-      # test_hq_smoke.py skip here and run on the workstation.
+      # test_hq_smoke.py skip here and run on the workstation. The public export
+      # drops test files it does not publish (the vault tools stay private).
       - name: Tests
         run: >
           python -m pytest -q -rs
           test_ciel_orchestrator.py test_ciel_security.py test_hq_smoke.py
           test_llm_client.py test_pdf_engine.py test_eunchae_qa.py test_reliability.py test_speech_stream.py
-          test_health_recorder.py test_eunchae_publisher.py bench/test_bench.py bench/test_bench_telemetry.py
+          test_health_recorder.py test_eunchae_publisher.py test_bot_guards.py
+          bench/test_bench.py bench/test_bench_telemetry.py
