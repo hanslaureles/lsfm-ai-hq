@@ -1,0 +1,3 @@
+# cmd.exe misreads LF-only batch files (lines get cut: 'title' ran as 'e'), so .bat
+# files always check out with CRLF, whatever core.autocrlf says (7A-2).
+*.bat text eol=crlf

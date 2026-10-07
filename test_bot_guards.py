@@ -287,6 +287,18 @@ class InstanceLockTest(unittest.TestCase):
                 self.assertNotIn("/im python", text)
         self.assertIn("instance_lock.py\" stop", (root / "stop_squad.bat").read_text(encoding="utf-8"))
 
+    def test_autostart_logs_to_a_file_without_ollama_or_pause(self):
+        # 7A-2: the logon task runs start_squad.bat --autostart; nobody is there to press a key.
+        text = (Path(__file__).resolve().parent / "start_squad.bat").read_text(encoding="utf-8").lower()
+        start = text.index('if /i not "%~1"=="--autostart" goto by_hand')
+        branch = text[start:text.index("\n:by_hand", start)]
+        self.assertLess(start, text.index("ollama.exe"), "autostart must branch off before Ollama starts")
+        self.assertIn('python -u run_all.py >> "memory\\bots.log" 2>&1', branch)
+        self.assertIn("exit /b %errorlevel%", branch)
+        for word in ("pause", "ollama"):
+            self.assertNotIn(word, branch)
+        self.assertIn("pause", text[start:], "a hand start keeps its pause")
+
 
 if __name__ == "__main__":
     unittest.main()
