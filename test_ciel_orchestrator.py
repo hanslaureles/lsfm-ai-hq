@@ -355,7 +355,7 @@ class TestEventLoopStaysResponsive(MissionTestCase):
         self.assert_loop_ran(ticks)
 
     async def test_independent_agents_run_concurrently(self):
-        async def plan(prompt):
+        async def plan(prompt, history=None):
             return {"intent_type": "agent_delegation", "agents_needed": ["eunchae", "kazuha"],
                     "tool_targets": ["check_vitals", "git_status"], "direct_obsidian": None}
 
@@ -380,7 +380,7 @@ class TestVaultPaths(MissionTestCase):
             reads.append(path)
             return f"note at {path}"
 
-        async def plan(prompt):
+        async def plan(prompt, history=None):
             return {"intent_type": "obsidian_brain", "agents_needed": [], "direct_obsidian": None,
                     "tool_targets": ["ciel_read_rules", "ciel_read_profile", "ciel_read_preferences"]}
 
@@ -782,6 +782,110 @@ class TestStreamedSpeech(MissionTestCase):
         spoken = len(CLIPS)
         await asyncio.sleep(0.1)
         self.assertEqual(len(CLIPS), spoken)  # the clip worker was stopped
+
+
+class TestSessions(MissionTestCase):
+    """6C: each HUD tab (session id) has its own conversation; the plan says who chose it."""
+
+    A, B = "a" * 32, "b" * 32
+    ROUTER_JSON = json.dumps({"intent_type": "general_knowledge", "agents_needed": [], "action_summary": "Answer.",
+                              "requires_real_tools": False, "tool_targets": ["direct_knowledge"],
+                              "direct_obsidian": None})
+
+    def record_prompts(self):
+        prompts = []
+
+        def call_groq(prompt, system_instruction="", **kwargs):
+            prompts.append(prompt)
+            return _call_groq(prompt, system_instruction, **kwargs)
+
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        return prompts
+
+    async def ask(self, prompt, session):
+        async def on_event(ev):
+            self.events.append(ev)
+        return await self.ciel.execute_mission(prompt, event_callback=on_event, session_id=session)
+
+    async def test_a_tab_never_sees_another_tabs_turns(self):
+        await self.ask("what is a b-tree?", self.A)
+        prompts = self.record_prompts()
+        await self.ask("what is a skip list?", self.B)
+        self.assertTrue(prompts)  # the router and synthesis prompts of B's mission
+        self.assertFalse([p for p in prompts if "b-tree" in p], "A's turn leaked into B's prompts")
+        self.assertEqual([len(self.ciel.history(s)) for s in (self.A, self.B, None)], [1, 1, 0])
+
+    async def test_a_follow_up_uses_its_own_tabs_turns(self):
+        await self.ask("what is a b-tree?", self.A)
+        await self.ask("what is a skip list?", self.B)
+        prompts = self.record_prompts()
+        await self.ask("tell me more about that", self.A)
+        self.assertTrue([p for p in prompts if "b-tree" in p])
+        self.assertFalse([p for p in prompts if "skip list" in p])
+
+    async def test_clearing_one_tab_keeps_the_other(self):
+        await self.ask("what is a b-tree?", self.A)
+        await self.ask("what is a skip list?", self.B)
+        self.ciel.reset_memory(self.A)
+        self.assertEqual(self.ciel.history(self.A), [])
+        self.assertEqual(len(self.ciel.history(self.B)), 1)
+        result = await self.ask("clear memory", self.B)  # the spoken reset clears only its own tab
+        self.assertEqual(result["memory_turns"], 0)
+        self.assertEqual(self.ciel.history(self.B), [])
+
+    async def test_a_bad_or_missing_session_id_is_the_default_conversation(self):
+        await self.ask("what is a b-tree?", "../not-an-id")
+        await self.ask("what is a skip list?", None)
+        self.assertEqual(len(self.ciel.conversation_history), 2)
+        self.assertEqual(list(self.ciel.conversations), [ciel_orchestrator.DEFAULT_SESSION])
+
+    def test_the_least_recently_used_conversation_goes_past_the_cap(self):
+        cap = ciel_orchestrator.MAX_CONVERSATIONS
+        ids = [f"{i:032x}" for i in range(cap + 1)]
+        for sid in ids[:cap]:
+            self.ciel.conversation(sid).turns.append({"n": sid})
+        self.ciel.conversation(ids[0])  # used again: now the newest
+        self.ciel.conversation(ids[cap])
+        self.assertEqual(len(self.ciel.conversations), cap)
+        self.assertNotIn(ids[1], self.ciel.conversations)
+        self.assertEqual(self.ciel.history(ids[0]), [{"n": ids[0]}])
+        self.assertEqual(self.ciel.history(ids[1]), [])  # reading does not create it again
+        self.assertNotIn(ids[1], self.ciel.conversations)
+
+    def planner_events(self):
+        return [e["planner"] for e in self.events if e["type"] == "plan_formed"]
+
+    async def test_planner_llm_reports_its_model_and_chain(self):
+        def call_groq(prompt, system_instruction="", meta=None, **kwargs):
+            if "routing core" in system_instruction:
+                meta.setdefault("chain", []).extend(["groq/qwen/qwen3.8-27b", "groq/llama-3.1-8b-instant"])
+                meta.update(provider="groq", model="llama-3.1-8b-instant")
+                return self.ROUTER_JSON
+            return _call_groq(prompt, system_instruction, **kwargs)
+
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        result = await self.ask("what is a b-tree?", self.A)
+        expected = {"source": "llm", "provider": "groq", "model": "llama-3.1-8b-instant",
+                    "fallback_chain": ["groq/qwen/qwen3.8-27b", "groq/llama-3.1-8b-instant"]}
+        self.assertEqual(result["planner"], expected)
+        self.assertEqual(self.planner_events(), [expected])
+
+    async def test_planner_fallback_when_the_router_call_fails(self):
+        def call_groq(prompt, system_instruction="", meta=None, **kwargs):
+            if "routing core" in system_instruction:
+                meta.setdefault("chain", []).append("groq/qwen/qwen3.8-27b")
+                raise RuntimeError("router offline")
+            return _call_groq(prompt, system_instruction, **kwargs)
+
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        result = await self.ask("what is a b-tree?", self.A)
+        self.assertEqual(result["planner"], {"source": "fallback", "provider": None, "model": None,
+                                             "fallback_chain": ["groq/qwen/qwen3.8-27b"]})
+
+    async def test_planner_keyword_when_no_model_was_asked(self):
+        result = await self.ask("clear memory", self.A)
+        self.assertEqual(result["planner"]["source"], "keyword")
+        self.assertEqual(self.planner_events(), [])  # the reset path ends before plan_formed
 
 
 if __name__ == "__main__":

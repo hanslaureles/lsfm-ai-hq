@@ -25,10 +25,13 @@ def _install_stubs():
             self.missions = []
             self.mission_ids = []
 
-        def reset_memory(self):
+        def reset_memory(self, session_id=None):
             self.conversation_history = []
 
-        async def execute_mission(self, prompt, event_callback=None, mission_id=None):
+        def history(self, session_id=None):
+            return list(self.conversation_history)
+
+        async def execute_mission(self, prompt, event_callback=None, mission_id=None, session_id=None):
             self.missions.append(prompt)
             self.mission_ids.append(mission_id)
             return {"mission_id": mission_id, "reply": "ok", "audio_url": "/audio/x.mp3", "elapsed_ms": 1}
@@ -107,7 +110,7 @@ class TestLocalhostGuard(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_mission_returns_500_with_error(self):
         """execute_mission reports failures as {"error": ...}; the REST reply must not be a 200."""
-        async def failing(prompt, event_callback=None, mission_id=None):
+        async def failing(prompt, event_callback=None, mission_id=None, session_id=None):
             return {"mission_id": "m1", "error": "ConnectionError: Groq API unreachable", "elapsed_ms": 3}
 
         original = ciel_server.ciel.execute_mission
@@ -229,7 +232,7 @@ class TestServerStaysResponsive(unittest.IsolatedAsyncioTestCase):
         await ws.close()
 
     async def test_ws_chat_does_not_block_its_own_socket(self):
-        async def slow_mission(prompt, event_callback=None, mission_id=None):
+        async def slow_mission(prompt, event_callback=None, mission_id=None, session_id=None):
             await asyncio.sleep(0.5)
             return {"mission_id": mission_id, "reply": "ok"}
 
@@ -293,7 +296,7 @@ class TestMissionAdmission(unittest.IsolatedAsyncioTestCase):
         self.running = 0
         self.peak = 0
 
-        async def slow_mission(prompt, event_callback=None, mission_id=None):
+        async def slow_mission(prompt, event_callback=None, mission_id=None, session_id=None):
             self.running += 1
             self.peak = max(self.peak, self.running)
             await asyncio.sleep(0.2)
@@ -339,6 +342,117 @@ class TestMissionAdmission(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types.count("ciel_error"), 1)
         self.assertIn("Queued", " ".join(e.get("message", "") for e in events if e["type"] == "ciel_state"))
         await ws.close()
+
+
+class TestSessionRouting(unittest.IsolatedAsyncioTestCase):
+    """6C: a mission's events reach only the tab (session) that sent it; telemetry reaches every tab."""
+
+    A, B = "a" * 32, "b" * 32
+
+    async def asyncSetUp(self):
+        self.enterContext(mock.patch.object(ciel_server, "TELEMETRY_INTERVAL_S", 3600))  # no telemetry noise
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def tab(self, session=None):
+        ws = await self.client.ws_connect("/ws" + (f"?session={session}" if session else ""), headers=GOOD_ORIGIN)
+        self.assertEqual((await ws.receive_json(timeout=2))["type"], "ciel_connected")
+        return ws
+
+    async def silent(self, ws):
+        with self.assertRaises(asyncio.TimeoutError):
+            msg = await ws.receive_json(timeout=0.3)
+            self.fail(f"unexpected event: {msg}")
+
+    async def test_rest_mission_events_reach_only_the_sending_tab(self):
+        sessions = []
+
+        async def mission(prompt, event_callback=None, mission_id=None, session_id=None):
+            sessions.append(session_id)
+            await event_callback({"type": "ciel_complete", "mission_id": mission_id, "reply": "ok"})
+            return {"mission_id": mission_id, "reply": "ok"}
+
+        a, b = await self.tab(self.A), await self.tab(self.B)
+        with mock.patch.object(ciel_server.ciel, "execute_mission", mission):
+            res = await self.client.post("/api/chat", json={"prompt": "status", "session_id": self.A},
+                                         headers=GOOD_ORIGIN)
+        self.assertEqual(res.status, 200)
+        self.assertEqual(sessions, [self.A])
+        self.assertEqual([(await a.receive_json(timeout=2))["type"] for _ in range(2)],
+                         ["chat_received", "ciel_complete"])
+        await self.silent(b)
+        await a.close()
+        await b.close()
+
+    async def test_ws_chat_uses_the_sockets_own_session(self):
+        sessions = []
+
+        async def mission(prompt, event_callback=None, mission_id=None, session_id=None):
+            sessions.append(session_id)
+            return {"mission_id": mission_id, "reply": "ok"}
+
+        a, b = await self.tab(self.A), await self.tab(self.B)
+        with mock.patch.object(ciel_server.ciel, "execute_mission", mission):
+            await b.send_json({"action": "chat", "prompt": "status", "session_id": self.A})  # the socket decides
+            self.assertEqual((await b.receive_json(timeout=2))["type"], "chat_received")
+            await asyncio.gather(*ciel_server.ws_missions)
+        self.assertEqual(sessions, [self.B])
+        await self.silent(a)
+        await a.close()
+        await b.close()
+
+    async def test_no_session_is_the_default_one_for_old_huds(self):
+        sessions = []
+
+        async def mission(prompt, event_callback=None, mission_id=None, session_id=None):
+            sessions.append(session_id)
+            return {"mission_id": mission_id, "reply": "ok"}
+
+        old, a = await self.tab(), await self.tab(self.A)
+        with mock.patch.object(ciel_server.ciel, "execute_mission", mission):
+            await self.client.post("/api/chat", json={"prompt": "status", "session_id": "../x"}, headers=GOOD_ORIGIN)
+        self.assertEqual(sessions, ["default"])
+        self.assertEqual((await old.receive_json(timeout=2))["type"], "chat_received")
+        await self.silent(a)
+        await old.close()
+        await a.close()
+
+    async def test_clearing_memory_clears_and_tells_only_that_tab(self):
+        cleared = []
+        a, b = await self.tab(self.A), await self.tab(self.B)
+        with mock.patch.object(ciel_server.ciel, "reset_memory", cleared.append):
+            res = await self.client.post("/api/memory/clear", json={"session_id": self.A}, headers=GOOD_ORIGIN)
+        self.assertEqual(res.status, 200)
+        self.assertEqual(cleared, [self.A])
+        self.assertEqual((await a.receive_json(timeout=2))["type"], "memory_cleared")
+        await self.silent(b)
+        await a.close()
+        await b.close()
+
+    async def test_memory_reads_are_per_session(self):
+        turns = {self.A: [{"user_prompt": "x"}], self.B: []}
+        with mock.patch.object(ciel_server.ciel, "history", lambda s=None: turns.get(s, [])):
+            mem = await (await self.client.get(f"/api/memory?session={self.A}", headers=GOOD_HOST)).json()
+            tel = await (await self.client.get(f"/api/telemetry?session={self.B}", headers=GOOD_HOST)).json()
+        self.assertEqual(mem, {"turns": 1, "history": [{"user_prompt": "x"}]})
+        self.assertEqual(tel["memory_turns"], 0)
+
+    async def test_telemetry_reaches_every_tab_with_its_own_memory_turns(self):
+        turns = {self.A: [{}, {}], self.B: [{}]}
+        self.enterContext(mock.patch.object(ciel_server, "TELEMETRY_INTERVAL_S", 0.05))
+        self.enterContext(mock.patch.object(ciel_server.ciel, "history", lambda s=None: turns.get(s, [])))
+        await self.client.close()  # restart so the worker picks up the short interval
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+        a, b = await self.tab(self.A), await self.tab(self.B)
+        ea, eb = await a.receive_json(timeout=2), await b.receive_json(timeout=2)
+        self.assertEqual((ea["type"], ea["memory_turns"]), ("telemetry", 2))
+        self.assertEqual((eb["type"], eb["memory_turns"]), ("telemetry", 1))
+        await a.close()
+        await b.close()
 
 
 if __name__ == "__main__":

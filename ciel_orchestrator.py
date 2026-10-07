@@ -207,29 +207,71 @@ YOUR PERSONA:
    - In spoken voice output, keep statements crisp and punchy; reserve deep technical elaboration for the display report.
 """
 
+DEFAULT_SESSION = "default"  # callers that name no session (curl, the bench, an older HUD)
+MAX_CONVERSATIONS = 16       # one per HUD tab; the least recently used is dropped past this
+
+
+def session_key(session_id) -> str:
+    """A HUD tab's session id (the 32-hex mission-id shape), or the default conversation."""
+    if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{32}", session_id):
+        return session_id
+    return DEFAULT_SESSION
+
+
+class Conversation:
+    """One HUD tab's working memory (6C): its recent turns."""
+
+    def __init__(self, max_turns: int):
+        self.turns = []
+        self.max_turns = max_turns
+        # Bumped on every reset. A mission records its turn only if the generation
+        # is unchanged, so one that was mid-flight during a clear can't revive memory.
+        self.generation = 0
+
+    def reset(self):
+        self.turns = []
+        self.generation += 1
+
+    def remember(self, turn: dict, start_gen: int):
+        """Records a turn unless memory was cleared while the mission ran."""
+        if self.generation != start_gen:
+            return
+        self.turns.append(turn)
+        self.turns = self.turns[-self.max_turns:]
+
+
 class CielOrchestrator:
     """The central intelligence coordinating the 5-agent swarm and Web HUD."""
 
     def __init__(self, max_history_turns: int = 8):
         self.obsidian = ObsidianClient()
         self.active_agents = set()
-        self.conversation_history = []
         self.max_history_turns = max_history_turns
-        # Bumped on every reset. A mission records its turn only if the generation
-        # is unchanged, so one that was mid-flight during a clear can't revive memory.
-        self.memory_generation = 0
+        self.conversations = {}  # session key -> Conversation, least recently used first
 
-    def reset_memory(self):
-        """Clears the short-term working conversation memory."""
-        self.conversation_history = []
-        self.memory_generation += 1
+    def conversation(self, session_id=None) -> Conversation:
+        """The session's conversation, created on first use; marks it most recently used."""
+        key = session_key(session_id)
+        conv = self.conversations.pop(key, None) or Conversation(self.max_history_turns)
+        self.conversations[key] = conv
+        # ponytail: a fixed cap with no timer; an idle tab's memory goes once 16 others were used after it.
+        while len(self.conversations) > MAX_CONVERSATIONS:
+            del self.conversations[next(iter(self.conversations))]
+        return conv
 
-    def _remember(self, turn: dict, start_gen: int):
-        """Records a turn unless memory was cleared while the mission ran."""
-        if self.memory_generation != start_gen:
-            return
-        self.conversation_history.append(turn)
-        self.conversation_history = self.conversation_history[-self.max_history_turns:]
+    def history(self, session_id=None) -> list:
+        """The session's turns, without creating or touching it (telemetry and GET /api/memory)."""
+        conv = self.conversations.get(session_key(session_id))
+        return list(conv.turns) if conv else []
+
+    @property
+    def conversation_history(self) -> list:
+        """The default conversation's turns (read-only; the tests and the bench use it)."""
+        return self.history()
+
+    def reset_memory(self, session_id=None):
+        """Clears one session's short-term working conversation memory."""
+        self.conversation(session_id).reset()
 
     def ciel_read_note(self, rel_path: str) -> str:
         """Directly reads any note from Hans's Obsidian Second Brain."""
@@ -365,12 +407,18 @@ class CielOrchestrator:
             print(f"⚠️ [Ciel Web Search] Search query '{query}' failed: {e}")
             return []
 
-    async def analyze_and_plan(self, prompt: str) -> dict:
+    async def analyze_and_plan(self, prompt: str, history: list = None) -> dict:
         """
         Uses Groq ultra-low latency inference to classify the user's intent,
         incorporating multi-turn conversational context, live meteorological sensors,
         real-time global web search, and direct Obsidian brain capabilities.
+
+        history: the mission's conversation turns (default conversation if None).
+        The plan's "planner" says who decided (6C): "llm" with its model and fallback
+        chain, or "fallback" when that call failed and the keyword heuristic decided.
+        The keyword fast paths above the LLM call carry none; _run_mission marks them.
         """
+        turns = self.history() if history is None else history
         p_lower = prompt.lower().strip()
 
         # Check for immediate memory clear / reset request
@@ -428,8 +476,8 @@ class CielOrchestrator:
 
         # Format recent conversation history (last 3 turns)
         history_context = "None (first turn in session)"
-        if self.conversation_history:
-            recent_turns = self.conversation_history[-3:]
+        if turns:
+            recent_turns = turns[-3:]
             h_lines = []
             for idx, turn in enumerate(recent_turns, 1):
                 h_lines.append(f"Turn {idx}: User asked \"{turn.get('user_prompt')}\"")
@@ -509,11 +557,12 @@ Analyze the user's prompt and return a JSON object with:
 
 Respond ONLY with valid JSON.
 """
+        plan_meta = {}  # call_groq fills chain / provider / model, as for synthesis (5E-4)
         try:
             raw_response = await run_blocking(
                 call_groq, router_prompt,
                 system_instruction="You are Ciel's tactical routing core. Output pure JSON only.",
-                timeout=ROUTER_TIMEOUT_S, label="Router LLM",
+                meta=plan_meta, timeout=ROUTER_TIMEOUT_S, label="Router LLM",
             )
             clean_json = raw_response.strip()
             if "```json" in clean_json:
@@ -554,8 +603,8 @@ Respond ONLY with valid JSON.
                 intent = "obsidian_brain"
 
             # Multi-turn follow-up resolution if agents is empty but recent turn had an agent
-            if not agents and not direct_obsidian and self.conversation_history and intent != "general_knowledge":
-                last_turn = self.conversation_history[-1]
+            if not agents and not direct_obsidian and turns and intent != "general_knowledge":
+                last_turn = turns[-1]
                 last_agents = last_turn.get("agents_called", [])
                 if any(w in p_lower for w in ["those", "that", "it", "more", "explain", "detail", "re-run", "again"]):
                     if "kazuha" in last_agents and any(w in p_lower for w in ["risk", "risks", "security", "git", "file", "files", "diff", "branch", "staged"]):
@@ -610,6 +659,8 @@ Respond ONLY with valid JSON.
             parsed["tool_targets"] = targets
             parsed["direct_obsidian"] = direct_obsidian
             parsed["requires_real_tools"] = len(agents) > 0 or bool(direct_obsidian)
+            parsed["planner"] = {"source": "llm", "provider": plan_meta.get("provider"),
+                                 "model": plan_meta.get("model"), "fallback_chain": plan_meta.get("chain", [])}
             return parsed
         except Exception as _exc:
             print(f"⚠️ [ciel_orchestrator.analyze_and_plan] suppressed {type(_exc).__name__}: {_exc}", flush=True)
@@ -666,10 +717,14 @@ Respond ONLY with valid JSON.
                 "action_summary": "Executing subordinate agent delegation." if agents else "Accessing universal knowledge base for direct intellectual synthesis.",
                 "requires_real_tools": len(agents) > 0 or bool(direct_obsidian),
                 "tool_targets": targets,
-                "direct_obsidian": direct_obsidian
+                "direct_obsidian": direct_obsidian,
+                # The chain is every model tried before the failure (empty if none answered at all).
+                "planner": {"source": "fallback", "provider": None, "model": None,
+                            "fallback_chain": plan_meta.get("chain", [])},
             }
 
-    async def execute_mission(self, user_prompt: str, event_callback=None, mission_id: str = None) -> dict:
+    async def execute_mission(self, user_prompt: str, event_callback=None, mission_id: str = None,
+                              session_id: str = None) -> dict:
         """
         Executes a user command through Ciel: plans, delegates, runs tools, and crafts the final speech reply.
 
@@ -694,8 +749,9 @@ Respond ONLY with valid JSON.
                 else:
                     event_callback(payload)
 
+        conv = self.conversation(session_id)  # each HUD tab has its own memory (6C)
         try:
-            return await self._run_mission(user_prompt, emit, mission_id, start_time, self.memory_generation)
+            return await self._run_mission(user_prompt, emit, mission_id, start_time, conv, conv.generation)
         except Exception as e:
             failure = {
                 "mission_id": mission_id,
@@ -709,12 +765,15 @@ Respond ONLY with valid JSON.
                 pass  # the HUD still gets the failure through the REST reply
             return failure
 
-    async def _run_mission(self, user_prompt: str, emit, mission_id: str, start_time: float, start_gen: int) -> dict:
+    async def _run_mission(self, user_prompt: str, emit, mission_id: str, start_time: float,
+                           conv: Conversation, start_gen: int) -> dict:
         audio_filename = f"ciel_response_{mission_id}.mp3"
 
         # 1. Ciel Ingestion & Planning
         await emit("ciel_state", {"state": "analyzing", "message": "Analyzing prompt..."})
-        plan = await self.analyze_and_plan(user_prompt)
+        plan = await self.analyze_and_plan(user_prompt, history=list(conv.turns))
+        # No planner: a keyword fast path decided without a model call (the HUD shows "PLAN keyword").
+        planner = plan.get("planner") or {"source": "keyword", "provider": None, "model": None, "fallback_chain": []}
         intent = plan.get("intent_type", "general_knowledge")
         agents_to_call = plan.get("agents_needed", [])
         tool_targets = plan.get("tool_targets", [])
@@ -725,7 +784,7 @@ Respond ONLY with valid JSON.
 
         # Handle instant memory reset if requested
         if "reset_memory" in tool_targets:
-            self.reset_memory()
+            conv.reset()
             ja_speech = "「告。」セッションメモリを全消去しました。新規対話を初期化します。"
             en_speech = "Notice: Working memory cache cleared. Initializing a fresh conversational session."
             final_reply = en_speech
@@ -741,7 +800,8 @@ Respond ONLY with valid JSON.
                 "agents_called": [],
                 "agent_results": {},
                 "direct_obsidian": None,
-                "memory_turns": 0
+                "memory_turns": 0,
+                "planner": planner,
             }
             await emit("ciel_complete", final_data)
             return final_data
@@ -766,7 +826,7 @@ Respond ONLY with valid JSON.
             final_reply = appraisal_text
             await text_to_speech_bilingual(ja_text=ja_speech, en_text=en_speech, output_filename=audio_filename)
 
-            self._remember({
+            conv.remember({
                 "user_prompt": user_prompt,
                 "agents_called": [],
                 "agent_results": {"sentinel_suggestions": suggs},
@@ -785,8 +845,9 @@ Respond ONLY with valid JSON.
                 "agents_called": [],
                 "agent_results": {"sentinel_suggestions": suggs},
                 "direct_obsidian": None,
-                "memory_turns": len(self.conversation_history),
-                "suggestions": suggs
+                "memory_turns": len(conv.turns),
+                "suggestions": suggs,
+                "planner": planner,
             }
             await emit("ciel_complete", final_data)
             return final_data
@@ -818,7 +879,7 @@ Respond ONLY with valid JSON.
 
         if direct_action == "ciel_save_to_daily" or "ciel_save_to_daily" in tool_targets:
             await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Appending entry to Daily Log..."})
-            last_turn = self.conversation_history[-1] if self.conversation_history else None
+            last_turn = conv.turns[-1] if conv.turns else None
             if last_turn:
                 summary_to_save = f"**Reference Prompt:** {last_turn.get('user_prompt')}\n**Ciel Summary:** {last_turn.get('ciel_reply')}"
                 if last_turn.get("agent_results"):
@@ -830,6 +891,7 @@ Respond ONLY with valid JSON.
                 direct_vault_results["daily_log_saved"] = f"Recorded note into today's Obsidian daily log (Status: {ok})."
 
         await emit("plan_formed", {
+            "planner": planner,
             "agents": agents_to_call,
             "summary": plan.get("action_summary", "Calculating optimal path."),
             "tool_targets": tool_targets,
@@ -887,8 +949,8 @@ Respond ONLY with valid JSON.
 
         # Build recent conversation history snippet
         history_context = ""
-        if self.conversation_history:
-            recent_turns = self.conversation_history[-3:]
+        if conv.turns:
+            recent_turns = conv.turns[-3:]
             h_lines = []
             for idx, turn in enumerate(recent_turns, 1):
                 h_lines.append(f"Turn {idx}: User asked \"{turn.get('user_prompt')}\"")
@@ -999,8 +1061,8 @@ Respond ONLY with valid JSON.
             )
 
         # 5. Record this turn into Working Memory
-        self._remember({
-            "turn_id": len(self.conversation_history) + 1,
+        conv.remember({
+            "turn_id": len(conv.turns) + 1,
             "timestamp": time.time(),
             "user_prompt": user_prompt,
             "intent_type": intent,
@@ -1027,10 +1089,11 @@ Respond ONLY with valid JSON.
             "weather_data": weather_data,
             "web_results": web_search_results,
             "direct_obsidian": direct_action,
-            "memory_turns": len(self.conversation_history),
+            "memory_turns": len(conv.turns),
             # Measured on this mission's synthesis call (4B field names); absent on fast paths.
             "llm": {"provider": synth_meta.get("provider"), "model": synth_meta.get("model"),
                     "fallback_chain": synth_meta.get("chain", []), "ttft_ms": synth_meta.get("ttft_ms")},
+            "planner": planner,  # who chose the plan: llm / keyword / fallback (6C)
         }
 
         await emit("ciel_complete", final_data)

@@ -36,7 +36,7 @@ from llm_client import get_brain_status
 from proactive_sentinel import evaluate_proactive_suggestions
 
 ciel = CielOrchestrator()
-active_websockets = set()
+active_websockets = {}  # socket -> its HUD tab's session key (6C)
 ws_missions = set()  # strong refs to missions started over WS (the loop keeps only weak ones)
 
 CIEL_PORT = int(os.getenv("CIEL_PORT", 8000))
@@ -60,7 +60,11 @@ class MissionGate:
         self.max_queued = max_queued
         self.queued = 0
 
-    async def run(self, prompt: str, mission_id: str) -> dict:
+    async def run(self, prompt: str, mission_id: str, session: str = "default") -> dict:
+        """A mission's events go only to the tabs of the session that sent it (6C)."""
+        async def send(payload):
+            await broadcast_ws(payload, session)
+
         must_wait = self._slots.locked()
         if must_wait and self.queued >= self.max_queued:
             busy = {
@@ -70,13 +74,13 @@ class MissionGate:
                 "elapsed_ms": 0,
                 "busy": True,
             }
-            await broadcast_ws({"type": "ciel_error", **busy})
+            await send({"type": "ciel_error", **busy})
             return busy
         # Count before any await, so concurrent arrivals see each other.
         self.queued += 1
         try:
             if must_wait:
-                await broadcast_ws({"type": "ciel_state", "state": "analyzing", "mission_id": mission_id,
+                await send({"type": "ciel_state", "state": "analyzing", "mission_id": mission_id,
                                     "message": "Queued: waiting for a free mission slot..."})
             await self._slots.acquire()
         finally:
@@ -85,7 +89,7 @@ class MissionGate:
             # Streamed speech leaves one clip per sentence; keep the newest few
             # missions' worth (a HUD may still be playing the previous one).
             await asyncio.to_thread(prune_audio_cache, AUDIO_CACHE_MAX_FILES)
-            return await ciel.execute_mission(prompt, event_callback=broadcast_ws, mission_id=mission_id)
+            return await ciel.execute_mission(prompt, event_callback=send, mission_id=mission_id, session_id=session)
         finally:
             self._slots.release()
 
@@ -119,19 +123,18 @@ async def localhost_guard(request, handler):
     return await handler(request)
 
 
-async def broadcast_ws(payload: dict):
-    """Sends live state updates to all open HUD browsers."""
-    if not active_websockets:
+async def broadcast_ws(payload: dict, session: str = None):
+    """Sends live state updates to every open HUD tab, or only to one session's tabs (6C)."""
+    # Copy: missions now run concurrently, so a client can connect or drop mid-loop.
+    targets = [ws for ws, s in list(active_websockets.items()) if session is None or s == session]
+    if not targets:
         return
     msg = json.dumps(payload)
-    dead_ws = set()
-    # Copy: missions now run concurrently, so a client can connect or drop mid-loop.
-    for ws in list(active_websockets):
+    for ws in targets:
         try:
             await ws.send_str(msg)
         except Exception:  # quiet: a closed socket is dropped from the client set
-            dead_ws.add(ws)
-    active_websockets.difference_update(dead_ws)
+            active_websockets.pop(ws, None)
 
 
 async def handle_telemetry(request):
@@ -150,26 +153,34 @@ async def handle_telemetry(request):
         "name": "Ciel",
         "vitals": vitals,
         "brain": brain,
-        "memory_turns": len(ciel.conversation_history)
+        "memory_turns": len(ciel.history(session_from(request.query.get("session"))))
     })
 
 
 async def handle_clear_memory(request):
-    """Resets the short-term working conversation memory."""
-    ciel.reset_memory()
-    await broadcast_ws({"type": "memory_cleared", "message": "Session memory cleared."})
+    """Resets one HUD tab's working conversation memory (body {"session_id": ...}; none = default)."""
+    try:
+        data = await request.json()
+    except ValueError:
+        data = {}
+    session = session_from(data.get("session_id") if isinstance(data, dict) else None)
+    ciel.reset_memory(session)
+    await broadcast_ws({"type": "memory_cleared", "message": "Session memory cleared."}, session)
     return web.json_response({"status": "cleared", "turns": 0})
 
 
 async def handle_get_memory(request):
-    """Returns active session conversation memory turns."""
-    return web.json_response({
-        "turns": len(ciel.conversation_history),
-        "history": ciel.conversation_history
-    })
+    """Returns one HUD tab's conversation memory turns (?session=...; none = default)."""
+    history = ciel.history(session_from(request.query.get("session")))
+    return web.json_response({"turns": len(history), "history": history})
 
 
 MISSION_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def session_from(value) -> str:
+    """A HUD tab's session id (the mission-id shape), or "default" for callers that name none (6C)."""
+    return value if isinstance(value, str) and MISSION_ID_RE.fullmatch(value) else "default"
 
 
 def mission_id_from(data: dict) -> str:
@@ -193,12 +204,13 @@ async def handle_chat(request):
         if not user_prompt:
             return web.json_response({"error": "Empty prompt"}, status=400)
         mission_id = mission_id_from(data)
+        session = session_from(data.get("session_id"))
 
-        # Broadcast start
-        await broadcast_ws({"type": "chat_received", "prompt": user_prompt, "mission_id": mission_id})
+        # Tell the sending tab's sockets it started (other tabs never see it, 6C)
+        await broadcast_ws({"type": "chat_received", "prompt": user_prompt, "mission_id": mission_id}, session)
 
         # Execute mission with live WS events
-        result = await request.app[MISSION_GATE].run(user_prompt, mission_id)
+        result = await request.app[MISSION_GATE].run(user_prompt, mission_id, session)
         # execute_mission reports mission-level failures as {"error": ...} rather than raising.
         status = 503 if result.get("busy") else 500 if result.get("error") else 200
         return web.json_response(result, status=status)
@@ -248,7 +260,9 @@ async def websocket_handler(request):
     """Maintains a persistent bi-directional connection for live agent pulsing."""
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    active_websockets.add(ws)
+    # The tab names its session in the URL (/ws?session=<id>); its missions use it too.
+    session = session_from(request.query.get("session"))
+    active_websockets[ws] = session
 
     # Send initial welcome telemetry
     await ws.send_str(json.dumps({
@@ -270,16 +284,16 @@ async def websocket_handler(request):
                 if action == "chat":
                     prompt = data.get("prompt", "")
                     mission_id = mission_id_from(data)
-                    await broadcast_ws({"type": "chat_received", "prompt": prompt, "mission_id": mission_id})
+                    await broadcast_ws({"type": "chat_received", "prompt": prompt, "mission_id": mission_id}, session)
                     # Run the mission as a task so this socket keeps answering pings
-                    # while it runs. Results reach every client through broadcast_ws.
-                    task = asyncio.create_task(request.app[MISSION_GATE].run(prompt, mission_id))
+                    # while it runs. Results reach this session's tabs through broadcast_ws.
+                    task = asyncio.create_task(request.app[MISSION_GATE].run(prompt, mission_id, session))
                     ws_missions.add(task)
                     task.add_done_callback(ws_missions.discard)
                 elif action == "ping":
                     await ws.send_str(json.dumps({"type": "pong", "time": asyncio.get_event_loop().time()}))
     finally:
-        active_websockets.discard(ws)
+        active_websockets.pop(ws, None)
 
     return ws
 
@@ -318,8 +332,10 @@ async def telemetry_worker(app):
             await asyncio.sleep(TELEMETRY_INTERVAL_S)
             if active_websockets and get_system_vitals:
                 vitals = await asyncio.to_thread(get_system_vitals, cpu_interval=None)
-                await broadcast_ws({"type": "telemetry", "vitals": vitals,
-                                    "memory_turns": len(ciel.conversation_history)})
+                # Same vitals for every tab; memory_turns is each tab's own (6C).
+                for session in set(active_websockets.values()):
+                    await broadcast_ws({"type": "telemetry", "vitals": vitals,
+                                        "memory_turns": len(ciel.history(session))}, session)
         except asyncio.CancelledError:
             break
         except Exception as e:
