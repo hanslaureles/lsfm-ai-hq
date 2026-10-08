@@ -243,6 +243,10 @@ def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: 
         return entry.encode("utf-8")[:entry_bytes - 3].decode("utf-8", "ignore") + "…"
 
     entries = [cut(e) for e in entries]
+    whole = "\n\n".join(entries)
+    if len(whole.encode("utf-8")) <= budget_bytes:
+        return whole
+    budget_bytes -= len(f"\n\n({len(entries)} entries left out)")  # the note fits too (Codex 8C R1)
     newest_first = list(reversed(range(len(entries))))
     order = ([i for i in newest_first if BOT_DISPATCH.match(entries[i])]
              + [i for i in newest_first if not BOT_DISPATCH.match(entries[i])])
@@ -254,7 +258,7 @@ def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: 
             used += size
     text = "\n\n".join(entries[i] for i in sorted(kept))
     left_out = len(entries) - len(kept)
-    return f"{text}\n\n({left_out} earlier entries left out)" if left_out else text
+    return f"{text}\n\n({left_out} entries left out)" if left_out else text
 
 
 def execute_evening_rollup(sync_obsidian: bool = True) -> dict:

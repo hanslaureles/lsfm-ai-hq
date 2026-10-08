@@ -766,8 +766,8 @@ class TestRollupDispatchCap(unittest.TestCase):
         entries = _day_of_dispatches()
         text = sakura_engine.cap_dispatches(entries)
         kept, note = text.rsplit("\n\n", 1)
-        self.assertLessEqual(len(kept.encode("utf-8")), 12_000)
-        self.assertRegex(note, r"^\(\d+ earlier entries left out\)$")
+        self.assertLessEqual(len(text.encode("utf-8")), 12_000)  # the note counts too (Codex 8C R1)
+        self.assertRegex(note, r"^\(\d+ entries left out\)$")
         self.assertTrue(kept.endswith(entries[-1]))          # the newest entry is kept, last
         self.assertNotIn("entry 0\n", kept)                    # the oldest one is not
         positions = [kept.index(f"entry {i}\n") for i in range(60, 67)]
@@ -783,9 +783,21 @@ class TestRollupDispatchCap(unittest.TestCase):
         text = sakura_engine.cap_dispatches(entries)
         for header in ("Sakura Dispatch", "Vault job: reports mirrored", "Kazuha Dispatch"):
             self.assertIn(header, text)
-        self.assertLessEqual(len(text.rsplit("\n\n", 1)[0].encode("utf-8")), 12_000)
+        self.assertLessEqual(len(text.encode("utf-8")), 12_000)
+        self.assertIn("entries left out)", text)
+        self.assertNotIn("earlier", text.rsplit("\n\n", 1)[1])  # a bot entry can displace a newer one
         self.assertLess(text.index("Sakura Dispatch"), text.index("Kazuha Dispatch"))  # still time order
         self.assertTrue(text.rsplit("\n\n", 1)[0].endswith(entries[-1]))  # newest AI entry still in
+
+    def test_the_note_fits_inside_the_budget(self):
+        # Codex 8C R1: one old entry plus eight 1,498-byte entries came to 12,028 bytes.
+        import sakura_engine
+        entries = ["### [08:00] Claude: old\nshort"] + [
+            f"### [09:0{i}] Claude: entry {i}\n" + "z" * (1_498 - len(f"### [09:0{i}] Claude: entry {i}\n"))
+            for i in range(8)]
+        text = sakura_engine.cap_dispatches(entries)
+        self.assertLessEqual(len(text.encode("utf-8")), 12_000)
+        self.assertTrue(text.endswith("entries left out)"))
 
     def test_one_huge_entry_is_cut_not_dropped_whole(self):
         import sakura_engine
