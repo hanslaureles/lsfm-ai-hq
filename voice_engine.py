@@ -390,14 +390,14 @@ def _transcribe_openai(audio_bytes: bytes, filename: str = "input.wav", prompt: 
 def transcribe_audio(audio_bytes: bytes, filename: str = "input.wav", prompt: str = None) -> dict:
     """
     Main transcription pipeline:
-    1. Preprocesses and normalizes audio via FFmpeg (16kHz mono WAV + loudness leveling).
+    1. Converts the audio with FFmpeg to 16 kHz mono WAV (fixed gain, 80 Hz-7.5 kHz band-pass; no loudness normalisation).
     2. Primary tier: Groq Whisper Large v3 Turbo (cloud LPU transcription).
     3. Fallback tier: OpenAI Whisper-1 (enterprise reliability fallback).
     """
     import time
     t0 = time.time()
 
-    # Preprocessing & normalization
+    # FFmpeg conversion to 16 kHz mono
     normalized_bytes = normalize_audio_for_transcription(audio_bytes)
     norm_filename = "normalized.wav"
 

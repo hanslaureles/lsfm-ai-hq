@@ -47,7 +47,7 @@ Scheduled work: Sakura posts a briefing once a day after 08:00; Yunjin runs a we
 `ciel_server.py` (aiohttp, `localhost:8000`) serves the HUD over REST and WebSocket and runs missions through `ciel_orchestrator.py`.
 
 - **Routing:** keyword fast paths for weather, web search, memory reset and appraisals; otherwise an LLM router returns a JSON plan (general knowledge, Obsidian lookup, or delegation to the five agents).
-- **Voice in:** the HUD's WebM/Opus recording is normalized by FFmpeg (16 kHz mono, `volume=1.8,highpass=f=80,lowpass=f=7500`) and transcribed by Groq `whisper-large-v3-turbo`.
+- **Voice in:** the HUD's WebM/Opus recording is converted by FFmpeg (16 kHz mono, `volume=1.8,highpass=f=80,lowpass=f=7500`) and transcribed by Groq `whisper-large-v3-turbo`.
 - **Voice out:** Edge TTS speaks a Japanese line (`ja-JP-NanamiNeural`), a 350 ms pause, then English (`en-US-AvaNeural`), through a "Thought Acceleration" filter: high-pass 120 Hz, a 3.5 kHz presence boost and a short double echo.
 - **Async runtime:** every blocking call (LLMs, weather, web search, psutil, Obsidian, git, Gmail, the PDF build) runs in a worker thread; tool and LLM calls have per-call timeouts, and independent agents run concurrently. At most two missions run at once and up to eight more queue; beyond that a mission is refused (HTTP 503 over REST, a `ciel_error` event over WebSocket).
 - **Honest failures:** each agent ends as `done`, `attention` or `failed` with the real error; a timeout reads "timed out after N s", never a quiet success.
