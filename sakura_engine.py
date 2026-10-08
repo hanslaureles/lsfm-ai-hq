@@ -234,6 +234,8 @@ def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: 
     2026-10-02 went through.
     ponytail: bytes, not tokens (stdlib has no tokenizer); bytes ÷ 4 ≈ tokens.
     """
+    if budget_bytes < 64:  # Codex 8C round 2: the "(N entries left out)" note alone must fit
+        raise ValueError(f"budget_bytes={budget_bytes} is too small; use at least 64")
     if not entries:
         return "No prior dispatches recorded today."
 

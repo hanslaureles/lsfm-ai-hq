@@ -799,6 +799,17 @@ class TestRollupDispatchCap(unittest.TestCase):
         self.assertLessEqual(len(text.encode("utf-8")), 12_000)
         self.assertTrue(text.endswith("entries left out)"))
 
+    def test_every_accepted_budget_is_kept_and_a_tiny_one_refused(self):
+        # Codex 8C round 2: budget_bytes=20 returned a 22-byte note.
+        import sakura_engine
+        entries = [f"### [09:{i:02d}] Claude: {i}\n" + "é" * (i * 7) for i in range(40)]
+        for budget in range(100, 2_000, 37):
+            with self.subTest(budget=budget):
+                text = sakura_engine.cap_dispatches(entries, budget_bytes=budget, entry_bytes=60)
+                self.assertLessEqual(len(text.encode("utf-8")), budget)
+        with self.assertRaises(ValueError):
+            sakura_engine.cap_dispatches(["x" * 10, "y" * 10], budget_bytes=20)
+
     def test_one_huge_entry_is_cut_not_dropped_whole(self):
         import sakura_engine
         text = sakura_engine.cap_dispatches(["### [08:07] Sakura Dispatch\n" + "y" * 17_000])
