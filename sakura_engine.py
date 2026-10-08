@@ -222,6 +222,41 @@ def generate_morning_briefing() -> str:
     return res["briefing_text"]
 
 
+BOT_DISPATCH = re.compile(r"### \[[^\]]+\] (Sakura|Chaewon|Yunjin|Kazuha|Eunchae|Vault job)\b")
+
+
+def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: int = 1_500) -> str:
+    """
+    The day's dispatches for the rollup prompt, at most budget_bytes, shown in time order,
+    each cut to entry_bytes. The bots' own dispatches (and the vault job) are kept first,
+    then the newest of the rest (the AI assistants' log entries). 8C: on 2026-10-07 the
+    uncapped 46 KB made Groq refuse the request (HTTP 413) on every model; 18 KB on
+    2026-10-02 went through.
+    ponytail: bytes, not tokens (stdlib has no tokenizer); bytes ÷ 4 ≈ tokens.
+    """
+    if not entries:
+        return "No prior dispatches recorded today."
+
+    def cut(entry: str) -> str:
+        if len(entry.encode("utf-8")) <= entry_bytes:
+            return entry
+        return entry.encode("utf-8")[:entry_bytes - 3].decode("utf-8", "ignore") + "…"
+
+    entries = [cut(e) for e in entries]
+    newest_first = list(reversed(range(len(entries))))
+    order = ([i for i in newest_first if BOT_DISPATCH.match(entries[i])]
+             + [i for i in newest_first if not BOT_DISPATCH.match(entries[i])])
+    kept, used = set(), 0
+    for i in order:
+        size = len(entries[i].encode("utf-8")) + 2  # the "\n\n" joining it
+        if used + size <= budget_bytes:
+            kept.add(i)
+            used += size
+    text = "\n\n".join(entries[i] for i in sorted(kept))
+    left_out = len(entries) - len(kept)
+    return f"{text}\n\n({left_out} earlier entries left out)" if left_out else text
+
+
 def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
     """
     Executes the complete Sakura Evening Standup & Daily Rollup:
@@ -289,7 +324,7 @@ def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
     app_count = len(app_lines)
 
     # 5. LLM Synthesis
-    dispatches_text = "\n\n".join(obsidian_dispatches) if obsidian_dispatches else "No prior dispatches recorded today."
+    dispatches_text = cap_dispatches(obsidian_dispatches)
     git_text = "\n".join(f"  • {c}" for c in git_commits) if git_commits else "  • No commits recorded today"
 
     prompt = f"""

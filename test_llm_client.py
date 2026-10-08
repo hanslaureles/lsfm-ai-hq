@@ -372,12 +372,14 @@ class _Json:
         return self.body
 
 
-def _http_error(code, retry_after=None):
+def _http_error(code, retry_after=None, body=None):
     import email.message
+    import io
     headers = email.message.Message()
     if retry_after is not None:
         headers["Retry-After"] = retry_after
-    return llm_client.urllib.error.HTTPError("https://api.groq.com", code, "err", headers, None)
+    fp = io.BytesIO(body) if body is not None else None
+    return llm_client.urllib.error.HTTPError("https://api.groq.com", code, "err", headers, fp)
 
 
 class TestStructuredResult(unittest.TestCase):
@@ -445,6 +447,24 @@ class TestStructuredResult(unittest.TestCase):
         self.assertEqual(r.fallback_chain[-1], "gemini/gemini-3.6-flash")
         self.assertEqual(len(r.fallback_chain), n + 1)
         self.assertTrue(all(step.startswith("groq/") for step in r.fallback_chain[:-1]))
+
+    def test_payload_too_large_leaves_groq_at_once_and_says_why(self):
+        # 8C: on 2026-10-07 the rollup got a 413 from all three Groq models in turn; the same
+        # payload fails on every Groq model, and the reason Groq gave was thrown away.
+        reason = b'{"error":{"message":"Request too large for model qwen: tokens per minute (TPM): Limit 6000, Requested 12100"}}'
+        self.groq(_http_error(413, body=reason))
+        self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("from gemini")])))
+        printed = self.enterContext(mock.patch("builtins.print"))
+        r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertEqual(self.sent, ["qwen/qwen3.8-27b"])  # one Groq request, not three
+        self.assertEqual((r.text, r.provider), ("from gemini", "gemini"))
+        self.assertTrue(any("Limit 6000" in str(c) for c in printed.call_args_list), printed.call_args_list)
+
+    def test_a_server_error_still_tries_the_next_groq_model(self):
+        self.groq(_http_error(500), _Json("ok"))
+        r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual((r.text, r.provider), ("ok", "groq"))
 
     def test_yunjin_tries_gemini_first(self):
         self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("design notes")])))

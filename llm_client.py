@@ -307,6 +307,15 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
                     else:
                         print(f"[Groq 429] {cand_model} rate limited, switching to next Groq model...")
                         break
+                elif e.code == 413:
+                    # 8C: too large for Groq; every Groq model gets the same payload, so leave
+                    # Groq now and keep the reason Groq gives (its limit) for bots.log.
+                    try:
+                        reason = e.read().decode("utf-8", "replace")[:300]
+                    except Exception:  # quiet: no body to read
+                        reason = ""
+                    print(f"[Groq 413] {cand_model}: payload too large, skipping the other Groq models. {reason}")
+                    raise RuntimeError(f"Groq refused the request as too large (413): {reason}") from e
                 else:
                     print(f"[Groq Error] {cand_model}: {e}")
                     break

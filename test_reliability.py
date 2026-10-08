@@ -751,5 +751,70 @@ class GroqRetryAfterTest(unittest.TestCase):
         self.assertEqual(self.call("soon"), [2.0 + 0.2])
 
 
+def _day_of_dispatches(n=67, size=690, big_first=17_000):
+    """The 2026-10-07 shape: 67 entries, ~46 KB, one early entry far over the per-entry cap."""
+    entries = [f"### [{8 + i // 6:02d}:{(i * 7) % 60:02d}] Claude: entry {i}\n" + "x" * size for i in range(n)]
+    entries[1] = "### [08:07] Sakura Dispatch\n" + "y" * big_first
+    return entries
+
+
+class TestRollupDispatchCap(unittest.TestCase):
+    """8C: Groq refused the 2026-10-07 rollup (46 KB of dispatches, HTTP 413 on every Groq model)."""
+
+    def test_a_busy_day_fits_the_budget_newest_kept_in_time_order(self):
+        import sakura_engine
+        entries = _day_of_dispatches()
+        text = sakura_engine.cap_dispatches(entries)
+        kept, note = text.rsplit("\n\n", 1)
+        self.assertLessEqual(len(kept.encode("utf-8")), 12_000)
+        self.assertRegex(note, r"^\(\d+ earlier entries left out\)$")
+        self.assertTrue(kept.endswith(entries[-1]))          # the newest entry is kept, last
+        self.assertNotIn("entry 0\n", kept)                    # the oldest one is not
+        positions = [kept.index(f"entry {i}\n") for i in range(60, 67)]
+        self.assertEqual(positions, sorted(positions))         # time order
+
+    def test_the_bots_own_dispatches_are_kept_first(self):
+        # The bots post early; on 2026-10-08 newest-first dropped Sakura's morning dispatch.
+        import sakura_engine
+        entries = _day_of_dispatches()
+        entries.insert(0, "### [10:28:59] Sakura Dispatch\n- Morning Launchpad Executed")
+        entries.insert(3, "### [10:34:30] Vault job: reports mirrored\n- copied HANDOFF.md")
+        entries.insert(5, "### [10:33:29] Kazuha Dispatch\n- Applied AI Research Scout")
+        text = sakura_engine.cap_dispatches(entries)
+        for header in ("Sakura Dispatch", "Vault job: reports mirrored", "Kazuha Dispatch"):
+            self.assertIn(header, text)
+        self.assertLessEqual(len(text.rsplit("\n\n", 1)[0].encode("utf-8")), 12_000)
+        self.assertLess(text.index("Sakura Dispatch"), text.index("Kazuha Dispatch"))  # still time order
+        self.assertTrue(text.rsplit("\n\n", 1)[0].endswith(entries[-1]))  # newest AI entry still in
+
+    def test_one_huge_entry_is_cut_not_dropped_whole(self):
+        import sakura_engine
+        text = sakura_engine.cap_dispatches(["### [08:07] Sakura Dispatch\n" + "y" * 17_000])
+        self.assertLessEqual(len(text.encode("utf-8")), 1_500)
+        self.assertTrue(text.startswith("### [08:07] Sakura Dispatch") and text.endswith("…"))
+
+    def test_a_quiet_day_is_sent_whole(self):
+        import sakura_engine
+        entries = _day_of_dispatches(n=4, size=200, big_first=200)
+        self.assertEqual(sakura_engine.cap_dispatches(entries), "\n\n".join(entries))
+
+    def test_no_dispatches_keeps_the_old_message(self):
+        import sakura_engine
+        self.assertEqual(sakura_engine.cap_dispatches([]), "No prior dispatches recorded today.")
+
+    def test_the_rollup_prompt_on_the_10_07_log_stays_small(self):
+        import sakura_engine
+        log = "# Daily Log\n\n## Agent Activity\n\n" + "\n\n".join(_day_of_dispatches())
+        client = mock.Mock()
+        client.ensure_daily_log.return_value = "05 Daily Logs/2026-10-07.md"
+        client.get_file.return_value = log
+        prompts = []
+        with mock.patch.object(sakura_engine, "ObsidianClient", return_value=client), \
+                mock.patch.object(sakura_engine, "query_llm", side_effect=lambda p, **kw: prompts.append(p) or "ok"):
+            sakura_engine.execute_evening_rollup(sync_obsidian=False)
+        self.assertGreater(len(log.encode("utf-8")), 46_000)
+        self.assertLess(len(prompts[0].encode("utf-8")), 16_000)  # 12 KB of dispatches + the template
+
+
 if __name__ == "__main__":
     unittest.main()
