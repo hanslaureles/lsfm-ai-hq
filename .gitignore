@@ -37,3 +37,9 @@ memory/health/
 # Single-instance lock and PID of the running bots (instance_lock.py, 6B)
 memory/lsfm-bots.lock
 memory/lsfm-bots.pid
+# Once-a-day post state (daily_once.claim writes the date, via a .tmp file); a missing file
+# means "not posted yet", so a fresh clone needs none of them
+memory/last_*_date.txt
+memory/last_*_date.txt.tmp
+# Yunjin's generated portfolio audits (yunjin_engine.AUDITS_DIR), like applications/
+portfolio_audits/

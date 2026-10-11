@@ -1,30 +1,30 @@
 # LE SSERAFIM AI HQ — Complete Operational Guide
 
-> **Ecosystem:** Zero-Cost Multi-Agent Personal AI Squad for Hans Aaron Laureles  
+> **Ecosystem:** a personal 5-agent AI team for Hans Aaron Laureles  
 > **Workspace:** the repository root (all paths below are relative to it)  
 > **Target Hardware:** Intel Core i5-12400F · AMD Radeon RX 6600 XT (8GB VRAM) · 16GB RAM  
 > **Interface:** Private Discord Server (**LSFM HQ**)
 
 ---
 
-## 🌸 1. Squad Architecture & Agent Pillars
+## 🌸 1. Team Architecture & Agent Pillars
 
 The system distributes specialized cognitive domains across 5 distinct AI agents, each with dedicated Discord bot tokens, custom avatars, and channel boundaries:
 
 | Agent / Pillar | Dedicated Channels | Core Capabilities |
 |---|---|---|
 | 📖 **00 · COMMAND DIRECTORY** | `#all-commands`<br>`#commands-chat` | Universal command reference cheatsheets & shared playground where any agent can be commanded |
-| 🌸 **01 · SAKURA — COMMAND** | `#command-center`<br>`#daily-briefing` | Master roadmap alignment, daily morning briefings, cross-squad pipeline dispatch (`!apply`), brain mode control (`!mode`), and 1-click reaction approvals |
+| 🌸 **01 · SAKURA — COMMAND** | `#command-center`<br>`#daily-briefing` | Master roadmap alignment, daily morning briefings, cross-agent pipeline dispatch (`!apply`), brain mode control (`!mode`), and 1-click reaction approvals |
 | ⭐ **03 · CHAEWON — CAREER & JOBS** | `#job-tailoring`<br>`#application-docs` | URL scraping, ATS keyword alignment, fit scoring (1–100%), tailored resume bullets, and human cover letters (`!tailor`) |
 | 🎨 **04 · YUNJIN — PORTFOLIO & UX** | `#portfolio-audits`<br>`#project-status` | Automated portfolio health audits (`!audit`), case study critiques (`!critique`), and strategic portfolio project curation |
 | 💻 **05 · KAZUHA — CODE & BUILD** | `#frontend-lab`<br>`#git-log` | Code health & token adherence inspection (`!inspect`), accessible UI component generation (`!component`), git monitoring |
-| 🛡️ **06 · EUNCHAE — GUARDIAN** | `#pc-vitals`<br>`#system-alerts` | Real-time PC vitals (`!vitals`: CPU, RAM, Disk, Uptime), high-load alerts, squad gateway watchdog |
+| 🛡️ **06 · EUNCHAE — GUARDIAN** | `#pc-vitals`<br>`#system-alerts` | Real-time PC vitals (`!vitals`: CPU, RAM, Disk, Uptime), high-load alerts, bot gateway watchdog |
 
 ---
 
 ## 🧠 2. Hybrid Dual-Brain Architecture (Zero-Cost & Gaming-Safe)
 
-The squad is powered by a dynamic inference router ([`llm_client.py`](llm_client.py)) supporting three operational modes:
+The team is powered by a dynamic inference router ([`llm_client.py`](llm_client.py)) supporting three operational modes:
 
 ### Primary Engines
 1. **Groq Cloud Engine (`qwen/qwen3.8-27b`):**
@@ -43,9 +43,9 @@ The squad is powered by a dynamic inference router ([`llm_client.py`](llm_client
 
 ## 🎮 3. 1-Click Hardware & Gaming Protection
 
-Hans's PC does not need to run 24/7. When you want to use the squad or when you want to game, use these two scripts:
+Hans's PC does not need to run 24/7. When you want to use the team or when you want to game, use these two scripts:
 
-### 🚀 Starting the Squad ([`start_squad.bat`](start_squad.bat))
+### 🚀 Starting the Bots ([`start_squad.bat`](start_squad.bat))
 Double-click `start_squad.bat` to:
 1. Automatically verify and launch the local Ollama background server on your RX 6600 XT (if not already running).
 2. Connect all 5 LE SSERAFIM Discord bots to `LSFM HQ`.
@@ -58,7 +58,7 @@ Double-click `stop_squad.bat` before launching a game to:
 
 ---
 
-## 🤝 4. Multi-Agent Squad Collaboration Pipeline (`!apply`)
+## 🤝 4. Multi-Agent Team Collaboration Pipeline (`!apply`)
 
 When you discover an exciting job posting, run:
 ```text
@@ -79,11 +79,11 @@ When you discover an exciting job posting, run:
 
 ## ⏰ 5. Automated Daily Rituals & Background Cron
 
-Native background loops (`discord.ext.tasks`) automatically handle squad routines:
+Native background loops (`discord.ext.tasks`) automatically handle team routines:
 
 1. **🌅 Daily Executive Morning Briefing (`#daily-briefing`)**:
    - Managed by **Sakura**. Dispatches once per calendar day at or after 08:00 AM (or immediately upon starting your PC).
-   - Highlights active sprint priorities, total applications in the archive, and squad readiness.
+   - Highlights active sprint priorities, total applications in the archive, and team readiness.
 2. **🎨 Weekly Portfolio Health Audit (`#portfolio-audits`)**:
    - Managed by **Yunjin**. Automatically scans `portfolio-site/` every 7 days, checking image links, CSS tokens, and recruiter heuristics.
 3. **🛡️ PC Vitals Watchdog & High Load Alerts (`#system-alerts` & `#pc-vitals`)**:
@@ -96,14 +96,14 @@ Native background loops (`discord.ext.tasks`) automatically handle squad routine
 ## 🕹️ 6. Discord Command Quick Reference
 
 ### 🌸 Sakura (Chief of Staff) — `#command-center`
-- `!apply [URL or text]` — Dispatches full multi-agent squad collaboration pipeline.
+- `!apply [URL or text]` — Dispatches full multi-agent team collaboration pipeline.
 - `!inbox` (or `!triage`) — Smart Executive Inbox Triage (use `!inbox all` for deep scan).
 - `!clean` (or `!sweep`) — Quick Inbox Zero sweep of up to 50 unread promo blasts.
 - `!cleanse` (or `!mass_sort`) — 1-time mass cleanse across the entire primary inbox (up to 250 emails).
 - `!receipts` (or `!expenses`) — Scans recent banking alerts, e-wallets (GCash/Maya), and order receipts with amounts.
 - `!briefing` (or `!plan`) — Today's executive morning briefing & sprint priorities.
 - `!goals` — Displays active career roadmap and target companies.
-- `!mode [auto|cloud|local]` — Switches the squad's active AI inference engine.
+- `!mode [auto|cloud|local]` — Switches the team's active AI inference engine.
 - `!brain` — Shows real-time AI brain diagnostic and hardware utilization.
 - `!ask [question]` — Strategic executive coaching and interview guidance.
 
@@ -133,7 +133,7 @@ Native background loops (`discord.ext.tasks`) automatically handle squad routine
 
 The portfolio's Agent Overview panel reads one file, `portfolio-site/data/status.json`. Every value in it comes from this machine, in three steps:
 
-1. **Heartbeats (`health_recorder.py`)**: each bot calls `health_recorder.attach(bot, "<name>")`, which rewrites `memory/health/<name>.json` on `on_ready` and then every 60 s (`HEARTBEAT_INTERVAL_S`). This works whether the squad runs through `run_all.py` or one bot runs alone. A file that stops changing is how a dead bot shows up.
+1. **Heartbeats (`health_recorder.py`)**: each bot calls `health_recorder.attach(bot, "<name>")`, which rewrites `memory/health/<name>.json` on `on_ready` and then every 60 s (`HEARTBEAT_INTERVAL_S`). This works whether the bots run through `run_all.py` or one bot runs alone. A file that stops changing is how a dead bot shows up.
 2. **LLM latency (`bench/bench_telemetry.py`)**: sends one fixed prompt per agent through the same `llm_client` dispatcher the bots use and records p50 / p95 per agent. Live runs write `bench/results/YYYY-MM-DD-telemetry.{json,md}`; `--mock` needs no keys or network and never writes into `bench/results`.
    ```bash
    python bench/bench_telemetry.py            # live, 10 runs per agent

@@ -153,22 +153,22 @@ async def on_message(message):
     lower = clean_content.lower()
     loop = asyncio.get_running_loop()
 
-    # 1. Git Sentinel conversational triggers
+    # 1. Git review conversational triggers
     if any(k in lower for k in ["review code", "review diff", "code review", "review my changes", "review changes", "check diff"]):
-        status_msg = await message.reply("🔍 **Kazuha Sentinel is performing architectural code & security review...**")
+        status_msg = await message.reply("🔍 **Kazuha is reviewing the code and security of your changes...**")
         async with message.channel.typing():
             res = await loop.run_in_executor(None, kazuha_review_changes, False)
         verdict_color = 0x57F287 if res["score"] >= 90 else (0xFEE75C if res["score"] >= 70 else 0xED4245)
         if res.get("security_alerts"):
             verdict_color = 0xED4245
         embed = discord.Embed(
-            title="⚔️ Kazuha Sentinel — Code & Security Review",
+            title="⚔️ Kazuha — Code & Security Review",
             description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
                         f"🌿 Branch: `{res['info']['branch']}`\n\n"
                         f"{clip(res['review'], REVIEW_MAX)}",
             color=verdict_color
         )
-        embed.set_footer(text="Kazuha • Autonomous Git & PR Sentinel")
+        embed.set_footer(text="Kazuha • Local Git Review")
         await status_msg.delete()
         await message.reply(embed=embed)
         return
@@ -197,7 +197,7 @@ async def on_message(message):
             description=status,
             color=0x00B4D8
         )
-        embed.set_footer(text="Kazuha • Autonomous Git Sentinel")
+        embed.set_footer(text="Kazuha • Local Git Review")
         await message.reply(embed=embed)
         return
 
@@ -448,26 +448,26 @@ async def ping(ctx):
 
 @bot.command(name="git")
 async def git_command(ctx, subcmd: str = None, flag: str = None):
-    """Git Sentinel umbrella command: !git, !git review, !git commit, !git pr"""
+    """Git review umbrella command: !git, !git review, !git commit, !git pr"""
     sub = (subcmd or "").lower()
     loop = asyncio.get_running_loop()
 
     if sub == "review":
         staged_only = flag in ["--staged", "-s", "staged"]
-        status_msg = await ctx.reply("🔍 **Kazuha Sentinel is performing architectural code & security review...**")
+        status_msg = await ctx.reply("🔍 **Kazuha is reviewing the code and security of your changes...**")
         async with ctx.typing():
             res = await loop.run_in_executor(None, kazuha_review_changes, staged_only)
         verdict_color = 0x57F287 if res["score"] >= 90 else (0xFEE75C if res["score"] >= 70 else 0xED4245)
         if res.get("security_alerts"):
             verdict_color = 0xED4245
         embed = discord.Embed(
-            title="⚔️ Kazuha Sentinel — Code & Security Review",
+            title="⚔️ Kazuha — Code & Security Review",
             description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
                         f"🌿 Branch: `{res['info']['branch']}`\n\n"
                         f"{clip(res['review'], REVIEW_MAX)}",
             color=verdict_color
         )
-        embed.set_footer(text="Kazuha • Autonomous Git & PR Sentinel")
+        embed.set_footer(text="Kazuha • Local Git Review")
         await status_msg.delete()
         await ctx.reply(embed=embed)
         return
@@ -503,18 +503,18 @@ async def git_command(ctx, subcmd: str = None, flag: str = None):
             description=f"{res['body'][:3800]}",
             color=0x00B4D8
         )
-        embed.set_footer(text="Kazuha • GitHub Pull Request Sentinel")
+        embed.set_footer(text="Kazuha • Pull Request Draft")
         await ctx.reply(embed=embed)
         return
 
     # Default: workspace status
     status_text = get_git_status()
     embed = discord.Embed(
-        title="📁 Workspace Git Status — Sentinel Telemetry",
+        title="📁 Workspace Git Status",
         description=f"{status_text}\n\n*Commands: `!review`, `!commit`, `!pr`, `!git review --staged`*",
         color=0x00B4D8
     )
-    embed.set_footer(text="Kazuha • Antigravity Workspace Sentinel")
+    embed.set_footer(text="Kazuha • Local Git Review")
     await ctx.reply(embed=embed)
 
 @bot.command(name="review")

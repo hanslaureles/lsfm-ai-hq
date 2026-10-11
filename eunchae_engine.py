@@ -104,7 +104,7 @@ Your job is to deliver a quick, fun, but accurate PC Health & Vitals checkup to 
 ### INSTRUCTIONS:
 Present these vitals with high energy, clarity, and charm.
 - Confirm whether the machine is running smoothly.
-- Give a quick status on the squad (Sakura, Chaewon, Yunjin, Kazuha).
+- Give a quick status on the team (Sakura, Chaewon, Yunjin, Kazuha).
 - Keep it concise and formatted with clean Discord markdown.
 """
     return query_llm(prompt, temperature=0.5, agent="eunchae")
@@ -130,14 +130,14 @@ Hans is chatting with you in the #pc-vitals or #system-alerts channel.
 
 ### INSTRUCTIONS:
 - Reply with Eunchae's signature bright, cheerful, confident maknae energy.
-- You guard both Hans's PC hardware AND the quality of all squad deliverables.
+- You guard both Hans's PC hardware AND the quality of all team deliverables.
 - Keep it concise for Discord.
 """
     return query_llm(prompt, temperature=0.5, agent="eunchae")
 
 
 # ==============================================================================
-# SQUAD QUALITY ASSURANCE (QA) & DEFECT INSPECTOR
+# TEAM QUALITY ASSURANCE (QA) & DEFECT INSPECTOR
 # ==============================================================================
 PLACEHOLDER_REGEX = re.compile(r"(\[(?:Company|Client|Your Name|Name|Phone|Email|Insert|Role|Address)\]|Lorem Ipsum|\bTODO\b)", re.IGNORECASE)
 
@@ -260,11 +260,11 @@ def audit_application_package(
 
     prompt = f"""
 You are "Eunchae", the System Guardian & Quality Assurance (QA) Inspector for Hans Aaron Laureles.
-Your job is to perform a rigorous Quality Assurance Gatekeeper Audit on the squad's deliverables for:
+Your job is to perform a rigorous Quality Assurance Gatekeeper Audit on the team's deliverables for:
 - Role: {role}
 - Company: {company}
 
-### SQUAD DELIVERABLES TO AUDIT:
+### TEAM DELIVERABLES TO AUDIT:
 1. **Chaewon (Resume & Cover Letter Report)**:
 ```
 {report_excerpt}
@@ -275,7 +275,7 @@ Your job is to perform a rigorous Quality Assurance Gatekeeper Audit on the squa
 {tech_pitch_excerpt}
 ```
 
-### KNOWN SQUAD FAILURE HEURISTICS (FROM AGENT-MEMORY):
+### PAST LESSONS (FROM MEMORY CORE):
 {memory_context}
 
 ### DETERMINISTIC SCAN FINDINGS:
@@ -367,7 +367,7 @@ def audit_file_qa(file_path: Path) -> dict:
     unique_ph = list(set(placeholders))
 
     prompt = f"""
-You are "Eunchae", Squad QA Inspector for Hans Aaron Laureles.
+You are "Eunchae", Team QA Inspector for Hans Aaron Laureles.
 Perform a Quality Assurance inspection on the document: `{file_path.name}`.
 
 ### DOCUMENT CONTENT:
@@ -583,7 +583,7 @@ def test_code_file(file_path_str: str) -> dict:
 
 def check_obsidian_heartbeat() -> dict:
     """
-    Cron 5: Obsidian Brain Port 27124 Heartbeat & Host Telemetry Sentinel.
+    Cron 5: Obsidian Brain Port 27124 Heartbeat & Host Telemetry Check.
     Probes port 27124 REST API, checks vault filesystem integrity, and pairs with host vitals.
     """
     from obsidian_client import ObsidianClient

@@ -1,5 +1,5 @@
 """
-Obsidian Second Brain Client for LSFM Multi-Agent Swarm
+Obsidian Second Brain Client for LSFM AI HQ
 Enables Sakura, Chaewon, Yunjin, Kazuha, and Eunchae to read, query,
 and log operational data directly into the user's Obsidian vault.
 Reads try the Local REST API first and fall back to the vault on disk. Writes go

@@ -957,6 +957,51 @@ def generate_tailored_pdf_package(tailored_dict: Dict[str, Any], company: str, r
     }
 
 
+# Strings that change on every build without the page changing: the browser names its
+# version in /Creator and /Producer, and stamps /CreationDate and /ModDate.
+_PDF_BUILD_STAMP = re.compile(rb"/(?:Creator|Producer|CreationDate|ModDate) ?\((?:\\.|[^\\)])*\)")
+
+PORTFOLIO_SYNC_TEXT = {
+    "copied": "✅ updated",
+    "unchanged": "✅ already current (same content, not rewritten)",
+    "skipped": "⏭️ skipped",
+}
+
+
+def pdf_content_key(data: bytes) -> bytes:
+    """
+    The PDF without its build stamps and its cross-reference table (byte offsets that move
+    when a stamp changes length). Two builds of the same resume have the same key.
+    """
+    data = _PDF_BUILD_STAMP.sub(b"", data)
+    cut = data.rfind(b"\nxref")
+    return data[:cut] if cut != -1 else data[:data.rfind(b"startxref")]
+
+
+def sync_pdf_copy(src: Path, dest: Path) -> str:
+    """
+    Copy src over dest unless only the build stamps differ. The Sunday rebuild used to
+    rewrite portfolio-site's committed resume every week, leaving that repo dirty with
+    a 17-byte Edge-version change (audit 2026-10-12, F4).
+    Returns "copied", "unchanged" or "failed: <reason>".
+    """
+    import shutil
+    try:
+        if dest.is_file() and pdf_content_key(dest.read_bytes()) == pdf_content_key(src.read_bytes()):
+            return "unchanged"
+        shutil.copy2(src, dest)
+        return "copied"
+    except OSError as e:
+        print(f"⚠️ [PDF Engine] Portfolio sync error: {e}", flush=True)
+        return f"failed: {type(e).__name__}"
+
+
+def describe_portfolio_sync(res: Dict[str, Any]) -> str:
+    """compile_master_resume's portfolio_sync as a short line for the Discord embeds."""
+    status = res.get("portfolio_sync", "skipped")
+    return PORTFOLIO_SYNC_TEXT.get(status, f"⚠️ {status}")
+
+
 def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, sync_obsidian: bool = True) -> Dict[str, Any]:
     """
     Compiles 1-page Master ATS Vector Resume PDF:
@@ -1007,11 +1052,9 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
     portfolio_dir = BASE_DIR.parent / "portfolio-site"
     portfolio_target = "Hans_Laureles_Resume.pdf" if (portfolio_dir / "Hans_Laureles_Resume.pdf").exists() else f"{slug_name}_Resume.pdf"
     portfolio_pdf = portfolio_dir / portfolio_target
-    if sync_portfolio and portfolio_dir.exists():
-        try:
-            shutil.copy2(master_pdf, portfolio_pdf)
-        except Exception as e:
-            print(f"⚠️ [PDF Engine] Portfolio sync error: {e}")
+    portfolio_sync = "skipped"
+    if sync_portfolio:
+        portfolio_sync = sync_pdf_copy(master_pdf, portfolio_pdf) if portfolio_dir.exists() else "no portfolio-site folder"
 
     # 2. Archive timestamped copy
     archive_pdf = None
@@ -1037,7 +1080,7 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
                     f"Artifact: {master_pdf.name} ({size_kb} KB)",
                     "Typography: system sans-serif stack, selectable vector text",
                     "Geometry: single-page Letter layout",
-                    f"Synchronized to {portfolio_pdf.name if sync_portfolio else 'Skipped'}",
+                    f"Portfolio copy ({portfolio_pdf.name}): {PORTFOLIO_SYNC_TEXT.get(portfolio_sync, portfolio_sync)}",
                     f"Archived copy: {archive_pdf.name if archive_pdf else 'Skipped'}"
                 ]
             )
@@ -1048,7 +1091,8 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
     return {
         "success": True,
         "pdf_path": master_pdf,
-        "portfolio_pdf": portfolio_pdf if sync_portfolio else None,
+        "portfolio_pdf": portfolio_pdf if portfolio_sync in ("copied", "unchanged") else None,
+        "portfolio_sync": portfolio_sync,
         "archive_pdf": archive_pdf,
         "size_kb": size_kb,
         "obsidian_synced": obsidian_synced,

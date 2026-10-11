@@ -1,6 +1,7 @@
 import os
 import re
 import datetime
+import subprocess
 import warnings
 from pathlib import Path
 from dotenv import load_dotenv
@@ -11,6 +12,19 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 MEMORY_DIR = BASE_DIR / "memory"
+PROJECTS_DIR = BASE_DIR.parent
+# Same list as vault_daily.REPOS (test_vault_daily checks it); vault_daily is not in the public export.
+ROLLUP_REPOS = ["portfolio-site", "LE-SSERAFIM-AI-HQ", "lsfm-ai-hq", "ciel-hud", "agent-memory"]
+
+# One line per agent, as the site describes them; the rollup prompt quotes these so
+# the model does not invent roles (2026-10-11: "Chaewon (Architecture)").
+AGENT_ROLES = [
+    "Sakura: Chief of Staff (briefings, Gmail triage, the !apply pipeline)",
+    "Chaewon: Career Strategist (job scouting, ATS resume PDF, knockout-question answers)",
+    "Yunjin: Document Architect & Portfolio Critic (audits and critiques)",
+    "Kazuha: Code & Knowledge (codebase Q&A, local git review)",
+    "Eunchae: System Guardian (vitals watchdog, syntax/AST checks, lesson logging, heartbeats)",
+]
 
 from llm_client import query_llm
 from obsidian_client import ObsidianClient
@@ -132,11 +146,11 @@ def execute_morning_launchpad(sync_obsidian: bool = True) -> dict:
     goals = load_file(MEMORY_DIR / "sakura_goals.md")
     prompt = f"""
 You are "Sakura", the Chief of Staff and Central Orchestrator for the user.
-The user is an Applied AI Engineer & Full-Stack Builder with dual-competency in autonomous AI agent swarms and polished frontend interfaces.
+The user is an Applied AI Engineer & Full-Stack Builder with dual-competency in multi-agent AI systems and polished frontend interfaces.
 
 ### CANDIDATE & PORTFOLIO PROFILE:
 - Role: Applied AI Engineer / Full-Stack AI Engineer (BS Computer Science)
-- Core Value: Builds production agent swarms, multi-provider LLM routing (Groq, Gemini, local Ollama), deterministic BM25 memory, and high-craft UI/UX.
+- Core Value: Builds a 5-agent team on Discord, multi-provider LLM routing (Groq, Gemini, local Ollama), deterministic BM25 memory, and high-craft UI/UX.
 - Flagship Projects: 7 case studies in portfolio-site/ (LSFM AI HQ, Manas: Ciel, Cognitive Memory Core, Aura Coffee, Lumina Analytics, Vellum, FinTrack)
 - Active Rules: 10 crystallized heuristics in Obsidian (MEM-001 through MEM-010)
 
@@ -163,7 +177,7 @@ Compose a structured, authoritative, and inspiring Daily Morning Briefing with t
    - Crisp summary of the inbox state.
    - Note any action items on job leads or application reminders.
 
-3. 📊 **SQUAD OPERATIONAL READINESS**:
+3. 📊 **TEAM READINESS**:
    - ⭐ **Chaewon (Career):** {app_count} applications logged; ready to tailor new roles (`!tailor`).
    - 🎨 **Yunjin (Portfolio):** ready for portfolio audits and case-study critiques (`!audit`, `!critique`).
    - 💻 **Kazuha (Frontend):** ready for code review and knowledge-base questions (`!git review`, `!ask`).
@@ -263,6 +277,62 @@ def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: 
     return f"{text}\n\n({left_out} entries left out)" if left_out else text
 
 
+def _git(repo: Path, *args: str):
+    """stdout lines of `git -C repo <args>`, or None when git cannot read repo."""
+    try:
+        res = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return [l for l in res.stdout.splitlines() if l.strip()] if res.returncode == 0 else None
+
+
+def gather_git_activity(day: datetime.date, projects_dir: Path = None, repos: list = None) -> dict:
+    """
+    The day's commits and uncommitted files in each project repo. The rollup used to run
+    git in Projects/, which is no repository: every call failed and the rollup reported
+    "0 files, no commits" every day (2026-10-08 had 11 commits). A repo git cannot read
+    is listed under "unreadable", never counted as a quiet one.
+    """
+    projects_dir = PROJECTS_DIR if projects_dir is None else projects_dir
+    nxt = day + datetime.timedelta(days=1)
+    commits, modified, unreadable = [], {}, []
+    for name in ROLLUP_REPOS if repos is None else repos:
+        repo = projects_dir / name
+        found = _git(repo, "log", f"--since={day.isoformat()} 00:00", f"--until={nxt.isoformat()} 00:00",
+                     "--format=%h %s")
+        status = _git(repo, "status", "--porcelain")
+        if found is None or status is None:
+            unreadable.append(name)
+            continue
+        commits += [f"{name}: {line}" for line in found]
+        if status:
+            modified[name] = len(status)
+    return {"commits": commits, "modified": modified, "unreadable": unreadable}
+
+
+def format_git_activity(activity: dict, max_commits: int = 15, line_bytes: int = 100) -> str:
+    """The version-control lines of the rollup prompt, capped (the 8C prompt budget)."""
+    commits, modified = activity["commits"], activity["modified"]
+
+    def cut(line: str) -> str:
+        return line if len(line.encode("utf-8")) <= line_bytes else \
+            line.encode("utf-8")[:line_bytes - 3].decode("utf-8", "ignore") + "…"
+
+    lines = [f"  - Commits today: {len(commits)}"]
+    lines += [f"    • {cut(c)}" for c in commits[:max_commits]]
+    if len(commits) > max_commits:
+        lines.append(f"    • ({len(commits) - max_commits} more)")
+    if modified:
+        lines.append(f"  - Uncommitted files: {sum(modified.values())} ("
+                     + ", ".join(f"{n} {c}" for n, c in modified.items()) + ")")
+    else:
+        lines.append("  - Uncommitted files: 0")
+    if activity["unreadable"]:
+        lines.append(f"  - Not readable with git (no data, do not report as quiet): {', '.join(activity['unreadable'])}")
+    return "\n".join(lines)
+
+
 def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
     """
     Executes the complete Sakura Evening Standup & Daily Rollup:
@@ -294,26 +364,10 @@ def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
     except Exception as e:
         print(f"⚠️ [Sakura] Could not fetch Obsidian dispatches: {e}")
 
-    # 2. Gather Git activity
-    git_commits = []
-    git_modified_count = 0
-    try:
-        import subprocess
-        # Commits today
-        c_res = subprocess.run(["git", "log", "--since=midnight", "--oneline"], capture_output=True, text=True, cwd=str(BASE_DIR.parent))
-        if c_res.returncode == 0 and c_res.stdout.strip():
-            git_commits = [l.strip() for l in c_res.stdout.strip().splitlines() if l.strip()]
-        else:
-            c_res2 = subprocess.run(["git", "log", "-n", "3", "--oneline"], capture_output=True, text=True, cwd=str(BASE_DIR.parent))
-            if c_res2.returncode == 0 and c_res2.stdout.strip():
-                git_commits = [f"(Recent) {l.strip()}" for l in c_res2.stdout.strip().splitlines() if l.strip()]
-
-        s_res = subprocess.run(["git", "status", "--short"], capture_output=True, text=True, cwd=str(BASE_DIR.parent))
-        if s_res.returncode == 0:
-            lines = [l for l in s_res.stdout.strip().splitlines() if l.strip()]
-            git_modified_count = len(lines)
-    except Exception as e:
-        git_commits = [f"Git status query: {e}"]
+    # 2. Gather Git activity (each project repo; Projects/ itself is no repo)
+    activity = gather_git_activity(now.date())
+    git_commits = activity["commits"]
+    git_modified_count = sum(activity["modified"].values())
 
     # 3. Hardware vitals
     vitals_summary = "Hardware vitals unavailable (check failed)"
@@ -331,23 +385,25 @@ def execute_evening_rollup(sync_obsidian: bool = True) -> dict:
 
     # 5. LLM Synthesis
     dispatches_text = cap_dispatches(obsidian_dispatches)
-    git_text = "\n".join(f"  • {c}" for c in git_commits) if git_commits else "  • No commits recorded today"
+    git_text = format_git_activity(activity)
+    roles_text = "\n".join(f"- {r}" for r in AGENT_ROLES)
 
     prompt = f"""
-You are "Sakura", Chief of Staff and Central Orchestrator for Hans Aaron Laureles.
+You are "Sakura", Chief of Staff for Hans Aaron Laureles.
 Deliver the formal **Evening Standup & Daily Rollup** to close out the day for Hans in Discord and Obsidian.
 
 ### CANDIDATE CONTEXT:
 - Candidate: Hans Aaron Laureles (Applied AI Engineer & Full-Stack Builder)
-- Active Infrastructure: 5-Daemon LSFM Swarm, Obsidian AI Brain, 7 portfolio case studies, 10 Crystallized Heuristics (MEM-001 through MEM-010)
+- Active Infrastructure: LSFM AI HQ (a 5-agent team on Discord), the Obsidian vault, 7 portfolio case studies, 10 rules (MEM-001 through MEM-010)
+
+### THE 5-AGENT TEAM (use these roles exactly; never give an agent another role):
+{roles_text}
 
 ### DAY'S OPERATIONAL DATA:
 - Today's Date: {today_str}
 - Active Applications in Archive: {app_count}
 - Host Hardware Vitals: {vitals_summary}
-- Version Control Activity:
-  - Modified files in workspace: {git_modified_count}
-  - Commits:
+- Version Control Activity ({len(ROLLUP_REPOS)} project repos: {", ".join(ROLLUP_REPOS)}):
 {git_text}
 - Agent Session Dispatches Recorded Today in Obsidian:
 {dispatches_text}
@@ -358,12 +414,13 @@ Deliver the formal **Evening Standup & Daily Rollup** to close out the day for H
 Compose a structured, authoritative, and empowering Evening Standup report with these exact markdown sections:
 
 1. 🌆 **DAY IN REVIEW & KEY ACHIEVEMENTS**:
-   - 2-3 sentence executive recap of what the squad and Hans accomplished today.
+   - 2-3 sentence executive recap of what the team and Hans accomplished today.
    - Highlight the primary engineering, architectural, or career wins.
 
-2. 📊 **SQUAD SYSTEM PULSE & HYGIENE**:
-   - Summarize the performance of Chaewon, Yunjin, Kazuha, and Eunchae.
-   - Note git commit hygiene from the commit list above. Do not claim test results, portfolio health or resource figures that are not in the data above.
+2. 📊 **TEAM PULSE & GIT HYGIENE**:
+   - One line each for Chaewon, Yunjin, Kazuha, and Eunchae, from their dispatches above; an agent with no dispatch today had nothing logged, so say that instead of describing its work.
+   - Note commits and uncommitted files per repo from the data above. Do not claim test results, portfolio health or resource figures that are not in the data above.
+   - Call the agents "the 5-agent team" or "the team", never a swarm, squad or daemons.
 
 3. 🔮 **STRATEGIC CARRYOVER & QUEUE FOR TOMORROW**:
    - 2-3 concrete tasks prioritized for tomorrow morning's launchpad (e.g., following up on inbound signals, next engineering sprint).
@@ -392,7 +449,8 @@ Tone: Calm, commanding, executive, razor-sharp. Avoid robotic clichés.
                 "Sakura",
                 f"Evening Daily Rollup Closed ({time_now})",
                 [
-                    f"Workspace Hygiene: {git_modified_count} files tracked",
+                    f"Git: {len(git_commits)} commit(s) today, {git_modified_count} uncommitted file(s)"
+                    + (f"; not readable: {', '.join(activity['unreadable'])}" if activity["unreadable"] else ""),
                     f"Hardware Health: {vitals_summary}",
                     f"Total Applications: {app_count} in archive",
                     "Daily Standup & Tomorrow's queue sealed in daily log"
@@ -408,6 +466,8 @@ Tone: Calm, commanding, executive, razor-sharp. Avoid robotic clichés.
         "date_iso": date_iso,
         "git_commits": git_commits,
         "git_modified_count": git_modified_count,
+        "git_modified": activity["modified"],
+        "git_unreadable": activity["unreadable"],
         "vitals_summary": vitals_summary,
         "obsidian_synced": obsidian_synced,
         "daily_log_path": daily_log_path

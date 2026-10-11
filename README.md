@@ -48,11 +48,11 @@ Scheduled work: Sakura posts a briefing once a day after 08:00; Yunjin runs a we
 
 - **Routing:** keyword fast paths for weather, web search, memory reset and appraisals; otherwise an LLM router returns a JSON plan (general knowledge, Obsidian lookup, or delegation to the five agents).
 - **Voice in:** the HUD's WebM/Opus recording is converted by FFmpeg (16 kHz mono, `volume=1.8,highpass=f=80,lowpass=f=7500`) and transcribed by Groq `whisper-large-v3-turbo`.
-- **Voice out:** Edge TTS speaks a Japanese line (`ja-JP-NanamiNeural`), a 350 ms pause, then English (`en-US-AvaNeural`), through a "Thought Acceleration" filter: high-pass 120 Hz, a 3.5 kHz presence boost and a short double echo.
+- **Voice out:** Edge TTS speaks a Japanese line (`ja-JP-NanamiNeural`), a 350 ms pause, then English (`en-US-AvaNeural`), through a voice filter: high-pass 120 Hz, a 3.5 kHz presence boost and a short double echo.
 - **Async runtime:** every blocking call (LLMs, weather, web search, psutil, Obsidian, git, Gmail, the PDF build) runs in a worker thread; tool and LLM calls have per-call timeouts, and independent agents run concurrently. At most two missions run at once and up to eight more queue; beyond that a mission is refused (HTTP 503 over REST, a `ciel_error` event over WebSocket).
 - **Honest failures:** each agent ends as `done`, `attention` or `failed` with the real error; a timeout reads "timed out after N s", never a quiet success.
 - **Local-only server:** a Host allowlist, an Origin check on WebSocket upgrades and non-GET requests, and JSON-only command routes block DNS rebinding and cross-site requests.
-- **Proactive sentinel:** every 45 s while a HUD is connected, it checks CPU (> 85 %), RAM (> 88 %), free disk on C: (< 20 GB), uncommitted git changes, the Obsidian daily log, and TODO/FIXME markers in the portfolio.
+- **Background checks:** every 45 s while a HUD is connected, it checks CPU (> 85 %), RAM (> 88 %), free disk on C: (< 20 GB), uncommitted git changes, the Obsidian daily log, and TODO/FIXME markers in the portfolio.
 
 The HUD front end lives in a separate repository; the server serves it from a sibling `../ciel-hud` folder when present, and the REST/WebSocket API works without it.
 
@@ -79,10 +79,10 @@ The local model loads fully into VRAM (4.74 GB, cold load 7.7 s). With fewer tha
 ## Tests and CI
 
 ```bash
-python -m pytest -q test_ciel_orchestrator.py test_ciel_security.py test_hq_smoke.py test_llm_client.py test_pdf_engine.py bench/test_bench.py
+python -m pytest -q test_*.py bench/test_*.py
 ```
 
-The suite is hermetic (LLMs, TTS, Obsidian and engines are stubbed), so it needs no API keys. It covers the server's local-only guard, mission IDs, honest failure states, event-loop responsiveness, timeouts, mission admission and memory clearing. GitHub Actions runs it on every push to `main` and on pull requests. The `.env` and Obsidian-vault checks in `test_hq_smoke.py` skip when those are absent.
+These are the files `.github/workflows/ci.yml` runs (`scripts/test_*.py` are not unit tests: they call live Gmail and Discord). The suite is hermetic (LLMs, TTS, Obsidian and engines are stubbed), so it needs no API keys. It covers the server's local-only guard, mission IDs, honest failure states, event-loop responsiveness, timeouts, mission admission and memory clearing. GitHub Actions runs it on every push to `main` and on pull requests. The `.env` and Obsidian-vault checks in `test_hq_smoke.py` skip when those are absent.
 
 ---
 
@@ -112,7 +112,7 @@ lsfm-ai-hq/
 ├── ciel_orchestrator.py   # Ciel: routing, tools, agents, synthesis
 ├── ciel_server.py         # Ciel: aiohttp REST + WebSocket server
 ├── voice_engine.py        # Whisper STT, Edge TTS, FFmpeg filters
-├── proactive_sentinel.py  # 45 s workspace checks for the HUD
+├── proactive_sentinel.py  # background checks for the HUD (every 45 s)
 ├── *_engine.py            # PDF, RAG, Gmail, per-agent engines
 ├── llm_client.py          # Groq / Gemini / Ollama routing
 ├── obsidian_client.py     # Obsidian REST API with filesystem fallback

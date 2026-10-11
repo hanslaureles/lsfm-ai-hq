@@ -114,7 +114,7 @@ async def watchdog_loop():
 
 @tasks.loop(minutes=15)
 async def obsidian_heartbeat_loop():
-    """Cron 5: Obsidian Local REST API Port 27124 Heartbeat & Vault Telemetry Sentinel."""
+    """Cron 5: Obsidian Local REST API Port 27124 Heartbeat & Vault Telemetry Check."""
     await bot.wait_until_ready()
     global LAST_OBSIDIAN_STATE
     loop = asyncio.get_running_loop()
@@ -129,7 +129,7 @@ async def obsidian_heartbeat_loop():
                 channel = find_channel_by_name(guild, "system-alerts")
                 if channel:
                     embed = discord.Embed(
-                        title="🚨 Obsidian Brain Sentinel: Degraded State Detected",
+                        title="🚨 Obsidian Vault Check: Degraded State Detected",
                         description=(
                             f"**Status:** {res['status_text']}\n"
                             f"• Vault Exists: `{res['vault_exists']}` ({res['vault_path']})\n"
@@ -153,7 +153,7 @@ async def on_ready():
         print(f"   - {guild.name} (ID: {guild.id})", flush=True)
     print("=" * 60, flush=True)
 
-    activity = discord.Activity(type=discord.ActivityType.watching, name="PC Vitals & Squad QA 🛡️ (!help)")
+    activity = discord.Activity(type=discord.ActivityType.watching, name="PC Vitals & Team QA 🛡️ (!help)")
     await bot.change_presence(status=discord.Status.online, activity=activity)
 
     if not watchdog_loop.is_running():
@@ -222,8 +222,8 @@ async def on_message(message):
 @bot.command(name="help")
 async def help_command(ctx):
     embed = discord.Embed(
-        title="🛡️ Eunchae — System Guardian & Squad Watchdog",
-        description="I watch over Hans's PC hardware, background processes, and squad uptime:",
+        title="🛡️ Eunchae — System Guardian & Team Watchdog",
+        description="I watch over Hans's PC hardware, background processes, and the team's uptime:",
         color=0xE67E22
     )
     embed.add_field(
@@ -238,7 +238,7 @@ async def help_command(ctx):
     )
     embed.add_field(
         name="🧠 `!lessons` (or `!failures`)",
-        value="Displays learned failure post-mortems and permanent squad rules from `agent-memory`.",
+        value="Displays learned failure post-mortems and permanent rules from Memory Core (`agent-memory`).",
         inline=False
     )
     embed.add_field(
@@ -290,7 +290,7 @@ async def vitals_command(ctx):
         inline=True
     )
     embed.add_field(
-        name="🤖 AI Squad State",
+        name="🤖 5-Agent Team State",
         value="🌸 Sakura • ⭐ Chaewon • 🎨 Yunjin • 💻 Kazuha • 🛡️ Eunchae",
         inline=False
     )
@@ -360,7 +360,7 @@ async def qa_command(ctx, *, filename: str = None):
                 value=", ".join(f"`{p}`" for p in res["placeholders"][:5]),
                 inline=False
             )
-        embed.set_footer(text="Eunchae • Squad QA Inspector & Gatekeeper")
+        embed.set_footer(text="Eunchae • Team QA Inspector & Gatekeeper")
         await ctx.reply(embed=embed)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during QA inspection: `{e}`")
@@ -371,8 +371,8 @@ async def lessons_command(ctx, domain: str = None):
     lessons = get_all_learned_lessons(domain)
     if not lessons:
         embed = discord.Embed(
-            title="🧠 Squad Failure Memory & Heuristics",
-            description="No failure post-mortems recorded yet. All squad runs have been clean!",
+            title="🧠 Team Lessons & Rules",
+            description="No failure post-mortems recorded yet. All team runs have been clean!",
             color=0x57F287
         )
         embed.set_footer(text="Eunchae • Self-Improving Agent Memory")
@@ -380,8 +380,8 @@ async def lessons_command(ctx, domain: str = None):
         return
 
     embed = discord.Embed(
-        title=f"🧠 Squad Failure Lessons ({len(lessons)} Active Rules)",
-        description="Permanent heuristics distilled from past regressions and user feedback:\n*Eliminates session amnesia across the entire squad.*",
+        title=f"🧠 Team Lessons ({len(lessons)} Active Rules)",
+        description="Permanent heuristics distilled from past regressions and user feedback:\n*Eliminates session amnesia across the whole team.*",
         color=0xE67E22
     )
     for entry in lessons[:6]:
@@ -454,7 +454,7 @@ async def reflect_command(ctx, *, args_str: str = None):
 
     entry = res["entry"]
     embed = discord.Embed(
-        title="🧠 New Squad Heuristic Learned & Crystallized!",
+        title="🧠 New Team Lesson Logged!",
         description=f"Eunchae recorded this permanent rule to **`agent-memory`**:\n\n"
                     f"• **ID:** `{entry.get('id')}`\n"
                     f"• **Domain:** `{domain}`\n"
@@ -478,9 +478,9 @@ async def test_command(ctx, *, filepath: str = None):
             "🧪 **Eunchae Automated Code QA Runner**\n\n"
             "Usage: `!test <file_path>`\n"
             "*Examples:*\n"
-            "• `!test lsfm-swarm/git_sentinel.py`\n"
+            "• `!test git_sentinel.py`\n"
             "• `!test agent-memory/test_memory.py`\n"
-            "• `!test lsfm-swarm/bot_eunchae.py`\n\n"
+            "• `!test bot_eunchae.py`\n\n"
             "Validates Python compilation, AST structural metrics, unit test suites, import resolution, and balanced brackets."
         )
         return
@@ -549,7 +549,7 @@ async def cmd_heartbeat(ctx):
         v = res["vitals"]
 
         embed = discord.Embed(
-            title="🛡️ Obsidian Brain & Telemetry Sentinel (Port 27124)",
+            title="🛡️ Obsidian Vault & Telemetry Check (Port 27124)",
             description=f"### {res['status_text']}\n*Monitored by Eunchae · 15-Minute Heartbeat Loop (Cron 5)*",
             color=res["color"]
         )
@@ -564,8 +564,8 @@ async def cmd_heartbeat(ctx):
             inline=True
         )
         embed.add_field(
-            name="🤖 Active Swarm",
-            value="`5 Daemons Active (LSFM Swarm)`",
+            name="🤖 Agent Team",
+            value="`5-agent team (LSFM AI HQ)`",
             inline=True
         )
         embed.add_field(
@@ -588,7 +588,7 @@ async def cmd_heartbeat(ctx):
             folders_summary = " · ".join([f"`{k}`: {v_count}" for k, v_count in res["subdirs_count"].items()])
             embed.add_field(name="📁 Vault Directory Breakdown", value=folders_summary[:1024], inline=False)
 
-        embed.set_footer(text="Eunchae • System Guardian Sentinel • Cron 5")
+        embed.set_footer(text="Eunchae • System Guardian • Cron 5")
         await status_msg.delete()
         await ctx.reply(embed=embed)
     except Exception as e:

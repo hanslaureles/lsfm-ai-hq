@@ -12,7 +12,7 @@ import types
 import unittest
 from unittest import mock
 
-from aiohttp import WSServerHandshakeError
+from aiohttp import FormData, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
 
@@ -170,7 +170,9 @@ class TestLocalhostGuard(unittest.IsolatedAsyncioTestCase):
 
     async def test_cross_origin_multipart_transcribe_rejected(self):
         """Multipart forms are CORS-simple, so the Origin check is the only guard here."""
-        res = await self.client.post("/api/transcribe", data={"file": b"RIFF"}, headers=EVIL_ORIGIN)
+        form = FormData()
+        form.add_field("file", b"RIFF", filename="clip.wav")  # a file field, as the HUD sends it
+        res = await self.client.post("/api/transcribe", data=form, headers=EVIL_ORIGIN)
         self.assertEqual(res.status, 403)
 
     # --- Cross-site WebSocket hijacking ---

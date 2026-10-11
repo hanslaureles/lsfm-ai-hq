@@ -63,7 +63,7 @@ async def main():
         inline=False
     )
     sakura_embed_cmd.add_field(
-        name="🤖 The AI Squad Under My Coordination",
+        name="🤖 The 5-Agent Team I Coordinate",
         value="⭐ **Chaewon:** Career & Job Tailoring (`#job-tailoring`)\n"
               "🎨 **Yunjin:** Portfolio & UX Critic (`#portfolio-audits`)\n"
               "💻 **Kazuha:** Frontend Engineering (`#frontend-lab`)\n"
@@ -126,8 +126,8 @@ async def main():
         color=0xE91E63
     )
     status_embed.add_field(
-        name="🚀 01 · LSFM AI HQ (Multi-Agent Swarm)",
-        value="• Autonomous 5-Agent Swarm: ✅ 100%\n• Hybrid Local/Cloud Router: ✅ Live\n• Headless Edge PDF Compiler: ✅ Automated vector PDF\n• Case Study Storytelling: ✅ Complete",
+        name="🚀 01 · LSFM AI HQ (5-Agent Team)",
+        value="• 5-Agent Team: ✅ Live\n• Hybrid Local/Cloud Router: ✅ Live\n• Headless Edge PDF Compiler: ✅ Automated vector PDF\n• Case Study Storytelling: ✅ Complete",
         inline=False
     )
     status_embed.add_field(
@@ -175,7 +175,7 @@ async def main():
     # 7. Eunchae -> #pc-vitals
     v = get_system_vitals()
     eunchae_embed = discord.Embed(
-        title="🛡️ EUNCHAE — System Guardian & Squad Watchdog",
+        title="🛡️ EUNCHAE — System Guardian & Team Watchdog",
         description="I keep watch over Hans's host Windows PC, background bot processes, and resource vitals!",
         color=0xE67E22
     )

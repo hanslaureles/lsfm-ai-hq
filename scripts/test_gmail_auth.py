@@ -45,7 +45,7 @@ def main():
     print("=" * 65)
 
     if not CREDENTIALS_PATH.exists() and not TOKEN_PATH.exists():
-        print("❌ 'credentials.json' not found in lsfm-swarm directory!\n")
+        print("❌ 'credentials.json' not found in the HQ folder!\n")
         print_setup_guide()
         return
 

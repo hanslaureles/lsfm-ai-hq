@@ -267,7 +267,7 @@ def select_portfolio_pitch(job_text: str, role: str = "Design / Engineering Role
 
     prompt = f"""
 You are "Yunjin", Senior UX Critic and Portfolio Director for Hans Aaron Laureles.
-The squad is preparing a targeted application package for:
+The team is preparing a targeted application package for:
 **Role:** {role}
 **Company:** {company}
 

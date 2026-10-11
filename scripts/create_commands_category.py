@@ -88,7 +88,7 @@ async def on_ready():
             # 1. Header Card
             header_embed = discord.Embed(
                 title="📖 LE SSERAFIM AI HQ — Master Command Directory",
-                description="Welcome to the universal command guide for Hans Aaron Laureles's personal AI squad.\n\n"
+                description="Welcome to the universal command guide for Hans Aaron Laureles's personal 5-agent AI team.\n\n"
                             "• Use **`#all-commands`** as your permanent reference guide.\n"
                             "• Use **`#commands-chat`** as a shared universal playground where you can invoke **any** agent or command at any time!",
                 color=0xF472B6
@@ -109,7 +109,7 @@ async def on_ready():
             )
             sakura_embed.add_field(
                 name="🤝 `!apply [URL or job text]`",
-                value="Dispatches the full squad pipeline: Chaewon tailors resume & letter, Yunjin curates portfolio case studies, Kazuha generates the tech pitch, and Sakura posts the Master Proposal to `#approvals` for your 1-click reaction approval (`✅`/`❌`).",
+                value="Dispatches the full team pipeline: Chaewon tailors resume & letter, Yunjin curates portfolio case studies, Kazuha generates the tech pitch, and Sakura posts the Master Proposal to `#approvals` for your 1-click reaction approval (`✅`/`❌`).",
                 inline=False
             )
             sakura_embed.add_field(
@@ -162,7 +162,7 @@ async def on_ready():
             )
             yunjin_embed.add_field(
                 name="🔬 `!critique [project]`",
-                value="Deep design director review of a specific case study:\n• `!critique lsfm` (Autonomous Multi-Agent Swarm)\n• `!critique lumina` (AI Observability SaaS)\n• `!critique vellum` (Mental Wellness UX)\n• `!critique fintrack` (Fintech Personal Finance)\n• `!critique aura` (Specialty Commerce & PH Rails)\n• `!critique memory` (Cognitive Architecture & BM25)",
+                value="Deep design director review of a specific case study:\n• `!critique lsfm` (5-agent team)\n• `!critique lumina` (AI Observability SaaS)\n• `!critique vellum` (Mental Wellness UX)\n• `!critique fintrack` (Fintech Personal Finance)\n• `!critique aura` (Specialty Commerce & PH Rails)\n• `!critique memory` (Cognitive Architecture & BM25)",
                 inline=False
             )
             yunjin_embed.add_field(
@@ -210,7 +210,7 @@ async def on_ready():
             )
             eunchae_embed.add_field(
                 name="🛡️ `!checkin`",
-                value="Generates a full, energetic hardware and squad status checkup from the maknae.",
+                value="Generates a full, energetic hardware and team status checkup from the maknae.",
                 inline=False
             )
             eunchae_embed.add_field(

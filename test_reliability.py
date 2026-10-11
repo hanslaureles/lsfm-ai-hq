@@ -838,6 +838,95 @@ class TestRollupDispatchCap(unittest.TestCase):
         self.assertGreater(len(log.encode("utf-8")), 46_000)
         self.assertLess(len(prompts[0].encode("utf-8")), 16_000)  # 12 KB of dispatches + the template
 
+    def test_a_busy_git_day_still_fits(self):
+        # 40 long commit subjects across the repos must not push the prompt past the budget.
+        import sakura_engine
+        log = "# Daily Log\n\n## Agent Activity\n\n" + "\n\n".join(_day_of_dispatches())
+        client = mock.Mock()
+        client.ensure_daily_log.return_value = "05 Daily Logs/2026-10-07.md"
+        client.get_file.return_value = log
+        busy = {"commits": [f"LE-SSERAFIM-AI-HQ: abc{i:04d} fix(x): " + "w" * 200 for i in range(40)],
+                "modified": {n: 99 for n in sakura_engine.ROLLUP_REPOS}, "unreadable": []}
+        prompts = []
+        with mock.patch.object(sakura_engine, "ObsidianClient", return_value=client), \
+                mock.patch.object(sakura_engine, "gather_git_activity", return_value=busy), \
+                mock.patch.object(sakura_engine, "query_llm", side_effect=lambda p, **kw: prompts.append(p) or "ok"):
+            sakura_engine.execute_evening_rollup(sync_obsidian=False)
+        self.assertLess(len(prompts[0].encode("utf-8")), 18_000)  # 18 KB went through Groq on 2026-10-02
+        self.assertIn("(25 more)", prompts[0])
+
+
+def _git(repo, *args, when=None):
+    env = dict(os.environ)
+    if when:
+        env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = when
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    "-c", "commit.gpgsign=false", *args], check=True, capture_output=True, env=env)
+
+
+class TestRollupGitActivity(unittest.TestCase):
+    """Audit 2026-10-12: the rollup ran git in Projects/ (no repo) and reported 0 commits every day."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # read-only git objects on Windows
+        self.addCleanup(tmp.cleanup)
+        self.projects = Path(tmp.name)  # like Projects/: a plain folder holding repos
+
+    def make_repo(self, name, commits):
+        repo = self.projects / name
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        for i, (when, subject) in enumerate(commits):
+            (repo / "f.txt").write_text(str(i), encoding="utf-8")
+            _git(repo, "add", "f.txt")
+            _git(repo, "commit", "-q", "-m", subject, when=when)
+        return repo
+
+    def test_commits_and_uncommitted_files_come_from_each_repo(self):
+        import datetime as dt
+        import sakura_engine
+        busy = self.make_repo("busy", [("2026-10-11T23:00:00", "chore: yesterday"),
+                                       ("2026-10-12T10:00:00", "fix: today")])
+        (busy / "new.txt").write_text("x", encoding="utf-8")
+        (busy / "f.txt").write_text("changed", encoding="utf-8")
+        self.make_repo("quiet", [("2026-10-01T10:00:00", "feat: old")])
+        got = sakura_engine.gather_git_activity(dt.date(2026, 10, 12), self.projects, ["busy", "quiet", "missing"])
+        self.assertEqual(len(got["commits"]), 1)
+        self.assertRegex(got["commits"][0], r"^busy: [0-9a-f]+ fix: today$")
+        self.assertEqual(got["modified"], {"busy": 2})
+        self.assertEqual(got["unreadable"], ["missing"])
+
+    def test_an_unreadable_repo_is_named_not_counted_as_quiet(self):
+        import sakura_engine
+        text = sakura_engine.format_git_activity({"commits": [], "modified": {}, "unreadable": ["ciel-hud"]})
+        self.assertIn("Commits today: 0", text)
+        self.assertIn("Not readable with git", text)
+        self.assertIn("ciel-hud", text)
+
+    def test_the_prompt_carries_the_commits_the_roles_and_no_swarm(self):
+        import sakura_engine
+        client = mock.Mock()
+        client.ensure_daily_log.return_value = "05 Daily Logs/2026-10-08.md"
+        client.get_file.return_value = "# Daily Log\n"
+        activity = {"commits": ["portfolio-site: 9194d69 docs(resume): rebuild"],
+                    "modified": {"LE-SSERAFIM-AI-HQ": 9}, "unreadable": []}
+        prompts = []
+        with mock.patch.object(sakura_engine, "ObsidianClient", return_value=client), \
+                mock.patch.object(sakura_engine, "gather_git_activity", return_value=activity), \
+                mock.patch.object(sakura_engine, "query_llm", side_effect=lambda p, **kw: prompts.append(p) or "ok"):
+            res = sakura_engine.execute_evening_rollup(sync_obsidian=False)
+        prompt = prompts[0]
+        self.assertIn("Commits today: 1", prompt)
+        self.assertIn("9194d69 docs(resume): rebuild", prompt)
+        self.assertIn("Uncommitted files: 9 (LE-SSERAFIM-AI-HQ 9)", prompt)
+        for role in sakura_engine.AGENT_ROLES:
+            self.assertIn(role, prompt)
+        self.assertIn("Chaewon: Career Strategist", prompt)
+        for retired in ("5-Daemon", "Swarm", "SQUAD", "the squad"):  # lower-case only in the "never" rule
+            self.assertNotIn(retired, prompt)
+        self.assertEqual(res["git_modified_count"], 9)
+        self.assertEqual(res["git_commits"], activity["commits"])
+
 
 if __name__ == "__main__":
     unittest.main()

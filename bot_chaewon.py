@@ -33,7 +33,7 @@ from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_s
 from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, get_portal_search_links
 from discord_utils import send_clean_embeds
 from daily_once import run_daily
-from pdf_engine import compile_master_resume, OWNER_EMAIL
+from pdf_engine import compile_master_resume, describe_portfolio_sync, OWNER_EMAIL
 from llm_client import get_brain_status
 
 LAST_REBUILD_DATE_FILE = MEMORY_DIR / "last_resume_rebuild_date.txt"
@@ -82,7 +82,7 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
                     f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
                     f"• **Text:** Selectable vector text (system sans-serif stack)\n"
                     f"• **Geometry:** 1-page Letter layout\n"
-                    f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {'✅' if res.get('portfolio_pdf') else '⏭️ skipped'}\n"
+                    f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                     f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"
                     f"• **Obsidian Daily Log:** {'Session logged to vault ✅' if res.get('obsidian_synced') else '⚠️ not logged'}"
                 ),
@@ -293,7 +293,7 @@ async def help_command(ctx):
     )
     embed.add_field(
         name="🎯 `!tailor [URL or text]`",
-        value="1-Command Application Tailoring! Scrapes posting, calculates ATS match score, and outputs:\n• Tailored 1-page ATS Resume PDF\n• Tailored Executive Cover Letter PDF\n• Strategic portfolio talking points\n*(Note: Use `!apply` in `#command-center` for the full multi-agent squad pipeline)*",
+        value="1-Command Application Tailoring! Scrapes posting, calculates ATS match score, and outputs:\n• Tailored 1-page ATS Resume PDF\n• Tailored Executive Cover Letter PDF\n• Strategic portfolio talking points\n*(Note: Use `!apply` in `#command-center` for the full multi-agent team pipeline)*",
         inline=False
     )
     embed.add_field(
@@ -375,7 +375,7 @@ async def history(ctx):
     lines = [l for l in content.split("\n") if l.strip().startswith("|") and not l.startswith("| #") and not l.startswith("|---") and not l.startswith("| -")]
     
     if not lines:
-        await ctx.reply("No applications logged yet. Try tailoring one with `!tailor <url>` or dispatching the squad with `!apply <url>`!")
+        await ctx.reply("No applications logged yet. Try tailoring one with `!tailor <url>` or running the team pipeline with `!apply <url>`!")
         return
 
     embed = discord.Embed(
@@ -409,7 +409,7 @@ async def cmd_scout(ctx, *, query: str = "ai"):
         embed = discord.Embed(
             title=f"🎯 Live Job Radar // {query.upper()} ({loc})",
             description=f"Targeting **LinkedIn**, **Indeed**, and **JobStreet** · Scored for **Hans Aaron Laureles**.\n"
-                        f"*Type `!apply <job_url>` in #command-center for the squad pipeline, or `!tailor <job_url>` to tailor directly!*",
+                        f"*Type `!apply <job_url>` in #command-center for the team pipeline, or `!tailor <job_url>` to tailor directly!*",
             color=0xF1C40F
         )
 
@@ -423,7 +423,7 @@ async def cmd_scout(ctx, *, query: str = "ai"):
                 field_val = (
                     f"🏢 **{j['company']}** | 📍 {geo} | 💰 {salary} | Source: {source_badge}\n"
                     f"🔗 **Posting:** [View Job on {j.get('source', 'Web')}]({j['url']})\n"
-                    f"⚡ **Tailor Directly:** `!tailor {j['url']}` | **Squad Apply:** `!apply {j['url']}`"
+                    f"⚡ **Tailor Directly:** `!tailor {j['url']}` | **Team Apply:** `!apply {j['url']}`"
                 )
                 embed.add_field(
                     name=f"{score_badge} [{score}% FIT] #{i}. {j['title']}",
@@ -501,7 +501,7 @@ async def cmd_pdf(ctx, *, target: str = "General"):
             description=f"Compiled by ⭐ Chaewon for **{target}**.\n\n"
                         f"• **Format:** Single-page executive layout (Swiss-inspired typography)\n"
                         f"• **ATS:** Selectable vector text & semantic headings\n"
-                        f"• **Focus:** AI Systems, Multi-Agent Swarms & Full-Stack Architecture",
+                        f"• **Focus:** AI agent systems & full-stack web",
             color=0x57F287
         )
         embed.set_footer(text="Ready to download and submit directly to job portals.")
@@ -569,7 +569,7 @@ async def cmd_rebuild_resume(ctx):
                 f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
                 f"• **Text:** Selectable vector text (system sans-serif stack)\n"
                 f"• **Geometry:** 1-page Letter layout\n"
-                f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {'✅' if res.get('portfolio_pdf') else '⏭️ skipped'}\n"
+                f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                 f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"
                 f"• **Obsidian Vault:** {'Daily session log written ✅' if res.get('obsidian_synced') else '⚠️ not logged'}"
             ),

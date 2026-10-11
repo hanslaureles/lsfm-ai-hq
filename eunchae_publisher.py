@@ -1,6 +1,6 @@
 """
 Eunchae status aggregator (Phase 4, 4B-4): builds the public status.json the
-portfolio's Sentinel panel reads (4C). Every value comes from this machine:
+portfolio's Agent Overview panel reads (4C). Every value comes from this machine:
 
 - swarm:       memory/health/<agent>.json heartbeats (health_recorder). A file older
                than STALE_AFTER_S is "stale", a missing one "offline"; neither is

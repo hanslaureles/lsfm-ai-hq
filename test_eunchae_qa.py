@@ -64,14 +64,14 @@ class TestEunchaeQAHonestFailures(unittest.TestCase):
         self.assertTrue(any("Fallback `error.md`" in d for d in det["defects"]))
 
     def test_format_proposal_qa_status_passes_cleanly(self):
-        """When QA audit passes, proposal status uses squad memory note and standard approval."""
+        """When QA audit passes, proposal status uses the past-lessons note and standard approval."""
         qa_res = {
             "passed": True,
             "score": 92,
             "verdict": "🟢 QA CERTIFIED"
         }
         qa_line, actions, color = bot_sakura.format_proposal_qa_status(qa_res, default_score_color=0x57F287)
-        self.assertIn("Verified against squad failure memory", qa_line)
+        self.assertIn("Checked against past lessons", qa_line)
         self.assertIn("Approve & Finalize", actions)
         self.assertNotIn("QA WARNING", actions)
         self.assertEqual(color, 0x57F287)

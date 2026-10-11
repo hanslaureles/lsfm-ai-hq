@@ -128,7 +128,7 @@ def collect_environment():
         },
         "git": {
             "sha": _run(["git", "rev-parse", "HEAD"]),
-            # Code only: the running squad rewrites tracked state files (memory/last_*_date.txt),
+            # Code only: the running bots rewrite their state files (memory/last_*_date.txt),
             # which say nothing about the code that was measured.
             # Scope: tracked .py files only; untracked files, dependencies and other inputs are not checked.
             "dirty": bool(_run(["git", "status", "--porcelain", "--untracked-files=no", "--", "*.py"])),
@@ -476,7 +476,7 @@ STAGES = [
     ("tool_web_search", True, "ciel_web_search via DDGS, 5 results."),
     ("tts_clip_en", True, "One Edge TTS clip (en-US-AvaNeural), Microsoft's service, round trip."),
     ("tts_clip_ja", True, "One Edge TTS clip (ja-JP-NanamiNeural), Microsoft's service, round trip."),
-    ("ffmpeg_outbound", False, "JA + 350 ms pad + EN concat with the Thought Acceleration filter, mp3 encode."),
+    ("ffmpeg_outbound", False, "JA + 350 ms pad + EN concat through the voice filter, mp3 encode."),
     ("pdf_build", False, "build_resume_html + headless Edge render to a temp dir."),
     ("llm_stream_groq", True, f"Streamed completion, temperature 0, max_tokens {LLM_MAX_TOKENS}."),
     ("llm_stream_ollama", False, "Same prompt on local Ollama. The cold model load is reported separately; the "

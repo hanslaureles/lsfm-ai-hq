@@ -11,7 +11,7 @@ An overview of **Eunchae's** evolved dual role as **System Guardian & Quality As
           ┌─────────────────┴─────────────────┐
           ▼                                   ▼
   1. System Guardian                 2. QA Gatekeeper & Heuristics
-  • Real-time CPU/RAM/Disk vitals     • Audits squad application packages
+  • Real-time CPU/RAM/Disk vitals     • Audits team application packages
   • AMD RX 6600 XT GPU monitor        • Pre-flight template placeholder scan
   • Ollama local daemon check         • Recalls past failure rules from memory
   • High resource load alert loops    • Captures post-mortems on rejection
@@ -21,7 +21,7 @@ An overview of **Eunchae's** evolved dual role as **System Guardian & Quality As
 
 ## 🔍 Automated QA Gatekeeper Pipeline (During `!apply`)
 
-Whenever Sakura dispatches a squad mission, Eunchae intercepts the deliverables before they reach `#approvals`:
+Whenever Sakura dispatches a team mission, Eunchae intercepts the deliverables before they reach `#approvals`:
 
 1. **Deterministic Sanity Checks:**
    * **Placeholders:** Scans for `[Company]`, `[Client]`, `[Phone]`, `N/A`, `Lorem Ipsum`, or `TODO`.
@@ -42,10 +42,10 @@ Eunchae actively learns from rejections and corrections:
 ### 1. Rejection in `#approvals`
 When you click **`❌`** on a proposal in `#approvals`:
 * Sakura notes the status as `Discarded`.
-* Eunchae triggers a post-mortem note with instructions on how to teach the squad what went wrong.
+* Eunchae triggers a post-mortem note with instructions on how to teach the team what went wrong.
 
 ### 2. Teaching Eunchae Directly (`!reflect`)
-You can teach the squad permanent rules directly in Discord:
+You can teach the team permanent rules directly in Discord:
 ```
 !reflect <domain> | <symptom / what failed> | <permanent rule to follow>
 ```
@@ -80,7 +80,7 @@ Eunchae also builds the `status.json` file behind the portfolio's Agent Overview
 | Command | Channel | Description |
 | :--- | :--- | :--- |
 | `!qa <filename>` | `#pc-vitals` / any | Audits an existing markdown application or file for QA defects. |
-| `!lessons` (or `!failures`) | `#pc-vitals` | Views all learned failure post-mortems and permanent squad rules. |
+| `!lessons` (or `!failures`) | `#pc-vitals` | Views all learned failure post-mortems and permanent rules. |
 | `!reflect <domain> \| <symptom> \| <rule>` | Any channel | Teaches Eunchae a new permanent rule on the spot. |
 | `!vitals` (or `!health`) | `#pc-vitals` | Real-time PC CPU, RAM, disk, and uptime metrics. |
 | `!checkin` | `#pc-vitals` | Full hardware and subsystem pulse report. |

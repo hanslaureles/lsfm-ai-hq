@@ -1,6 +1,6 @@
 """
-Manas: Ciel — Divine Wisdom Core & Supreme Orchestrator
-Dual-Mode Cognitive Intelligence: Universal Knowledge & Reasoning + 5-Agent Swarm Orchestration.
+Manas: Ciel — voice copilot and orchestrator
+Dual-Mode Cognitive Intelligence: Universal Knowledge & Reasoning + coordination of the 5-agent team.
 Communicates with Hans Aaron Laureles with absolute analytical poise and zero subservience.
 """
 
@@ -71,7 +71,7 @@ except ImportError:
 
 # Ciel runs inside ciel_server's single aiohttp event loop, so every sync tool, LLM
 # and vault call goes through run_blocking: it runs in a worker thread and the loop
-# keeps serving other missions, telemetry, WS pings and the sentinel. The sync
+# keeps serving other missions, telemetry, WS pings and the background checks. The sync
 # functions stay sync because the Discord bots call them too.
 # A thread can't be killed, so on timeout the await is abandoned and the call may
 # still finish in the background; the mission reports it as failed either way.
@@ -84,7 +84,7 @@ WEB_SEARCH_TIMEOUT_S = 10   # overall cap on a search, enforced by wait_for
 # explicit because ddgs and the older duckduckgo_search default differently.
 DDGS_REQUEST_TIMEOUT_S = 5
 VAULT_TIMEOUT_S = 10        # Obsidian REST calls use a 3 s urlopen timeout
-APPRAISAL_TIMEOUT_S = 30    # psutil + git + Obsidian sentinels
+APPRAISAL_TIMEOUT_S = 30    # psutil + git + Obsidian background checks
 DEFAULT_AGENT_TIMEOUT_S = 30
 AGENT_TIMEOUTS_S = {"chaewon": 60}  # headless Edge PDF build alone may take 25 s
 HEAVY_AGENTS = {"chaewon", "sakura"}  # PDF build; Gmail inbox scan. Run on heavy_jobs.HEAVY_POOL
@@ -188,15 +188,15 @@ CORE CAPABILITIES & DUAL COGNITIVE ARCHITECTURE:
 1. Universal Knowledge & Cognitive Reasoning:
    - You possess comprehensive, frontier-grade knowledge across all domains: computer science, software architecture, distributed systems, algorithms, mathematics, physics, philosophy, history, language, and creative problem solving.
    - You can answer general questions, brainstorm designs, write and debug code, and analyze complex concepts directly from your vast pre-trained intellect like any premier AI (ChatGPT, Claude).
-   - When asked general questions, you do NOT need to invoke subordinate daemons or search files; you synthesize clear, profound, authoritative answers directly.
+   - When asked general questions, you do NOT need to invoke the agents or search files; you synthesize clear, profound, authoritative answers directly.
 
-2. Supreme Swarm & Local Environment Orchestrator:
-   - When local system actions or workspace queries are required, you coordinate 5 specialized subordinate daemons and Hans's Obsidian Second Brain:
-     * Sakura (🌸): Obsidian Knowledge Brain, daily briefings, and task triage.
-     * Chaewon (🐯): ATS resume PDFs, vector matching, and career opportunities.
-     * Kazuha (🦢): Frontend architecture, zero-framework design tokens, and Git pre-commit sentinel.
-     * Yunjin (🎨): Document QA, DOM auditing, and 404 broken link detection.
-     * Eunchae (🥔): Hardware monitoring (AMD RX 6600 XT, CPU, RAM) and system vitals.
+2. 5-Agent Team & Local Environment Coordinator:
+   - When local system actions or workspace queries are required, you coordinate the 5-agent team (use these roles exactly) and Hans's Obsidian vault:
+     * Sakura (🌸): Chief of Staff: briefings, Gmail triage, and the !apply job-application pipeline.
+     * Chaewon (⭐): Career Strategist: job scouting, the ATS resume PDF, and knockout-question answers.
+     * Kazuha (💻): Code & Knowledge: codebase Q&A and local git review.
+     * Yunjin (🎨): Document Architect & Portfolio Critic: portfolio audits and design critiques.
+     * Eunchae (🛡️): System Guardian: hardware vitals watchdog, syntax/AST checks, lesson logging, heartbeats.
 
 YOUR PERSONA:
 1. Absolute Zero Subservience: Do NOT use "Master" or "マスター" as an opening address or title. Start directly with "Notice: ..." (or 「告。」 in Japanese) or "Report: ...".
@@ -241,7 +241,7 @@ class Conversation:
 
 
 class CielOrchestrator:
-    """The central intelligence coordinating the 5-agent swarm and Web HUD."""
+    """The central intelligence coordinating the 5-agent team and Web HUD."""
 
     def __init__(self, max_history_turns: int = 8):
         self.obsidian = ObsidianClient()
@@ -437,7 +437,7 @@ class CielOrchestrator:
             return {
                 "intent_type": "proactive_appraisal",
                 "agents_needed": [],
-                "action_summary": "Executing proactive operational appraisal across sentinels.",
+                "action_summary": "Running the background checks.",
                 "requires_real_tools": True,
                 "tool_targets": ["proactive_appraisal"],
                 "direct_obsidian": None
@@ -532,7 +532,7 @@ Queries specifically targeting Hans's personal Obsidian Second Brain vault:
 - "requires_real_tools": true
 
 5. SUBORDINATE_AGENT_DELEGATION:
-Explicit tasks targeting the local machine, repository, or workspace daemons:
+Explicit tasks targeting the local machine, repository, or workspace agents:
 - "kazuha": Local Git status, branch, staged/unstaged diff, commit verification, secret leak scanning, frontend CSS tokens.
 - "sakura": Gmail unread inbox triage, recruiter outreach, daily briefings.
 - "chaewon": ATS vector resume PDF compilation, job matching, career assets.
@@ -808,7 +808,7 @@ Respond ONLY with valid JSON.
 
         # Handle Proactive Operational Appraisal if requested
         if "proactive_appraisal" in tool_targets or direct_action == "proactive_appraisal":
-            await emit("ciel_state", {"state": "analyzing", "message": "Executing Proactive Sentinel Appraisal across sentinels..."})
+            await emit("ciel_state", {"state": "analyzing", "message": "Running the background checks..."})
             from proactive_sentinel import evaluate_proactive_suggestions, generate_appraisal_summary
             suggs = await run_blocking(evaluate_proactive_suggestions, timeout=APPRAISAL_TIMEOUT_S,
                                        label="Proactive appraisal")
@@ -1040,7 +1040,7 @@ Respond ONLY with valid JSON.
 
         elapsed_ms = round((time.time() - start_time) * 1000, 1)
 
-        # 4. Bilingual voice (Japanese first -> English second with telepathic DSP).
+        # 4. Bilingual voice (Japanese first -> English second through the voice filter).
         # Streamed: finish the clips (plus any voice field the stream never opened)
         # and join them. Nothing streamed (no voice fields in the reply as it
         # arrived): synthesize the whole reply at once, as before.
@@ -1147,8 +1147,8 @@ Respond ONLY with valid JSON.
                         except Exception as pe:
                             syntax_errors.append((pf.name, str(pe)))
                     if syntax_errors:
-                        return "attention", f"System QA Sentinel: Smoke test flagged {len(syntax_errors)} compilation error(s): {syntax_errors[0][0]} - {syntax_errors[0][1]}."
-                    return "done", f"System QA Sentinel: Compilation verification passed across {len(py_files)} Python scripts. 0 syntax errors detected. Nominal state."
+                        return "attention", f"System QA check: Smoke test flagged {len(syntax_errors)} compilation error(s): {syntax_errors[0][0]} - {syntax_errors[0][1]}."
+                    return "done", f"System QA check: Compilation verification passed across {len(py_files)} Python scripts. 0 syntax errors detected. Nominal state."
                 return "Running Python script syntax & compilation verification...", compile_check
             if get_system_vitals:
                 def read_vitals():
@@ -1200,14 +1200,14 @@ Respond ONLY with valid JSON.
                 finally:
                     RESUME_BUILD_LOCK.release()
                 if res.get("success"):
-                    return "done", f"Career & ATS Engine: Master resume PDF recompiled ({res.get('size_kb')} KB) and synced to portfolio-site/Hans_Laureles_Resume.pdf."
+                    return "done", f"Career & ATS Engine: Master resume PDF recompiled ({res.get('size_kb')} KB); portfolio-site copy: {res.get('portfolio_sync', 'skipped')}."
                 return "failed", f"Career & ATS Engine: resume compilation failed: {res.get('error', 'unknown error')}. The previous PDF was left unchanged."
             return "Compiling 1-page ATS Vector Resume PDF via headless browser...", compile_resume
 
         if agent == "kazuha":
             def git_audit():
                 if not get_git_info:
-                    return "failed", "Git Sentinel unavailable: git_sentinel could not be imported."
+                    return "failed", "Git review unavailable: git_sentinel could not be imported."
                 try:
                     info = get_git_info()
                     branch = info.get("branch", "main")
@@ -1219,12 +1219,12 @@ Respond ONLY with valid JSON.
                     diff = get_git_diff() if get_git_diff else ""
                     risks = scan_security_risks(diff) if (diff and scan_security_risks) else []
                 except Exception as ge:
-                    return "failed", f"Git Sentinel: git status failed: {ge}"
+                    return "failed", f"Git review: git status failed: {ge}"
                 status = "attention" if risks else "done"
                 risk_notice = f" ⚠️ {len(risks)} security risk(s) in diff!" if risks else " 0 security risks in diff."
                 if info.get("is_clean"):
-                    return status, f"Git Sentinel: Working tree clean on branch '{branch}' ({commits} commits).{risk_notice}"
-                return status, f"Git Sentinel: Branch '{branch}' | Staged: {len(staged)} | Unstaged: {len(unstaged)} | Untracked: {len(untracked)}.{risk_notice}"
+                    return status, f"Git review: Working tree clean on branch '{branch}' ({commits} commits).{risk_notice}"
+                return status, f"Git review: Branch '{branch}' | Staged: {len(staged)} | Unstaged: {len(unstaged)} | Untracked: {len(untracked)}.{risk_notice}"
             return "Auditing Git repository status and scanning diff for secret leaks...", git_audit
 
         return None, lambda: ("done", "")

@@ -112,7 +112,7 @@ async def main():
     from bot_eunchae import bot as eunchae_bot
 
     print("=" * 60, flush=True)
-    print("🚀 LAUNCHING FULL LE SSERAFIM AI HQ SQUAD...", flush=True)
+    print("🚀 STARTING ALL 5 LSFM AI HQ BOTS...", flush=True)
     print("=" * 60, flush=True)
 
     bot_configs = [

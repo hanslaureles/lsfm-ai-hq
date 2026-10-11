@@ -219,7 +219,7 @@ async def handle_chat(request):
 
 
 async def handle_get_suggestions(request):
-    """Returns real-time proactive suggestions evaluated across sentinels."""
+    """Returns the current suggestions from the background checks."""
     try:
         suggs = await asyncio.to_thread(evaluate_proactive_suggestions)
         return web.json_response({
@@ -299,8 +299,8 @@ async def websocket_handler(request):
 
 
 async def background_sentinel_worker(app):
-    """Periodically monitors workspace sentinels and broadcasts suggestions to HUD."""
-    print("👁️ [CielServer] Proactive Sentinel watcher loop initialized.")
+    """Runs the background checks every 45 s and broadcasts suggestions to the HUD."""
+    print("👁️ [CielServer] Background checks loop started.")
     while True:
         try:
             await asyncio.sleep(45)
@@ -314,7 +314,7 @@ async def background_sentinel_worker(app):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"⚠️ [CielServer] Sentinel worker warning: {e}", flush=True)
+            print(f"⚠️ [CielServer] Background checks warning: {e}", flush=True)
 
 
 TELEMETRY_INTERVAL_S = 5
@@ -342,7 +342,11 @@ async def telemetry_worker(app):
             print(f"⚠️ [CielServer] Telemetry worker warning: {e}", flush=True)
 
 
-BACKGROUND_TASKS = {"sentinel_task": background_sentinel_worker, "telemetry_task": telemetry_worker}
+# Typed keys like MISSION_GATE (plain string keys raise aiohttp's NotAppKeyWarning).
+BACKGROUND_TASKS = {
+    web.AppKey("background_checks_task", asyncio.Task): background_sentinel_worker,
+    web.AppKey("telemetry_task", asyncio.Task): telemetry_worker,
+}
 
 
 async def start_background_tasks(app):

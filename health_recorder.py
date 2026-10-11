@@ -4,7 +4,7 @@ on_ready and every HEARTBEAT_INTERVAL_S while the bot runs. eunchae_publisher
 reads them; a file that stops changing is how a dead bot shows up. Stdlib only.
 
 Each bot module calls attach(bot, "<name>") once, so the files exist whether the
-squad runs through run_all.py or a bot runs on its own.
+bots run through run_all.py or a bot runs on its own.
 """
 
 import asyncio

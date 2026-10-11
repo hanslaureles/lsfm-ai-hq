@@ -343,5 +343,67 @@ class TestMasterProfileLayout(unittest.TestCase):
         self.assertIn("BS CS (EU)", header)
 
 
+def _fake_pdf(browser: str, stamp: str, body: str) -> bytes:
+    """A small PDF laid out like Edge's: the Info object first, so a longer version
+    string moves every byte offset in the xref table after it."""
+    objs = [
+        f"<</Creator (Mozilla/5.0 \\(Windows NT 10.0\\) HeadlessChrome/{browser} Edg/{browser})\n"
+        f"/Producer (Skia/PDF m{browser.split('.')[0]})\n/CreationDate (D:{stamp}+00'00')\n/ModDate (D:{stamp}+00'00')>>",
+        f"<</Length {len(body)}>> stream\n{body}\nendstream",
+    ]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, obj in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{obj}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<</Size {len(objs) + 1}\n/Info 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+class TestPortfolioSync(unittest.TestCase):
+    """Audit 2026-10-12 F4: the Sunday rebuild rewrote portfolio-site's resume for a new Edge version."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.src, self.dest = self.dir / "master.pdf", self.dir / "portfolio.pdf"
+
+    def test_a_new_browser_version_and_date_alone_is_not_copied(self):
+        from pdf_engine import sync_pdf_copy
+        committed = _fake_pdf("154.0.0.0", "20261008124347", "BT (Hans) Tj ET")
+        self.dest.write_bytes(committed)
+        for browser in ("155.0.0.0", "1155.0.0.0"):  # same length, and longer (offsets move)
+            with self.subTest(browser=browser):
+                self.src.write_bytes(_fake_pdf(browser, "20261011142411", "BT (Hans) Tj ET"))
+                self.assertEqual(sync_pdf_copy(self.src, self.dest), "unchanged")
+                self.assertEqual(self.dest.read_bytes(), committed)
+
+    def test_changed_page_content_is_copied(self):
+        from pdf_engine import sync_pdf_copy
+        self.dest.write_bytes(_fake_pdf("154.0.0.0", "20261008124347", "BT (normalises) Tj ET"))
+        rebuilt = _fake_pdf("154.0.0.0", "20261008124347", "BT (converts) Tj ET")
+        self.src.write_bytes(rebuilt)
+        self.assertEqual(sync_pdf_copy(self.src, self.dest), "copied")
+        self.assertEqual(self.dest.read_bytes(), rebuilt)
+
+    def test_a_missing_copy_is_created(self):
+        from pdf_engine import sync_pdf_copy
+        self.src.write_bytes(_fake_pdf("155.0.0.0", "20261011142411", "BT (Hans) Tj ET"))
+        self.assertEqual(sync_pdf_copy(self.src, self.dest), "copied")
+        self.assertTrue(self.dest.is_file())
+
+    def test_a_failed_copy_says_so(self):
+        from pdf_engine import describe_portfolio_sync, sync_pdf_copy
+        self.src.write_bytes(_fake_pdf("155.0.0.0", "20261011142411", "BT (Hans) Tj ET"))
+        with mock.patch("builtins.print"):
+            status = sync_pdf_copy(self.src, self.dir / "no-such-folder" / "portfolio.pdf")
+        self.assertEqual(status, "failed: FileNotFoundError")
+        self.assertTrue(describe_portfolio_sync({"portfolio_sync": status}).startswith("⚠️"))
+        self.assertIn("already current", describe_portfolio_sync({"portfolio_sync": "unchanged"}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
-# ⚔️ Kazuha's Local Git & PR Sentinel — User Guide
+# ⚔️ Kazuha's Local Git Review — User Guide
 
-An autonomous, local-first code review, conventional commit generator, and GitHub Pull Request sentinel designed for **Hans Aaron Laureles**.
+An autonomous, local-first code review, conventional commit generator, and GitHub pull request drafter designed for **Hans Aaron Laureles**.
 
 Powered by local GPU inference (**`qwen2.5-coder:7b` on AMD Radeon RX 6600 XT via Ollama**) with automatic cloud failover to Groq Cloud / Gemini.
 
@@ -8,13 +8,13 @@ Powered by local GPU inference (**`qwen2.5-coder:7b` on AMD Radeon RX 6600 XT vi
 
 ## 🚀 Dual Interface: CLI & Discord
 
-You can access the Sentinel either **directly in your Windows terminal** while coding or **via Discord** in `#git-log` / `#frontend-lab`.
+You can use the git review either **directly in your Windows terminal** while coding or **via Discord** in `#git-log` / `#frontend-lab`.
 
 ---
 
 ## 1. Terminal / CLI Usage (PowerShell or CMD)
 
-Run Sentinel commands from `lsfm-swarm/` or from the repository root:
+Run these commands from this repository's root folder:
 
 ### Check Git Health & Status
 ```powershell
@@ -81,11 +81,11 @@ You can also simply chat with Kazuha in `#git-log` or `#frontend-lab`:
 
 ## 3. Optional: Automatic Git Pre-Commit Hook
 
-To automatically run Kazuha's Sentinel review before **every** git commit, create a pre-commit hook in your `.git/hooks/pre-commit` file:
+To automatically run Kazuha's git review before **every** git commit, create a pre-commit hook in your `.git/hooks/pre-commit` file:
 
 ```bash
 #!/bin/sh
-python lsfm-swarm/git_sentinel.py review --staged
+python <path-to-this-repo>/git_sentinel.py review --staged
 ```
 
 Whenever you run `git commit`, Kazuha will inspect your staged code and provide an instant verdict before your commit is finalized!

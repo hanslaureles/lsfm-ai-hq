@@ -238,7 +238,7 @@ def format_proposal_qa_status(
     verdict = qa_res.get("verdict", "UNKNOWN")
 
     if qa_passed:
-        qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — Verified against squad failure memory\n"
+        qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — Checked against past lessons\n"
         action_instructions = (
             f"👉 **Next Action for Hans:**\n"
             f"• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
@@ -260,7 +260,7 @@ def format_proposal_qa_status(
 
 async def handle_apply_orchestration(target_message, job_input: str = "", attachments = None):
     """
-    Core squad collaboration pipeline:
+    Core team collaboration pipeline:
     1. Scrapes or parses the target role & company.
     2. Dispatches mission briefing to #agent-handoffs.
     3. Triggers Chaewon (Career tailoring), Yunjin (Portfolio curation), Kazuha (Frontend tech stack).
@@ -296,7 +296,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
             role = header_clean
 
     loop = asyncio.get_running_loop()
-    status_msg = await target_message.reply("🌸 **Sakura is initializing squad mission dispatch...**")
+    status_msg = await target_message.reply("🌸 **Sakura is handing the job to the team...**")
 
     # Handle URL scraping if link detected
     detected_url = find_url_in_text(job_text)
@@ -328,22 +328,22 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
 
     await status_msg.edit(
         content=f"🚀 **Target Locked:** `{role}` at **{company}**\n"
-                f"🌸 **Sakura dispatched tasks to the squad! Live handoffs streaming in <#{handoffs_ch.id}>...**"
+                f"🌸 **Sakura handed the tasks to the team! Live handoffs streaming in <#{handoffs_ch.id}>...**"
     )
 
     # 1. Dispatch Card in #agent-handoffs
     dispatch_embed = discord.Embed(
-        title=f"🌸 SQUAD MISSION DISPATCH: {role} @ {company}",
+        title=f"🌸 TEAM MISSION: {role} @ {company}",
         description=f"**Lead Orchestrator:** Sakura\n"
                     f"**Target Company:** **{company}**\n"
                     f"**Target Role:** `{role}`\n\n"
-                    f"📋 **Squad Collaboration Workflow:**\n"
+                    f"📋 **Team Workflow:**\n"
                     f"1️⃣ ⭐ **Chaewon:** Resume tailoring, fit scoring & cover letter\n"
                     f"2️⃣ 🎨 **Yunjin:** Portfolio case study curation & recruiter heuristics\n"
                     f"3️⃣ 💻 **Kazuha:** Frontend architecture & CS degree positioning\n"
                     f"4️⃣ 🛡️ **Eunchae:** Quality Assurance Gatekeeper & Failure Heuristics audit\n"
                     f"5️⃣ 🗳️ **Approvals:** Consolidated Master Proposal Card dispatched to `#approvals`\n\n"
-                    f"⚡ *Squad executing in parallel...*",
+                    f"⚡ *The team is working in parallel...*",
         color=0xF472B6
     )
     dispatch_embed.set_footer(text="LE SSERAFIM AI HQ • Multi-Agent Pipeline")
@@ -443,7 +443,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
                     f"🔍 Heuristics Checked: `{qa_res.get('heuristics_checked', 0)} active memory rules`",
         color=qa_color
     )
-    eunchae_qa_embed.set_footer(text="Eunchae • Squad QA Inspector & Gatekeeper • Handoff 4/4")
+    eunchae_qa_embed.set_footer(text="Eunchae • Team QA Inspector & Gatekeeper • Handoff 4/4")
     await handoffs_ch.send(embed=eunchae_qa_embed)
 
     # 6. Sakura Master Proposal Card in #approvals
@@ -463,7 +463,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
 
     proposal_embed = discord.Embed(
         title=f"📋 MASTER APPLICATION PROPOSAL: {role} @ {company}",
-        description=f"The squad has completed the multi-agent tailoring pipeline for **{company}**!\n\n"
+        description=f"The team has completed the multi-agent tailoring pipeline for **{company}**!\n\n"
                     f"⭐ **Chaewon (Career):** **{score}% Match** — Tailored resume bullets & custom cover letter generated\n"
                     f"🎨 **Yunjin (Portfolio):** Lead with **{rec_projects}**\n"
                     f"💻 **Kazuha (Frontend):** CS degree rigor & design-token architecture talking points locked\n"
@@ -505,7 +505,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     })
 
     final_reply = (
-        f"🌸 **Squad Pipeline Complete!**\n"
+        f"🌸 **Team Pipeline Complete!**\n"
         f"• Mission handoff cards posted in <#{handoffs_ch.id}>\n"
         f"• Master Proposal awaiting your reaction in <#{approvals_ch.id}>!"
     )
@@ -613,13 +613,13 @@ async def on_raw_reaction_add(payload):
         embed = discord.Embed(
             title="❌ Application Discarded & Noted in QA Memory",
             description=f"The application proposal for **{data['role']}** at **{data['company']}** has been shelved / discarded.\n\n"
-                        f"🛡️ **Eunchae Post-Mortem Sentinel:**\n"
+                        f"🛡️ **Eunchae Post-Mortem:**\n"
                         f"If there was a specific defect or issue (e.g. bad tone, wrong skills, formatting bug), "
                         f"type: `!reflect {data['company']} | <what went wrong> | <what to do next time>` "
-                        f"in `#pc-vitals` so the squad never repeats this mistake!",
+                        f"in `#pc-vitals` so the team never repeats this mistake!",
             color=0xED4245
         )
-        embed.set_footer(text="LE SSERAFIM AI HQ • Eunchae QA Sentinel • Shelved")
+        embed.set_footer(text="LE SSERAFIM AI HQ • Eunchae QA • Shelved")
         if target_msg:
             await target_msg.reply(embed=embed)
         else:
@@ -649,7 +649,7 @@ async def on_message(message):
     lower_content = clean_content.lower()
     loop = asyncio.get_running_loop()
 
-    # Check for squad pipeline triggers (!apply or natural language apply)
+    # Check for team pipeline triggers (!apply or natural language apply)
     if lower_content.startswith("apply ") or "apply to " in lower_content or "apply for " in lower_content:
         # Strip triggering verb
         input_text = clean_content
@@ -663,15 +663,15 @@ async def on_message(message):
     # Check for brain mode switches
     if any(phrase in lower_content for phrase in ["switch to cloud", "use cloud mode", "cloud mode"]):
         set_brain_mode("cloud")
-        await message.reply("🌸 Squad brain switched to **CLOUD MODE**! Powered by Groq Cloud with zero load on your RX 6600 XT.")
+        await message.reply("🌸 Team brain switched to **CLOUD MODE**! Powered by Groq Cloud with zero load on your RX 6600 XT.")
         return
     elif any(phrase in lower_content for phrase in ["switch to local", "use local mode", "local mode"]):
         set_brain_mode("local")
-        await message.reply("🌸 Squad brain switched to **LOCAL MODE**! Directing requests to your local RX 6600 XT via Ollama.")
+        await message.reply("🌸 Team brain switched to **LOCAL MODE**! Directing requests to your local RX 6600 XT via Ollama.")
         return
     elif any(phrase in lower_content for phrase in ["switch to auto", "use auto mode", "auto mode"]):
         set_brain_mode("auto")
-        await message.reply("🌸 Squad brain switched to **AUTO-DETECT MODE**! Using local GPU when available, with automatic fallback to Groq Cloud.")
+        await message.reply("🌸 Team brain switched to **AUTO-DETECT MODE**! Using local GPU when available, with automatic fallback to Groq Cloud.")
         return
     elif any(k in lower_content for k in ["brain status", "what mode", "current mode", "which model"]):
         status = get_brain_status()
@@ -728,12 +728,12 @@ async def on_message(message):
 async def help_command(ctx):
     embed = discord.Embed(
         title="🌸 Sakura — Chief of Staff & Central Orchestrator",
-        description="I manage Hans's overall AI ecosystem, coordinate the squad, and maintain high-level career strategy:",
+        description="I manage Hans's overall AI ecosystem, coordinate the team, and maintain high-level career strategy:",
         color=0xF472B6
     )
     embed.add_field(
         name="🤝 `!apply [URL or job text]`",
-        value="Dispatches the full squad pipeline: Chaewon tailors resume & letter, Yunjin curates case studies, Kazuha builds the tech pitch, and posts a Master Proposal to `#approvals` for your 1-click reaction!",
+        value="Dispatches the full team pipeline: Chaewon tailors resume & letter, Yunjin curates case studies, Kazuha builds the tech pitch, and posts a Master Proposal to `#approvals` for your 1-click reaction!",
         inline=False
     )
     embed.add_field(
@@ -767,7 +767,7 @@ async def help_command(ctx):
 
 @bot.command(name="apply")
 async def apply_command(ctx, *, args: str = None):
-    """Executes the full multi-agent squad collaboration pipeline."""
+    """Executes the full multi-agent team collaboration pipeline."""
     await handle_apply_orchestration(ctx, job_input=args or "", attachments=ctx.message.attachments)
 
 
@@ -799,10 +799,10 @@ async def mode_command(ctx, target_mode: str = None):
         desc = "💻 **LOCAL MODE ACTIVATED**\nAll agents are now routed to **Local Ollama (qwen2.5-coder:7b)** on your RX 6600 XT. 100% private, zero model swapping, your data never leaves your PC."
         color = 0x10B981
     else:
-        desc = "🤖 **AUTO-DETECT MODE ACTIVATED**\nSmart dual-brain activated! The squad uses your local GPU if Ollama is running, and automatically falls back to the specialized cloud cluster if Ollama is closed."
+        desc = "🤖 **AUTO-DETECT MODE ACTIVATED**\nSmart dual-brain activated! The team uses your local GPU if Ollama is running, and automatically falls back to the specialized cloud cluster if Ollama is closed."
         color = 0xF472B6
 
-    embed = discord.Embed(title="🌸 Squad Brain Mode Updated", description=desc, color=color)
+    embed = discord.Embed(title="🌸 Team Brain Mode Updated", description=desc, color=color)
     embed.set_footer(text="Chief of Staff • AI Brain Dispatcher")
     await ctx.reply(embed=embed)
 
@@ -916,7 +916,7 @@ async def inbox_command(ctx, scope: str = ""):
             description="To allow Sakura to organize your Gmail, download your OAuth credentials from Google Cloud Console:\n\n"
                         "1️⃣ Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)\n"
                         "2️⃣ Create an OAuth Client ID for **Desktop App**\n"
-                        "3️⃣ Download and save it as `credentials.json` in `lsfm-swarm/`\n"
+                        "3️⃣ Download and save it as `credentials.json` in this repo's root folder\n"
                         "4️⃣ Run `python test_gmail_auth.py` in your terminal to authenticate!\n\n"
                         "💡 *Your emails are 100% private and processed locally on your PC.*",
             color=0xFEE75C

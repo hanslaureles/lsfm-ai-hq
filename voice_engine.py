@@ -101,7 +101,7 @@ def normalize_audio_for_transcription(audio_bytes: bytes) -> bytes:
 
 def apply_telepathy_dsp(raw_path: Path, output_path: Path, lead_ms: int = 0) -> bool:
     """
-    Applies Tensura Divine Wisdom telepathic resonance:
+    Applies the voice filter:
     - Highpass 120Hz (removes muddy room boom)
     - 3.5kHz crystalline EQ boost (crisp clarity)
     - Dual 25ms/45ms subtle comb reflection (speaks inside the soul corridor)
@@ -132,7 +132,7 @@ async def text_to_speech(
 ) -> Path:
     """
     Converts single text to speech using calibrated Microsoft Edge neural TTS
-    and enhances it with Tensura Thought Acceleration acoustic modeling.
+    and runs it through the voice filter.
     """
     clean_text = text.strip()
     if not clean_text:
@@ -172,7 +172,7 @@ async def text_to_speech_bilingual(
     1. Spoken Japanese voice first (Megumi Toyoguchi / Raphael anime tone)
     2. Subtle 350ms pause
     3. Spoken English voice second (AvaNeural calibrated)
-    4. Tensura telepathic resonance filter applied across both via FFmpeg
+    4. The voice filter is applied across both via FFmpeg
     """
     ja_clean = (ja_text or "").strip()
     en_clean = (en_text or "").strip()
@@ -200,7 +200,7 @@ async def text_to_speech_bilingual(
     )
 
     try:
-        # Concatenate JA -> 350ms pad -> EN with Thought Acceleration telepathic filter
+        # Concatenate JA -> 350ms pad -> EN through the voice filter
         if apply_dsp:
             filter_graph = (
                 "[0:a]apad=pad_dur=0.35[a0];"
@@ -248,7 +248,7 @@ JA_EN_GAP_MS = 350  # the same pause text_to_speech_bilingual puts between the l
 async def speak_clip(text: str, lang: str, output_filename: str, gap_before: bool = False) -> Path:
     """
     One streamed sentence: Edge TTS in Ciel's voice for `lang`, then the same
-    Thought Acceleration filter as the full reply. gap_before adds the JA->EN pause.
+    voice filter as the full reply. gap_before adds the JA->EN pause.
     Raises if Edge TTS fails.
     """
     voice, pitch, rate = CLIP_VOICES[lang]

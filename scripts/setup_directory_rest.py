@@ -56,7 +56,7 @@ def main():
     embeds = [
         {
             "title": "📖 LE SSERAFIM AI HQ — Master Command Directory",
-            "description": "Welcome to the universal command directory for Hans Aaron Laureles's personal AI squad.\n\n"
+            "description": "Welcome to the universal command directory for Hans Aaron Laureles's personal 5-agent AI team.\n\n"
                             "• **`#all-commands`**: Your permanent quick-reference guide for every agent.\n"
                             "• **`#commands-chat`**: Your shared universal playground where you can invoke **any** agent or command at any time!",
             "color": 0xF472B6,
@@ -76,7 +76,7 @@ def main():
                 "fields": [
                     {
                         "name": "🤝 `!apply [URL or job text]`",
-                        "value": "Dispatches the full squad pipeline: Chaewon tailors resume & letter, Yunjin curates portfolio case studies, Kazuha builds tech pitch, and Sakura posts the Master Proposal to `#approvals` for your 1-click reaction approval (`✅`/`❌`).",
+                        "value": "Dispatches the full team pipeline: Chaewon tailors resume & letter, Yunjin curates portfolio case studies, Kazuha builds tech pitch, and Sakura posts the Master Proposal to `#approvals` for your 1-click reaction approval (`✅`/`❌`).",
                         "inline": False
                     },
                     {
@@ -165,7 +165,7 @@ def main():
                     },
                     {
                         "name": "🧠 `!reflect domain | trigger | symptom | root_cause | rule`",
-                        "value": "Logs a new engineering post-mortem directly into episodic memory from Discord so the squad never repeats it.",
+                        "value": "Logs a new engineering post-mortem directly into episodic memory from Discord so the team never repeats it.",
                         "inline": False
                     },
                     {
@@ -193,7 +193,7 @@ def main():
                     },
                     {
                         "name": "🛡️ `!checkin`",
-                        "value": "Generates a full, energetic hardware and squad status checkup from the maknae.",
+                        "value": "Generates a full, energetic hardware and team status checkup from the maknae.",
                         "inline": False
                     },
                     {

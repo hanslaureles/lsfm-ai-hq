@@ -100,7 +100,7 @@ from git_sentinel import (
 )
 
 def get_git_status() -> str:
-    """Checks the current Git status of the Antigravity workspace via Sentinel."""
+    """Checks the current Git status of the Antigravity workspace via git_sentinel."""
     try:
         info = get_git_info(WORKSPACE_DIR)
         lines = []
@@ -122,15 +122,15 @@ def get_git_status() -> str:
         return f"⚠️ Could not check git status: {e}"
 
 def kazuha_review_changes(staged_only: bool = False) -> dict:
-    """Invokes Sentinel code review engine."""
+    """Invokes the git_sentinel code review."""
     return review_code_diff(WORKSPACE_DIR, staged_only=staged_only)
 
 def kazuha_create_commit(staged_only: bool = False) -> dict:
-    """Invokes Sentinel Conventional Commit generator."""
+    """Invokes the git_sentinel Conventional Commit generator."""
     return generate_conventional_commit(WORKSPACE_DIR, staged_only=staged_only)
 
 def kazuha_create_pr() -> dict:
-    """Invokes Sentinel GitHub PR generator."""
+    """Invokes the git_sentinel GitHub PR generator."""
     return generate_pr_description(WORKSPACE_DIR)
 
 def consult_kazuha(question: str) -> str:
@@ -167,7 +167,7 @@ def generate_tech_pitch(job_text: str, role: str = "Design / Engineering Role", 
 
     prompt = f"""
 You are "Kazuha", Lead Frontend Architect and Design Systems Engineer for the candidate.
-The squad is preparing an application package for:
+The team is preparing an application package for:
 **Role:** {role}
 **Company:** {company}
 
@@ -303,7 +303,7 @@ Today is {date_str}. Review these trending papers:
 
 ### INSTRUCTIONS:
 Synthesize an executive **Applied AI Research Digest** tailored specifically for Hans's engineering roadmap:
-- Hans's stack: Multi-agent swarms (LSFM Swarm, Discord daemons), local LLM inference (Ollama on AMD Radeon RX 6600 XT), hybrid cloud routing, and Swiss-inspired design systems (React/Vite/Tailwind).
+- Hans's stack: a 5-agent team on Discord (LSFM AI HQ), local LLM inference (Ollama on AMD Radeon RX 6600 XT), hybrid cloud routing, and Swiss-inspired design systems (React/Vite/Tailwind).
 - Professional identity: Applied AI Engineer & Full-Stack Builder.
 
 Structure your response into 3 concise, high-signal sections:
@@ -312,7 +312,7 @@ Structure your response into 3 concise, high-signal sections:
 2. ⚡ **ARCHITECTURAL TAKEAWAYS FOR OUR STACK**:
    - How can these techniques improve Hans's local inference speeds, tool-calling determinism, or multi-agent memory consolidation?
 3. 🛠️ **ACTIONABLE IMPLEMENTATION EXPERIMENT**:
-   - One concrete, 1-day proof-of-concept Hans can implement right now in `lsfm-swarm/` or his portfolio.
+   - One concrete, 1-day proof-of-concept Hans can implement right now in LSFM AI HQ or his portfolio.
 
 Tone: Precise, disciplined, elegant, authoritative engineering craft.
 Formatting: Discord Markdown with clean bullet points and clear hierarchy.
@@ -351,7 +351,7 @@ status: completed
 {digest_text}
 
 ---
-*Ingested automatically into Obsidian Second Brain via LSFM Swarm Cron 4.*
+*Ingested automatically into Obsidian Second Brain via LSFM AI HQ Cron 4.*
 """
             # Create-only: a same-day re-run must not replace a digest (or Hans's edits to it).
             note_saved = client.create_file(obsidian_note_path, markdown_content)
@@ -368,7 +368,7 @@ status: completed
                     f"Scouted {len(papers)} trending applied AI papers",
                     f"Primary artifact: [[{obsidian_note_path}]]",
                     f"Top Innovation: {papers[0]['title'] if papers else 'Applied AI Trends'}",
-                    "Synthesized architectural takeaways for local GPU inference & multi-agent swarms"
+                    "Synthesized architectural takeaways for local GPU inference & multi-agent systems"
                 ]
             )
             obsidian_synced = note_saved and logged

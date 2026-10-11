@@ -3,7 +3,8 @@
 # Install via: pip install -r requirements.txt
 # ==============================================================================
 
-# Core Discord Bot Framework
+# Core Discord Bot Framework. It imports audioop, which Python 3.13 removed:
+# run on 3.11/3.12 (CI uses 3.11), or add audioop-lts before moving to 3.13.
 discord.py>=2.3.2
 
 # Environment Variables & Configuration

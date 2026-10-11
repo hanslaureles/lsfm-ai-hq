@@ -232,7 +232,7 @@ async def ping(ctx):
 
 # Feature summaries are descriptive only; readiness comes from the file checks in !status.
 STATUS_CASE_STUDIES = [
-    ("🚀 LSFM AI HQ (Multi-Agent Swarm)", ["case-lsfm.html"],
+    ("🚀 LSFM AI HQ (5-Agent Team)", ["case-lsfm.html"],
      ["5 Discord agents on asyncio", "Groq + Gemini routing, optional local Ollama", "Headless-Edge ATS resume compiler"]),
     ("🔮 Manas: Ciel (Voice Copilot & HUD)", ["case-ciel.html"],
      ["Bilingual JA/EN voice pipeline", "Groq Whisper STT + Edge-TTS with FFmpeg filter", "Obsidian vault tools"]),
