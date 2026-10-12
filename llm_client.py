@@ -403,6 +403,9 @@ def call_gemini(prompt: str, system_instruction: str = "", model_name: str = Non
     raise RuntimeError(f"All Gemini models failed: {last_error}")
 
 AGENTS = tuple(DEFAULT_CONFIG["agent_cloud_models"])
+# Who may call query_llm_structured: the 5 bots plus Ciel (ADR-001 R-1). Ciel is not
+# a bot (no heartbeat, not in status.json), so it is not in AGENTS; it uses cloud_model.
+LLM_CALLERS = AGENTS + ("ciel",)
 
 
 @dataclass(frozen=True)
@@ -422,7 +425,7 @@ def query_llm(prompt: str, system_instruction: str = "", temperature: float = 0.
 
 
 def query_llm_structured(prompt: str, system_instruction: str = "", temperature: float = 0.4, *,
-                         agent: str, on_delta=None) -> LLMResult:
+                         agent: str, on_delta=None, meta: dict | None = None) -> LLMResult:
     """
     Multi-provider LLM dispatcher with per-agent model specialization. `agent` is
     required and must be one of AGENTS; it picks the cloud model from
@@ -434,20 +437,25 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
         * Yunjin: gemini-3.6-flash (Google), Groq fallback
         * Kazuha: qwen/qwen3.8-27b (Groq)
         * Eunchae: openai/gpt-oss-20b (Groq)
+        * Ciel: cloud_model (qwen/qwen3.8-27b, Groq), Gemini fallback like the bots
     - 'local': local Ollama (local_model) for every agent.
     - 'auto': local Ollama if it is running, otherwise the agent's cloud model.
+    In 'cloud' mode a running Ollama is the last resort when every cloud provider fails.
     A cloud provider whose CircuitBreaker is open (3 failed calls in a row) is
     asked last until its cooldown ends. Once a streamed reply has started, a
     failure raises instead of falling back to the other provider.
+    meta: an optional dict the caller keeps; it is filled as calls go (chain,
+    provider, model, ttft_ms), so the caller still sees what was tried after a raise.
     """
     agent_key = agent.lower().strip() if isinstance(agent, str) else ""
-    if agent_key not in AGENTS:
-        raise ValueError(f"query_llm: agent must be one of {', '.join(AGENTS)}; got {agent!r}")
+    if agent_key not in LLM_CALLERS:
+        raise ValueError(f"query_llm: agent must be one of {', '.join(LLM_CALLERS)}; got {agent!r}")
 
     cfg = load_brain_config()
     mode = cfg.get("mode", "cloud").lower()
     errors = []
-    meta = {"chain": []}  # filled by the call_* functions (see call_groq)
+    meta = {} if meta is None else meta  # filled by the call_* functions (see call_groq)
+    meta.setdefault("chain", [])
     started = time.perf_counter()
 
     agent_cloud_map = cfg.get("agent_cloud_models", DEFAULT_CONFIG["agent_cloud_models"])
@@ -477,8 +485,10 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
         return call_local_ollama(prompt, system_instruction=system_instruction, model=target_local_model,
                                  meta=meta), "ollama", target_local_model
 
-    def _dispatch_cloud():
+    def _dispatch_cloud(try_local: bool = True):
         # (provider, model, error label): the agent's own provider first, the other as fallback.
+        # try_local: when both clouds fail, a running Ollama answers (ADR-001 R-1); auto mode
+        # passes False because it has already tried Ollama first.
         if target_cloud_model.startswith("gemini"):  # Yunjin
             steps = [("gemini", target_cloud_model, f"Gemini ({target_cloud_model})"),
                      ("groq", "qwen/qwen3.8-27b", "Groq Cloud fallback")]
@@ -505,6 +515,13 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
             BREAKERS[provider].record(True)
             return answer
 
+        if try_local:
+            ollama_up, local_models = check_ollama_status()
+            if ollama_up and local_models:
+                try:
+                    return _ollama()
+                except Exception as e:
+                    errors.append(f"Local Ollama: {e}")
         raise RuntimeError(f"Cloud providers failed: {'; '.join(errors)}")
 
     def _dispatch():
@@ -526,7 +543,7 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
                 return _ollama()
             except Exception as e:
                 errors.append(f"Local Ollama: {e}")
-        return _dispatch_cloud()
+        return _dispatch_cloud(try_local=False)
 
     text, provider, requested = _dispatch()
     # A provider stubbed without meta support reports nothing; fall back to what was asked for.

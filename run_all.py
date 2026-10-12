@@ -8,7 +8,7 @@ from time import monotonic
 import discord
 from dotenv import load_dotenv
 
-from instance_lock import require_single_instance
+from instance_lock import require_single_instance, STOP_MARKER
 
 # Ensure UTF-8 output on Windows consoles
 if sys.platform == "win32":
@@ -97,10 +97,26 @@ async def run_bot_resilient(bot_instance, token: str, name: str):
             await asyncio.sleep(delay)
             backoff = min(backoff * 1.5, BACKOFF_MAX)
 
+def prepare_start(marker: Path = STOP_MARKER) -> None:
+    """
+    Runs before anything is logged. The LSFM Bots task re-runs this file every 5 minutes
+    (ADR-001 R-1), so a start that is refused or paused must leave bots.log alone.
+    One bot process at a time (6B): a second start exits 1 here; nothing is killed.
+    """
+    scheduled = sys.stdout is None  # pythonw from the LSFM Bots task: no console
+    if scheduled and marker.exists():
+        sys.exit(0)  # stopped on purpose with stop_squad.bat: stay stopped
+    require_single_instance()
+    if scheduled and marker.exists():
+        # stop_squad.bat ran between the check above and the lock (it writes the marker
+        # before stopping): back off; exiting releases the lock.
+        sys.exit(0)
+    if not scheduled:
+        marker.unlink(missing_ok=True)  # a start by hand resumes the scheduled restarts
+
+
 async def main():
     # Side effects live here, not at import time, so tests can import this module.
-    # One bot process at a time (6B): a second start is refused; nothing is killed.
-    require_single_instance()
     load_dotenv()
     from obsidian_client import ObsidianClient
     print(f"🗂️ [Vault] {ObsidianClient().check_vault_consistency()}", flush=True)
@@ -138,11 +154,16 @@ async def main():
 
     await asyncio.gather(*tasks)
 
-if __name__ == "__main__":
-    log_to_file_without_console()
+def entry(log_path: Path = BOTS_LOG, marker: Path = STOP_MARKER):
+    prepare_start(marker)
+    log_to_file_without_console(log_path)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Stopping all bots.", flush=True)
     except Exception as e:
         print(f"\n❌ Error in multi-bot runner: {e}", flush=True)
+
+
+if __name__ == "__main__":
+    entry()

@@ -67,6 +67,15 @@ class TestLSFMHQSmoke(unittest.TestCase):
         self.assertIn("Kazuha", profile, "Profile should contain agent name")
         self.assertIn("Frontend Architect", profile, "Profile should contain role description")
 
+    def test_requirements_are_pinned(self):
+        # ADR-001 R-1: a reinstall must get the versions that run today, not whatever is newest.
+        lines = (Path(__file__).parent / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        reqs = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
+        self.assertGreaterEqual(len(reqs), 12)
+        for req in reqs:
+            with self.subTest(req=req):
+                self.assertRegex(req, r"^[A-Za-z0-9_.\-]+==\d+(\.\d+)*$")
+
 
 if __name__ == "__main__":
     unittest.main()

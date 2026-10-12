@@ -37,6 +37,8 @@ memory/health/
 # Single-instance lock and PID of the running bots (instance_lock.py, 6B)
 memory/lsfm-bots.lock
 memory/lsfm-bots.pid
+# Written by stop_squad.bat: scheduled starts stay away until a start by hand (ADR-001 R-1)
+memory/bots.stopped
 # Once-a-day post state (daily_once.claim writes the date, via a .tmp file); a missing file
 # means "not posted yet", so a fresh clone needs none of them
 memory/last_*_date.txt

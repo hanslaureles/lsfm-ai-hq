@@ -388,7 +388,7 @@ class Bench:
         import ciel_orchestrator as co
         calls = []
         spans = []  # this run's timeline: each call's start/end, ms after mission start
-        real_groq, real_tts, real_clip = co.call_groq, co.text_to_speech_bilingual, co.speak_clip
+        real_groq, real_tts, real_clip = co.call_llm, co.text_to_speech_bilingual, co.speak_clip
 
         def record(kind, started):
             ended = time.perf_counter()
@@ -432,7 +432,7 @@ class Bench:
                                     or (ev["type"] == "ciel_complete" and ev.get("audio_url"))):
                 first_audio.append((time.perf_counter() - mission_started) * 1000)
 
-        co.call_groq, co.text_to_speech_bilingual, co.speak_clip = timed_groq, timed_tts, timed_clip
+        co.call_llm, co.text_to_speech_bilingual, co.speak_clip = timed_groq, timed_tts, timed_clip
         log = io.StringIO()
         try:
             ciel = self.ciel()
@@ -444,7 +444,7 @@ class Bench:
                 result = await ciel.execute_mission(MISSION_PROMPT, event_callback=on_event)
                 mission_ms = (time.perf_counter() - mission_started) * 1000
         finally:
-            co.call_groq, co.text_to_speech_bilingual, co.speak_clip = real_groq, real_tts, real_clip
+            co.call_llm, co.text_to_speech_bilingual, co.speak_clip = real_groq, real_tts, real_clip
         if first_audio:
             calls.append(("time_to_first_audio", first_audio[0], None))
         for clip in (REPO_DIR / "audio_cache").glob(f"ciel_response_{result.get('mission_id')}_*.mp3"):

@@ -277,7 +277,112 @@ class InstanceLockTest(unittest.TestCase):
         self.assertNotIn("psutil", (Path(__file__).resolve().parent / "run_all.py").read_text(encoding="utf-8"))
         with mock.patch.object(run_all, "require_single_instance", side_effect=SystemExit(1)), \
                 self.assertRaises(SystemExit):
-            asyncio.run(run_all.main())
+            run_all.prepare_start(marker=Path(self.lock.parent) / "bots.stopped")
+
+    # ADR-001 R-1: the LSFM Bots task re-runs run_all.py every 5 minutes, so a refused or
+    # paused start must leave bots.log alone, and stop_squad.bat must keep the bots stopped.
+
+    def entry(self, *, console: bool, lock_refused: bool = False, while_locking=None):
+        import sys
+        import run_all
+        log_path = self.lock.parent / "bots.log"
+        marker = self.lock.parent / "bots.stopped"
+        lock = mock.Mock(side_effect=while_locking or (SystemExit(1) if lock_refused else None))
+
+        async def no_bots():
+            return None
+        with mock.patch.object(run_all, "require_single_instance", lock), \
+                mock.patch.object(run_all, "main", no_bots), \
+                mock.patch.object(sys, "stdout", sys.stdout if console else None), \
+                mock.patch.object(sys, "stderr", sys.stderr if console else None):
+            try:
+                run_all.entry(log_path=log_path, marker=marker)
+                code = None
+            except SystemExit as e:
+                code = e.code
+        return code, lock, log_path, marker
+
+    def test_second_start_does_not_touch_log(self):
+        code, lock, log_path, _ = self.entry(console=False, lock_refused=True)
+        self.assertEqual(code, 1)
+        self.assertFalse(log_path.exists())
+
+    def test_scheduled_start_respects_stop_marker(self):
+        (self.lock.parent / "bots.stopped").write_text("2026-10-12T20:00:00", encoding="utf-8")
+        code, lock, log_path, marker = self.entry(console=False)
+        self.assertEqual(code, 0)
+        lock.assert_not_called()
+        self.assertFalse(log_path.exists())
+        self.assertTrue(marker.exists())
+
+    def test_stay_stopped_during_a_scheduled_start_wins(self):
+        # Codex R-1 fix 1: stop_squad.bat writes the marker while a scheduled start is between
+        # its early marker check and the lock. The start must still back off once it holds the lock.
+        marker = self.lock.parent / "bots.stopped"
+
+        def stop_squad_writes_marker():
+            marker.write_text("2026-10-12T20:00:00", encoding="utf-8")
+        code, lock, log_path, _ = self.entry(console=False, while_locking=stop_squad_writes_marker)
+        self.assertEqual(code, 0)
+        lock.assert_called_once()
+        self.assertFalse(log_path.exists())
+
+    def test_stay_stopped_writes_marker_before_stopping(self):
+        # Codex R-1 fix 1: a scheduled start that takes the lock the moment the old process dies
+        # must already see the marker.
+        marker = self.lock.parent / "bots.stopped"
+        seen = []
+        with mock.patch.object(self.lk, "stop", lambda lock_file, pid_file: seen.append(marker.exists()) or "stopped PID 1"):
+            self.lk.stop_on_purpose(self.lock, self.pid, marker)
+        self.assertEqual(seen, [True])
+
+    def test_console_start_clears_stop_marker(self):
+        (self.lock.parent / "bots.stopped").write_text("2026-10-12T20:00:00", encoding="utf-8")
+        code, lock, _, marker = self.entry(console=True)
+        self.assertIsNone(code)
+        lock.assert_called_once()
+        self.assertFalse(marker.exists())
+
+    def test_stop_command_pauses_scheduled_restarts(self):
+        marker = self.lock.parent / "bots.stopped"
+        result = self.lk.stop_on_purpose(self.lock, self.pid, marker)
+        self.assertTrue(result.startswith("not running"), result)
+        self.assertIn("start_squad.bat", result)
+        self.assertTrue(marker.exists())
+
+    def test_plain_stop_leaves_scheduled_restarts_on(self):
+        # The restart recipe (HANDOFF §1) is `instance_lock.py stop`, then Start-ScheduledTask:
+        # only stop_squad.bat (--stay-stopped) may keep the task's starts away.
+        marker = self.lock.parent / "bots.stopped"
+        paths = dict(lock_file=self.lock, pid_file=self.pid, marker=marker)
+        self.assertEqual(self.lk.cli(["stop"], **paths), "not running")
+        self.assertFalse(marker.exists())
+        self.assertIn("start_squad.bat", self.lk.cli(["stop", "--stay-stopped"], **paths))
+        self.assertTrue(marker.exists())
+        with self.assertRaises(SystemExit):
+            self.lk.cli(["stopp"], **paths)
+
+    def test_stop_squad_stays_stopped(self):
+        text = (Path(__file__).resolve().parent / "stop_squad.bat").read_text(encoding="utf-8")
+        self.assertIn('instance_lock.py" stop --stay-stopped', text)
+
+    def test_stop_marker_is_git_ignored(self):
+        import subprocess
+        root = Path(__file__).resolve().parent
+        rel = self.lk.STOP_MARKER.relative_to(root).as_posix()
+        rc = subprocess.run(["git", "check-ignore", "-q", rel], cwd=root,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        if rc == 128:  # not a git checkout (an export folder): the rule must still be there
+            self.assertIn(rel, (root / ".gitignore").read_text(encoding="utf-8").splitlines())
+        else:
+            self.assertEqual(rc, 0, rel)
+
+    @unittest.skipUnless((Path(__file__).resolve().parent / "scripts" / "register_bot_task.ps1").exists(),
+                         "private task script: not in the public export")
+    def test_logon_task_repeats_every_5_minutes(self):
+        text = (Path(__file__).resolve().parent / "scripts" / "register_bot_task.ps1").read_text(encoding="utf-8")
+        self.assertIn("-RepetitionInterval (New-TimeSpan -Minutes 5)", text)
+        self.assertIn("-MultipleInstances IgnoreNew", text)  # a running bot process is never started twice
 
     def test_start_and_stop_scripts_kill_no_python_by_name(self):
         root = Path(__file__).resolve().parent

@@ -71,7 +71,7 @@ class TestMissionTrace(unittest.TestCase):
         import types
 
         fake = types.ModuleType("ciel_orchestrator")
-        fake.call_groq = lambda prompt, system_instruction="", **kw: time.sleep(0.02) or "{}"
+        fake.call_llm = lambda prompt, system_instruction="", **kw: time.sleep(0.02) or "{}"
 
         async def speak_clip(*args, **kwargs):
             await asyncio.sleep(0.03)
@@ -87,10 +87,10 @@ class TestMissionTrace(unittest.TestCase):
                 pass
 
             async def execute_mission(self, prompt, event_callback=None):
-                fake.call_groq("route", system_instruction="You are the routing core")
+                fake.call_llm("route", system_instruction="You are the routing core")
                 await fake.speak_clip("first sentence")
                 await event_callback({"type": "ciel_audio_chunk"})
-                fake.call_groq("write", system_instruction="synthesis")
+                fake.call_llm("write", system_instruction="synthesis")
                 return {"intent_type": "general_knowledge", "mission_id": "t1"}
 
         bench = bench_ciel.Bench(samples={})

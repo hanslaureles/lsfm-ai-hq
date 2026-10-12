@@ -31,6 +31,13 @@ def _call_groq(prompt, system_instruction="", **kwargs):
     return SYNTHESIS_JSON
 
 
+def _query_llm_structured(prompt, system_instruction="", temperature=0.4, *, agent, on_delta=None, meta=None):
+    """Stands in for llm_client.query_llm_structured, which Ciel's call_llm calls as agent="ciel"."""
+    text = _call_groq(prompt, system_instruction)
+    return types.SimpleNamespace(text=text, provider="groq", model="qwen/qwen3.8-27b", ttft_ms=None,
+                                 total_ms=1.0, fallback_chain=("groq/qwen/qwen3.8-27b",))
+
+
 class FakeObsidian:
     def __init__(self):
         self.fail = False
@@ -86,7 +93,7 @@ async def _concat_clips(clip_filenames, output_filename):
 
 
 STUBS = {
-    "llm_client": {"query_llm": lambda *a, **k: "", "call_groq": _call_groq,
+    "llm_client": {"query_llm": lambda *a, **k: "", "query_llm_structured": _query_llm_structured,
                    "get_brain_status": lambda: {"mode": "test"}},
     "obsidian_client": {"ObsidianClient": FakeObsidian, "VAULT_PATHS": VAULT_PATHS},
     "voice_engine": {"text_to_speech": _tts_bilingual, "text_to_speech_bilingual": _tts_bilingual,
@@ -267,7 +274,7 @@ class TestHonestFailures(MissionTestCase):
             prompts.append(prompt)
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.patch("call_groq", recording_groq)
+        self.patch("call_llm", recording_groq)
         self.patch("get_system_vitals", None)
         await self.run_mission("check vitals")
         self.assertIn('"status": "failed"', prompts[-1])
@@ -277,7 +284,7 @@ class TestHonestFailures(MissionTestCase):
         def groq_down(prompt, system_instruction="", **kwargs):
             raise ConnectionError("Groq API unreachable")
 
-        self.patch("call_groq", groq_down)
+        self.patch("call_llm", groq_down)
         result = await self.run_mission("what is a b-tree?")  # must not raise
         self.assertIn("Groq API unreachable", result["error"])
         self.assertNotIn("reply", result)
@@ -337,7 +344,7 @@ class TestEventLoopStaysResponsive(MissionTestCase):
             time.sleep(self.SLOW_S)
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.patch("call_groq", slow_groq)
+        self.patch("call_llm", slow_groq)
         result, ticks = await self.ticks_during(self.run_mission("what is a b-tree?"))
         self.assertEqual(result["reply"], "Done.")
         self.assert_loop_ran(ticks)
@@ -446,11 +453,11 @@ class TestHudSignals(MissionTestCase):
             if "routing core" in system_instruction:
                 raise RuntimeError("router offline")
             meta = kwargs.get("meta")
-            self.assertIsNotNone(meta, "synthesis must pass meta= to call_groq")
+            self.assertIsNotNone(meta, "synthesis must pass meta= to call_llm")
             meta["chain"] = ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-120b"]
             meta.update(provider="groq", model="openai/gpt-oss-120b", ttft_ms=612.0)
             return SYNTHESIS_JSON
-        self.patch("call_groq", groq_with_fallback)
+        self.patch("call_llm", groq_with_fallback)
         await self.run_mission("what is a b-tree?")
         self.assertEqual(self.completes()[0]["llm"], {
             "provider": "groq", "model": "openai/gpt-oss-120b",
@@ -529,14 +536,14 @@ class TestTimeouts(MissionTestCase):
                 return "{}"
             return SYNTHESIS_JSON
 
-        self.patch("call_groq", slow_router)
+        self.patch("call_llm", slow_router)
         self.patch("get_system_vitals", lambda: {"healthy": True})
         result = await self.run_mission("check vitals")
         self.assertEqual(result["agents_called"], ["eunchae"])
 
     async def test_synthesis_timeout_fails_the_mission(self):
         self.patch("SYNTHESIS_TIMEOUT_S", 0.1)
-        self.patch("call_groq", self.hang(SYNTHESIS_JSON))
+        self.patch("call_llm", self.hang(SYNTHESIS_JSON))
         result = await self.run_mission("what is a b-tree?")
         self.assertIn("timed out after 0.1 s", result["error"])
         self.assertEqual(len([e for e in self.events if e["type"] == "ciel_error"]), 1)
@@ -560,7 +567,7 @@ class TestAsyncSafety(MissionTestCase):
             time.sleep(0.3)
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.patch("call_groq", slow_groq)
+        self.patch("call_llm", slow_groq)
         result = await self.clear_mid_mission("what is a b-tree?")
         self.assertEqual(result["reply"], "Done.")
         self.assertEqual(self.ciel.conversation_history, [])
@@ -663,14 +670,14 @@ class TestStreamedSpeech(MissionTestCase):
     async def test_first_clip_is_announced_before_the_llm_finishes(self):
         returned = []
         split = STREAMED_REPLY.index("完") + 1  # one character past 「告。」
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, split, pause_s=0.5, returned=returned))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, split, pause_s=0.5, returned=returned))
         await self.run_mission("what is a b-tree?")
         first = self.clip_events()[0]
         self.assertEqual(first["seq"], 0)
         self.assertLess(first["timestamp"], returned[0] - 0.3)  # well inside the 0.5 s the LLM was still busy
 
     async def test_clips_in_order_then_joined_into_the_mission_mp3(self):
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, 40))
         result = await self.run_mission("what is a b-tree?")
         self.assertEqual([(t, lang, gap) for t, lang, _, gap in CLIPS], [
             ("「告。」", "ja", False), ("完了しました。", "ja", False),
@@ -695,7 +702,7 @@ class TestStreamedSpeech(MissionTestCase):
             CLIPS.append((text, lang, output_filename, gap_before))
 
         self.patch("speak_clip", uneven_tts)
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, len(STREAMED_REPLY)))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, len(STREAMED_REPLY)))
         started = time.perf_counter()
         await self.run_mission("what is a b-tree?")
         elapsed = time.perf_counter() - started
@@ -707,7 +714,7 @@ class TestStreamedSpeech(MissionTestCase):
         self.assertLess(elapsed, 0.5)  # 0.6 s of clips one by one; in parallel (3 at a time) about 0.3 s
 
     async def test_unsafe_mission_id_never_reaches_a_clip_name(self):
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, 40))
         result = await self.ciel.execute_mission("what is a b-tree?", mission_id="../../evil")
         self.assertTrue(CLIPS)
         for _, _, name, _ in CLIPS:
@@ -717,7 +724,7 @@ class TestStreamedSpeech(MissionTestCase):
     async def test_missing_english_field_is_voiced_from_the_display_text(self):
         reply = json.dumps({"japanese_voice": "「告。」完了。", "display_text": "Report: B-trees stay balanced."},
                            ensure_ascii=False)
-        self.patch("call_groq", streaming_groq(reply, 10))
+        self.patch("call_llm", streaming_groq(reply, 10))
         await self.run_mission("what is a b-tree?")
         self.assertEqual([(t, lang) for t, lang, _, _ in CLIPS],
                          [("「告。」", "ja"), ("完了。", "ja"), ("Report: B-trees stay balanced.", "en")])
@@ -734,7 +741,7 @@ class TestStreamedSpeech(MissionTestCase):
             raise ConnectionError("Edge TTS unreachable")
 
         self.patch("speak_clip", tts_down)
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, 40))
         result = await self.run_mission("what is a b-tree?")
         self.assertIn("Edge TTS unreachable", result["error"])
         self.assertEqual(self.completes(), [])
@@ -754,7 +761,7 @@ class TestStreamedSpeech(MissionTestCase):
         self.enterContext(mock.patch.object(ciel_orchestrator, "SYNTHESIS_TIMEOUT_S", 0.1))
         self.patch("speak_clip", slow_tts)
         split = STREAMED_REPLY.index("完") + 1
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, split, pause_s=0.5))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, split, pause_s=0.5))
         result = await self.run_mission("what is a b-tree?")
         failed_at = time.monotonic()
         self.assertIn("timed out", result["error"])
@@ -773,7 +780,7 @@ class TestStreamedSpeech(MissionTestCase):
         self.assertEqual(loop_errors, [])
 
     async def test_stream_break_fails_the_mission_and_stops_speaking(self):
-        self.patch("call_groq", streaming_groq(STREAMED_REPLY, 40, fail_after_first=True))
+        self.patch("call_llm", streaming_groq(STREAMED_REPLY, 40, fail_after_first=True))
         result = await self.run_mission("what is a b-tree?")
         self.assertIn("broke after partial output", result["error"])
         self.assertEqual(self.completes(), [])
@@ -799,7 +806,7 @@ class TestSessions(MissionTestCase):
             prompts.append(prompt)
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_llm", call_groq))
         return prompts
 
     async def ask(self, prompt, session):
@@ -863,7 +870,7 @@ class TestSessions(MissionTestCase):
                 return self.ROUTER_JSON
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_llm", call_groq))
         result = await self.ask("what is a b-tree?", self.A)
         expected = {"source": "llm", "provider": "groq", "model": "llama-3.1-8b-instant",
                     "fallback_chain": ["groq/qwen/qwen3.8-27b", "groq/llama-3.1-8b-instant"]}
@@ -877,7 +884,7 @@ class TestSessions(MissionTestCase):
                 raise RuntimeError("router offline")
             return _call_groq(prompt, system_instruction, **kwargs)
 
-        self.enterContext(mock.patch.object(ciel_orchestrator, "call_groq", call_groq))
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_llm", call_groq))
         result = await self.ask("what is a b-tree?", self.A)
         self.assertEqual(result["planner"], {"source": "fallback", "provider": None, "model": None,
                                              "fallback_chain": ["groq/qwen/qwen3.8-27b"]})
@@ -886,6 +893,35 @@ class TestSessions(MissionTestCase):
         result = await self.ask("clear memory", self.A)
         self.assertEqual(result["planner"]["source"], "keyword")
         self.assertEqual(self.planner_events(), [])  # the reset path ends before plan_formed
+
+
+class TestSharedDispatcher(MissionTestCase):
+    """ADR-001 R-1: Ciel calls the bots' dispatcher, so a Groq outage falls back to Gemini."""
+
+    async def test_ciel_calls_dispatcher_as_ciel(self):
+        agents = []
+
+        def recording(prompt, system_instruction="", temperature=0.4, *, agent, on_delta=None, meta=None):
+            agents.append(agent)
+            return _query_llm_structured(prompt, system_instruction, agent=agent)
+        self.enterContext(mock.patch.object(ciel_orchestrator, "query_llm_structured", recording))
+        await self.run_mission("what is a b-tree?")
+        self.assertEqual(agents, ["ciel", "ciel"])  # router, then synthesis
+
+    async def test_gemini_answer_reaches_hud_fields(self):
+        def groq_down_gemini_answers(prompt, system_instruction="", temperature=0.4, *, agent,
+                                     on_delta=None, meta=None):
+            if "routing core" in system_instruction:
+                raise RuntimeError("router offline")
+            meta.setdefault("chain", []).extend(["groq/qwen/qwen3.8-27b", "gemini/gemini-3.6-flash"])
+            meta.update(provider="gemini", model="gemini-3.6-flash")
+            return types.SimpleNamespace(text=SYNTHESIS_JSON, provider="gemini", model="gemini-3.6-flash",
+                                         ttft_ms=None, total_ms=1.0, fallback_chain=tuple(meta["chain"]))
+        self.enterContext(mock.patch.object(ciel_orchestrator, "query_llm_structured", groq_down_gemini_answers))
+        result = await self.run_mission("what is a b-tree?")
+        self.assertEqual(result["llm"]["provider"], "gemini")
+        self.assertEqual(result["llm"]["fallback_chain"], ["groq/qwen/qwen3.8-27b", "gemini/gemini-3.6-flash"])
+        self.assertEqual([e for e in self.events if e["type"] == "ciel_error"], [])
 
 
 if __name__ == "__main__":

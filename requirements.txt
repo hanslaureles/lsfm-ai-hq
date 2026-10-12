@@ -1,36 +1,38 @@
 # ==============================================================================
 # LSFM AI HQ — PYTHON DEPENDENCIES
 # Install via: pip install -r requirements.txt
+# Pinned to the versions running on 2026-10-12 (ADR-001 R-1): a reinstall gets
+# exactly these. To upgrade, change one pin, run the hermetic suite, then commit.
 # ==============================================================================
 
 # Core Discord Bot Framework. It imports audioop, which Python 3.13 removed:
 # run on 3.11/3.12 (CI uses 3.11), or add audioop-lts before moving to 3.13.
-discord.py>=2.3.2
+discord.py==2.7.1
 
 # Environment Variables & Configuration
-python-dotenv>=1.0.0
+python-dotenv==1.2.3
 
 # LLM Providers: Gemini through its SDK. Groq and Whisper are called over HTTPS and
 # local Ollama over HTTP, all with urllib (llm_client.py, voice_engine.py), so no
 # Groq or OpenAI SDK is needed.
-google-genai>=2.27.0
+google-genai==2.27.0
 
 # Google Workspace REST APIs (OAuth2 & Gmail Engine)
-google-api-python-client>=2.130.0
-google-auth-httplib2>=0.2.0
-google-auth-oauthlib>=1.2.0
+google-api-python-client==2.200.0
+google-auth-httplib2==0.4.2
+google-auth-oauthlib==1.4.1
 
 # Web Scraping, Job Aggregation & Anti-Bot
-requests>=2.31.0
-beautifulsoup4>=4.12.3
+requests==2.34.2
+beautifulsoup4==4.15.0
 
 # System Telemetry & Hardware Vitals (Eunchae Guardian)
-psutil>=5.9.8
+psutil==7.2.2
 
 # Async HTTP + WebSocket server (ciel_server.py) and async fetches (web_tools.py).
 # discord.py pulls it in transitively, but these modules import it directly.
-aiohttp>=3.9.0,<4
+aiohttp==3.14.3
 
 # Manas: Ciel voice + web intelligence (voice_engine.py, ciel_orchestrator.py)
-edge-tts>=7.0.0
-ddgs>=9.0.0
+edge-tts==7.2.8
+ddgs==9.16.0

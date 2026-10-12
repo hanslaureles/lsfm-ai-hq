@@ -25,7 +25,7 @@ WORKSPACE_DIR = BASE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from llm_client import query_llm, call_groq, get_brain_status
+from llm_client import query_llm, query_llm_structured, get_brain_status
 from obsidian_client import ObsidianClient, VAULT_PATHS
 from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
 from speech_stream import VoiceStream, split_sentences
@@ -76,7 +76,7 @@ except ImportError:
 # A thread can't be killed, so on timeout the await is abandoned and the call may
 # still finish in the background; the mission reports it as failed either way.
 ROUTER_TIMEOUT_S = 20       # on timeout the keyword router takes over
-SYNTHESIS_TIMEOUT_S = 90    # call_groq walks 3 models at up to 30 s each
+SYNTHESIS_TIMEOUT_S = 90    # Groq walks 3 models at up to 30 s each before Gemini
 WEATHER_TIMEOUT_S = 15      # wttr.in (6 s) plus the web-search fallback
 WEB_SEARCH_TIMEOUT_S = 10   # overall cap on a search, enforced by wait_for
 # Socket deadline passed to DDGS itself, so a stalled search ends in its thread
@@ -92,6 +92,15 @@ HEAVY_AGENTS = {"chaewon", "sakura"}  # PDF build; Gmail inbox scan. Run on heav
 # Serializes resume builds within this process. A threading.Lock, not an asyncio
 # one: the lock must outlive an abandoned await (see compile_resume).
 RESUME_BUILD_LOCK = threading.Lock()
+
+
+def call_llm(prompt: str, system_instruction: str = "", *, on_delta=None, meta: dict = None) -> str:
+    """
+    Ciel's LLM call: the bots' dispatcher as agent "ciel", so Groq falls back to
+    Gemini (and follows !mode) instead of failing the mission (ADR-001 R-1).
+    meta gets chain / provider / model / ttft_ms, even when the call raises.
+    """
+    return query_llm_structured(prompt, system_instruction, agent="ciel", on_delta=on_delta, meta=meta).text
 
 
 async def run_blocking(fn, *args, timeout: float, label: str, heavy: bool = False, **kwargs):
@@ -557,10 +566,10 @@ Analyze the user's prompt and return a JSON object with:
 
 Respond ONLY with valid JSON.
 """
-        plan_meta = {}  # call_groq fills chain / provider / model, as for synthesis (5E-4)
+        plan_meta = {}  # call_llm fills chain / provider / model, as for synthesis (5E-4)
         try:
             raw_response = await run_blocking(
-                call_groq, router_prompt,
+                call_llm, router_prompt,
                 system_instruction="You are Ciel's tactical routing core. Output pure JSON only.",
                 meta=plan_meta, timeout=ROUTER_TIMEOUT_S, label="Router LLM",
             )
@@ -1006,10 +1015,10 @@ Respond ONLY with valid JSON.
         # The reply streams in; each finished spoken sentence is voiced right away.
         clips = SpeechClips(emit, mission_id)
         loop = asyncio.get_running_loop()
-        synth_meta = {}  # call_groq fills chain / provider / model / ttft_ms; the HUD shows them (5E-4)
+        synth_meta = {}  # call_llm fills chain / provider / model / ttft_ms; the HUD shows them (5E-4)
         try:
             raw_reply = await run_blocking(
-                call_groq, synthesis_prompt, system_instruction=CIEL_SYSTEM_PROMPT, model="qwen/qwen3.8-27b",
+                call_llm, synthesis_prompt, system_instruction=CIEL_SYSTEM_PROMPT,
                 on_delta=lambda piece: loop.call_soon_threadsafe(clips.feed, piece), meta=synth_meta,
                 timeout=SYNTHESIS_TIMEOUT_S, label="Synthesis LLM",
             )

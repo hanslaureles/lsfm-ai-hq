@@ -177,7 +177,7 @@ class TestTypedRouting(unittest.TestCase):
     def test_agent_is_required(self):
         with self.assertRaises(TypeError):
             llm_client.query_llm("hi")  # noqa: the point of the test
-        for bad in ("", "ciel", None):
+        for bad in ("", "manas", None):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 llm_client.query_llm("hi", agent=bad)
 
@@ -228,6 +228,74 @@ class TestTypedRouting(unittest.TestCase):
                     self.assertIsInstance(agent, ast.Constant, f"{path.name}:{node.lineno} needs agent=\"...\"")
                     self.assertIn(agent.value, llm_client.AGENTS, f"{path.name}:{node.lineno}")
         self.assertGreaterEqual(found, 23)
+
+
+class TestLocalLastResort(unittest.TestCase):
+    """ADR-001 R-1: in cloud mode, a running Ollama answers when Groq and Gemini both fail."""
+
+    def setUp(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.config = tmp / "brain_mode.json"
+        self.set_mode("cloud")
+        self.enterContext(mock.patch.object(llm_client, "CONFIG_FILE", self.config))
+        self.enterContext(mock.patch.object(llm_client, "_config_cache", (None, None), create=True))
+        self.enterContext(fresh_breakers())
+        self.enterContext(mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test"}))
+        self.ollama_calls = 0
+        self.ollama_up = True
+
+        def groq(p, **k):
+            k["meta"]["chain"].append(f"groq/{k['model']}")
+            if k.get("on_delta"):
+                k["on_delta"]("Report: ")
+            raise RuntimeError("groq down")
+
+        def gemini(p, **k):
+            k["meta"]["chain"].append(f"gemini/{k['model_name']}")
+            raise RuntimeError("gemini down")
+
+        def ollama(p, **k):
+            self.ollama_calls += 1
+            k["meta"]["chain"].append(f"ollama/{k['model']}")
+            if self.ollama_fails:
+                raise RuntimeError("ollama crashed")
+            return "local answer"
+        self.ollama_fails = False
+        self.enterContext(mock.patch.object(llm_client, "call_groq", groq))
+        self.enterContext(mock.patch.object(llm_client, "call_gemini", gemini))
+        self.enterContext(mock.patch.object(llm_client, "call_local_ollama", ollama))
+        self.enterContext(mock.patch.object(llm_client, "check_ollama_status",
+                                            lambda: (self.ollama_up, ["qwen2.5-coder:7b"] if self.ollama_up else [])))
+
+    def set_mode(self, mode):
+        self.config.write_text(json.dumps({"mode": mode}), encoding="utf-8")
+        llm_client._config_cache = (None, None)
+
+    def test_cloud_mode_uses_ollama_when_both_clouds_fail(self):
+        r = llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertEqual((r.text, r.provider), ("local answer", "ollama"))
+        self.assertEqual(r.fallback_chain, ("groq/qwen/qwen3.8-27b", "gemini/gemini-3.6-flash",
+                                            "ollama/qwen2.5-coder:7b"))
+
+    def test_cloud_mode_raises_when_ollama_down(self):
+        self.ollama_up = False
+        with self.assertRaises(RuntimeError) as err:
+            llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertTrue(str(err.exception).startswith("Cloud providers failed:"), str(err.exception))
+        self.assertEqual(self.ollama_calls, 0)
+
+    def test_auto_mode_does_not_try_ollama_twice(self):
+        self.set_mode("auto")
+        self.ollama_fails = True
+        with self.assertRaises(RuntimeError):
+            llm_client.query_llm_structured("hi", agent="sakura")
+        self.assertEqual(self.ollama_calls, 1)
+
+    def test_no_local_fallback_after_partial_stream(self):
+        with self.assertRaises(RuntimeError) as err:
+            llm_client.query_llm_structured("hi", agent="sakura", on_delta=lambda piece: None)
+        self.assertIn("partial output", str(err.exception))
+        self.assertEqual(self.ollama_calls, 0)
 
 
 class FakeGenai:
@@ -465,6 +533,28 @@ class TestStructuredResult(unittest.TestCase):
         r = llm_client.query_llm_structured("hi", agent="sakura")
         self.assertEqual(len(self.sent), 2)
         self.assertEqual((r.text, r.provider), ("ok", "groq"))
+
+    def test_ciel_falls_back_to_gemini_like_the_bots(self):
+        # ADR-001 R-1: Ciel called Groq only, so a Groq outage failed every Ciel mission.
+        self.assertIn("ciel", llm_client.LLM_CALLERS)
+        self.assertNotIn("ciel", llm_client.AGENTS)  # not a bot: no heartbeat, not in status.json
+        n = len(llm_client.GROQ_FALLBACK_MODELS)
+        self.groq(*[_http_error(500)] * n)
+        self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("from gemini")])))
+        r = llm_client.query_llm_structured("hi", agent="ciel")
+        self.assertEqual((r.text, r.provider), ("from gemini", "gemini"))
+        self.assertEqual(self.sent[0], "qwen/qwen3.8-27b")
+
+    def test_caller_meta_keeps_the_chain_when_every_provider_fails(self):
+        # Ciel's HUD shows what was tried even when the router call fails.
+        n = len(llm_client.GROQ_FALLBACK_MODELS)
+        self.groq(*[_http_error(500)] * n)
+        self.enterContext(mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}))
+        meta = {}
+        with self.assertRaises(RuntimeError):
+            llm_client.query_llm_structured("hi", agent="sakura", meta=meta)
+        self.assertEqual(len(meta["chain"]), n)
+        self.assertTrue(all(step.startswith("groq/") for step in meta["chain"]))
 
     def test_yunjin_tries_gemini_first(self):
         self.enterContext(mock.patch("google.genai.Client", FakeGenai([_text("design notes")])))
