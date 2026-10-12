@@ -115,7 +115,7 @@ def run_mass_cleanse():
     print("Strategy: High-Signal Inbox (Archive Clutter, Keep Relevant)")
     print("=" * 65)
 
-    service = get_gmail_service()
+    service = get_gmail_service(interactive=True)
     if not service:
         print("❌ Gmail API is not authenticated! Please run test_gmail_auth.py first.")
         return

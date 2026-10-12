@@ -40,14 +40,20 @@ LSFM_LABEL_DEFINITIONS = [
     "LSFM/📁 Promos & Clutter",
 ]
 
+AUTH_HELP = ("Gmail sign-in is missing or expired: run `python scripts/authenticate.py` "
+             "from the repo root, then restart the bots.")
+
 def is_configured() -> bool:
     """Checks if either a valid token or credentials.json exists."""
     return TOKEN_PATH.exists() or CREDENTIALS_PATH.exists()
 
-def get_gmail_service():
+def get_gmail_service(interactive: bool = False):
     """
     Authenticates with Gmail API via OAuth2.
     Returns the Gmail resource object or None if credentials are not configured.
+    Without interactive=True it never starts the browser sign-in: the bots run windowless,
+    and on 2026-10-12 a dead token left one waiting on a localhost callback nobody could
+    answer. It prints AUTH_HELP and returns None instead. Console scripts pass interactive=True.
     """
     creds = None
     if TOKEN_PATH.exists():
@@ -67,6 +73,9 @@ def get_gmail_service():
                 creds = None
 
         if not creds:
+            if not interactive:
+                print(f"⚠️ [Gmail Engine] {AUTH_HELP}", flush=True)
+                return None
             if not CREDENTIALS_PATH.exists():
                 return None
             
@@ -504,7 +513,7 @@ def triage_inbox(max_emails: int = 25, unread_only: bool = False) -> Dict[str, A
     if not service:
         return {
             "success": False,
-            "error": "Gmail API is not authenticated. Please run test_gmail_auth.py or verify credentials.",
+            "error": AUTH_HELP,
             "interviews": [],
             "applications": [],
             "university": [],
@@ -607,7 +616,7 @@ def sweep_inbox(max_emails: int = 50) -> Dict[str, Any]:
     """
     service = get_gmail_service()
     if not service:
-        return {"success": False, "error": "Gmail API not authenticated."}
+        return {"success": False, "error": AUTH_HELP}
 
     label_map = ensure_lsfm_labels(service)
     inbox_messages = fetch_inbox_messages(service, max_results=max_emails, unread_only=False)
@@ -656,7 +665,7 @@ def get_recent_finance_summary(max_results: int = 20) -> Dict[str, Any]:
     """
     service = get_gmail_service()
     if not service:
-        return {"success": False, "error": "Gmail API not authenticated."}
+        return {"success": False, "error": AUTH_HELP}
 
     query = "GCash OR Maya OR Shopee OR Lazada OR 'Grab' OR 'Foodpanda' OR invoice OR receipt OR 'BDO' OR 'BPI' OR 'PayPal'"
     try:

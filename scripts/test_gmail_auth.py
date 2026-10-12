@@ -53,7 +53,7 @@ def main():
     try:
         from gmail_engine import get_gmail_service, ensure_lsfm_labels, fetch_unread_inbox_messages
 
-        service = get_gmail_service()
+        service = get_gmail_service(interactive=True)
         if not service:
             print("❌ Authentication failed or credentials missing.")
             return

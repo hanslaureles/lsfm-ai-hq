@@ -928,5 +928,107 @@ class TestRollupGitActivity(unittest.TestCase):
         self.assertEqual(res["git_commits"], activity["commits"])
 
 
+class TestGmailNeverSignsInFromABot(unittest.TestCase):
+    """2026-10-12: a dead token made the windowless bot start a browser sign-in nobody could answer."""
+
+    def setUp(self):
+        import gmail_engine
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        token, secrets = Path(tmp.name) / "token.json", Path(tmp.name) / "credentials.json"
+        token.write_text("{}", encoding="utf-8")
+        secrets.write_text("{}", encoding="utf-8")
+        dead = mock.Mock(valid=False, expired=True, refresh_token="r")
+        dead.refresh.side_effect = Exception("invalid_grant: Bad Request")
+        self.flow = mock.Mock()
+        self.flow.from_client_secrets_file.return_value.run_local_server.return_value.to_json.return_value = "{}"
+        for name, value in (("TOKEN_PATH", token), ("CREDENTIALS_PATH", secrets), ("InstalledAppFlow", self.flow),
+                            ("build", mock.Mock(return_value="service"))):
+            patcher = mock.patch.object(gmail_engine, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(gmail_engine.Credentials, "from_authorized_user_file", return_value=dead)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_dead_token_returns_none_and_says_how_to_sign_in(self):
+        import gmail_engine
+        with mock.patch("builtins.print") as said:
+            self.assertIsNone(gmail_engine.get_gmail_service())
+        self.flow.from_client_secrets_file.assert_not_called()
+        self.assertIn("scripts/authenticate.py", " ".join(str(c) for c in said.call_args_list))
+
+    def test_a_console_script_may_still_sign_in(self):
+        import gmail_engine
+        with mock.patch("builtins.print"):
+            self.assertEqual(gmail_engine.get_gmail_service(interactive=True), "service")
+        self.flow.from_client_secrets_file.assert_called_once()
+
+
+class TestBriefingChecksEmailsAgainstLiveCI(unittest.TestCase):
+    """2026-10-08: three old "Run failed" emails became a priority-1 blocker while CI was green."""
+
+    RUNS = [{"workflowName": "Live site probe", "status": "completed", "conclusion": "success", "createdAt": "2026-10-08T08:45:01Z"},
+            {"workflowName": "CI", "status": "completed", "conclusion": "success", "createdAt": "2026-10-07T12:00:00Z"},
+            {"workflowName": "CI", "status": "completed", "conclusion": "failure", "createdAt": "2026-10-05T09:00:00Z"}]
+
+    def fake_run(self, gh_out):
+        def run(args):
+            self.calls.append(args)
+            if args[0] == "git":
+                return ["git@github.com:hanslaureles/hanslaureles-portfolio.git"]
+            return gh_out
+        return run
+
+    def setUp(self):
+        self.calls = []
+
+    def test_newest_run_per_workflow_from_the_remote_name(self):
+        import sakura_engine
+        with mock.patch.object(sakura_engine, "_run", self.fake_run([json.dumps(self.RUNS)])):
+            lines = sakura_engine.live_ci_status(Path("."), ["portfolio-site"])
+        self.assertEqual(lines, ["portfolio-site: Live site probe success (2026-10-08), CI success (2026-10-07)"])
+        self.assertIn("hanslaureles/hanslaureles-portfolio", self.calls[1])
+
+    def test_no_gh_means_not_checked_never_green(self):
+        import sakura_engine
+        with mock.patch.object(sakura_engine, "_run", self.fake_run(None)):
+            lines = sakura_engine.live_ci_status(Path("."), ["portfolio-site"])
+        self.assertEqual(lines, ["portfolio-site: CI status unavailable (not checked)"])
+
+    def test_inbox_lines_carry_the_sent_date(self):
+        import gmail_engine
+        import sakura_engine
+        mail = [{"subject": "[hanslaureles/hanslaureles-portfolio] Run failed: CI - main (e159a31)",
+                 "sender": "GitHub <notifications@github.com>", "date": "Thu, 02 Oct 2026 10:00:00 +0000", "snippet": ""},
+                {"subject": "no date", "sender": "x@example.com", "date": "", "snippet": ""}]
+        with mock.patch.object(gmail_engine, "is_configured", return_value=True), \
+                mock.patch.object(gmail_engine, "get_gmail_service", return_value=object()), \
+                mock.patch.object(gmail_engine, "fetch_inbox_messages", return_value=mail):
+            inbox = sakura_engine.scan_morning_inbox()
+        self.assertTrue(inbox["highlights"][0].endswith("(sent Oct 02)"))
+        self.assertTrue(inbox["highlights"][1].endswith("(sent date unknown)"))
+
+    def test_a_dead_gmail_token_is_named_in_the_briefing(self):
+        import gmail_engine
+        import sakura_engine
+        with mock.patch.object(gmail_engine, "is_configured", return_value=True), \
+                mock.patch.object(gmail_engine, "get_gmail_service", return_value=None):
+            self.assertEqual(sakura_engine.scan_morning_inbox()["status"], gmail_engine.AUTH_HELP)
+
+    def test_the_prompt_has_live_ci_and_the_rule(self):
+        import sakura_engine
+        inbox = {"ok": True, "status": "3 unread", "unread_count": 3, "job_alerts": [],
+                 "highlights": ["📬 **GitHub**: Run failed: CI - main (e159a31) (sent Oct 02)"]}
+        prompts = []
+        with mock.patch.object(sakura_engine, "scan_morning_inbox", return_value=inbox), \
+                mock.patch.object(sakura_engine, "live_ci_status", return_value=["portfolio-site: CI success (2026-10-08)"]), \
+                mock.patch.object(sakura_engine, "query_llm", side_effect=lambda p, **kw: prompts.append(p) or "ok"):
+            sakura_engine.execute_morning_launchpad(sync_obsidian=False)
+        self.assertIn("(sent Oct 02)", prompts[0])
+        self.assertIn("portfolio-site: CI success (2026-10-08)", prompts[0])
+        self.assertIn("Call a CI failure current only if the live CI status above shows that workflow failing", prompts[0])
+
+
 if __name__ == "__main__":
     unittest.main()

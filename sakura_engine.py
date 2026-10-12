@@ -1,6 +1,8 @@
 import os
 import re
+import json
 import datetime
+import email.utils
 import subprocess
 import warnings
 from pathlib import Path
@@ -42,7 +44,7 @@ def scan_morning_inbox(max_items: int = 10) -> dict:
     job/recruiter outreach and security/dev notices.
     """
     try:
-        from gmail_engine import is_configured, get_gmail_service, fetch_inbox_messages
+        from gmail_engine import AUTH_HELP, is_configured, get_gmail_service, fetch_inbox_messages
         if not is_configured():
             return {
                 "ok": False,
@@ -56,7 +58,7 @@ def scan_morning_inbox(max_items: int = 10) -> dict:
         if not svc:
             return {
                 "ok": False,
-                "status": "Gmail Service Offline",
+                "status": AUTH_HELP,
                 "unread_count": 0,
                 "job_alerts": [],
                 "highlights": []
@@ -84,8 +86,13 @@ def scan_morning_inbox(max_items: int = 10) -> dict:
 
             clean_sender = re.sub(r'<.*?>', '', sender).replace('"', '').strip()
 
+            try:  # the sent date, so an old alert is not read as today's
+                sent = email.utils.parsedate_to_datetime(m.get("date", "")).strftime("%b %d")
+            except (TypeError, ValueError, IndexError):
+                sent = "date unknown"
+
             is_job = any(k in comb for k in job_keywords)
-            formatted = f"💼 **{clean_sender[:28]}**: {subj[:60]}" if is_job else f"📬 **{clean_sender[:28]}**: {subj[:60]}"
+            formatted = f"{'💼' if is_job else '📬'} **{clean_sender[:28]}**: {subj[:60]} (sent {sent})"
             
             if is_job:
                 job_alerts.append(formatted)
@@ -142,7 +149,10 @@ def execute_morning_launchpad(sync_obsidian: bool = True) -> dict:
     app_lines = [l for l in applications_log.splitlines() if l.strip().startswith("|") and not l.startswith("| #") and not l.startswith("|---") and not l.startswith("| -")]
     app_count = len(app_lines)
 
-    # 4. LLM Briefing Generation
+    # 4. Live CI, so emailed failure notices can be checked against it
+    ci_text = "\n".join(f"  • {l}" for l in live_ci_status())
+
+    # 5. LLM Briefing Generation
     goals = load_file(MEMORY_DIR / "sakura_goals.md")
     prompt = f"""
 You are "Sakura", the Chief of Staff and Central Orchestrator for the user.
@@ -160,8 +170,10 @@ The user is an Applied AI Engineer & Full-Stack Builder with dual-competency in 
 ### CURRENT OPERATIONAL STATUS:
 - Today's Date: {today_str}
 - Applications Prepared in Archive: {app_count}
-- Inbound & Gmail Pulse:
+- Inbound & Gmail Pulse (each email with the date it was sent):
 {inbox_summary}
+- Live CI status (GitHub Actions on main, read just now; newest run per workflow):
+{ci_text}
 - PC Hardware Vitals: {vitals_summary}
 
 ---
@@ -176,6 +188,7 @@ Compose a structured, authoritative, and inspiring Daily Morning Briefing with t
 2. 📬 **INBOUND & RECRUITER PULSE**:
    - Crisp summary of the inbox state.
    - Note any action items on job leads or application reminders.
+   - Emails are notifications from the day they were sent, not live status. Call a CI failure current only if the live CI status above shows that workflow failing; if it now succeeds, say the emailed failure is old and was fixed. If the CI status is unavailable, give the email's date and say the current state was not checked.
 
 3. 📊 **TEAM READINESS**:
    - ⭐ **Chaewon (Career):** {app_count} applications logged; ready to tailor new roles (`!tailor`).
@@ -191,7 +204,7 @@ Tone: Calm, commanding, warm, razor-sharp leadership. Avoid robotic clichés.
 """
     briefing_text = query_llm(prompt, temperature=0.4, agent="sakura")
 
-    # 5. Obsidian Second Brain Sync
+    # 6. Obsidian Second Brain Sync
     obsidian_synced = False
     daily_log_path = ""
     if sync_obsidian:
@@ -277,14 +290,48 @@ def cap_dispatches(entries: list[str], budget_bytes: int = 12_000, entry_bytes: 
     return f"{text}\n\n({left_out} entries left out)" if left_out else text
 
 
-def _git(repo: Path, *args: str):
-    """stdout lines of `git -C repo <args>`, or None when git cannot read repo."""
+def _run(args: list):
+    """stdout lines of a command, or None when it is missing, fails or takes over 20 s."""
     try:
-        res = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                             encoding="utf-8", errors="replace", timeout=20)
+        res = subprocess.run(args, capture_output=True, encoding="utf-8", errors="replace", timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return [l for l in res.stdout.splitlines() if l.strip()] if res.returncode == 0 else None
+
+
+def _git(repo: Path, *args: str):
+    """stdout lines of `git -C repo <args>`, or None when git cannot read repo."""
+    return _run(["git", "-C", str(repo), *args])
+
+
+def live_ci_status(projects_dir: Path = None, repos: list = None) -> list:
+    """
+    Each project repo's newest GitHub Actions run per workflow on main, read just now with
+    `gh`. On 2026-10-08 the briefing called three "Run failed" emails (10-02, 10-05) a
+    priority-1 blocker while CI had been green for days; the prompt now checks emails
+    against this. The GitHub name comes from the repo's origin remote.
+    """
+    projects_dir = PROJECTS_DIR if projects_dir is None else projects_dir
+    lines = []
+    for name in ROLLUP_REPOS if repos is None else repos:
+        url = _git(projects_dir / name, "remote", "get-url", "origin")
+        m = re.search(r"github\.com[/:]([^/\s]+/[^/\s]+?)(?:\.git)?$", url[0]) if url else None
+        out = _run(["gh", "run", "list", "-R", m.group(1), "-b", "main", "-L", "10",
+                    "--json", "workflowName,status,conclusion,createdAt"]) if m else None
+        try:
+            runs = json.loads("\n".join(out))
+        except (TypeError, ValueError):
+            runs = []
+        newest = {}
+        for r in runs:  # gh lists newest first
+            newest.setdefault(r.get("workflowName", "?"), r)
+        if not newest:
+            lines.append(f"{name}: CI status unavailable (not checked)")
+            continue
+        lines.append(f"{name}: " + ", ".join(
+            f"{wf} {r.get('conclusion') or r.get('status') or 'unknown'} ({str(r.get('createdAt', ''))[:10]})"
+            for wf, r in newest.items()))
+    return lines
 
 
 def gather_git_activity(day: datetime.date, projects_dir: Path = None, repos: list = None) -> dict:
