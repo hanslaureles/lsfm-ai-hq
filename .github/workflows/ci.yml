@@ -24,7 +24,7 @@ jobs:
         run: pip install -r requirements.txt pytest
 
       - name: Compile every module
-        run: python -m py_compile *.py scripts/*.py bench/*.py
+        run: python -m py_compile *.py scripts/*.py bench/*.py eval/*.py
 
       # Hermetic: engines, LLMs, TTS and Obsidian are stubbed, so no secrets are
       # needed. scripts/test_*.py are excluded on purpose: they hit live Gmail
@@ -38,3 +38,4 @@ jobs:
           test_llm_client.py test_pdf_engine.py test_eunchae_qa.py test_reliability.py test_speech_stream.py
           test_health_recorder.py test_eunchae_publisher.py test_bot_guards.py
           bench/test_bench.py bench/test_bench_telemetry.py
+          test_routing_eval.py

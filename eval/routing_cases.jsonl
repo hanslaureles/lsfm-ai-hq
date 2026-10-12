@@ -1,0 +1,40 @@
+{"prompt": "check my PC vitals", "lang": "en", "expect": ["eunchae.vitals"]}
+{"prompt": "is my PC struggling right now?", "lang": "en", "expect": ["eunchae.vitals"]}
+{"prompt": "run a syntax check on all the HQ scripts", "lang": "en", "expect": ["eunchae.compile_all"]}
+{"prompt": "test git_sentinel.py", "lang": "en", "expect": ["eunchae.test"]}
+{"prompt": "what's the git status of HQ?", "lang": "en", "expect": ["kazuha.git_status"]}
+{"prompt": "review my uncommitted changes for problems", "lang": "en", "expect": ["kazuha.review"]}
+{"prompt": "what does llm_client do when Groq fails?", "lang": "en", "expect": ["kazuha.ask"]}
+{"prompt": "audit my portfolio site", "lang": "en", "expect": ["yunjin.audit"]}
+{"prompt": "are there broken images on my portfolio?", "lang": "en", "expect": ["yunjin.audit"]}
+{"prompt": "any new emails from recruiters?", "lang": "en", "expect": ["sakura.inbox"]}
+{"prompt": "check my inbox", "lang": "en", "expect": ["sakura.inbox"]}
+{"prompt": "what's on my plate today?", "lang": "en", "expect": ["sakura.priorities"]}
+{"prompt": "find my notes about the WHEA crash", "lang": "en", "expect": ["sakura.vault_search"]}
+{"prompt": "clean up the promo emails in my inbox", "lang": "en", "expect": ["sakura.clean"]}
+{"prompt": "do a full mass cleanse of my inbox", "lang": "en", "expect": ["sakura.cleanse"]}
+{"prompt": "rebuild my resume PDF", "lang": "en", "expect": ["chaewon.rebuild_resume"]}
+{"prompt": "find remote applied AI engineer jobs", "lang": "en", "expect": ["chaewon.scout"]}
+{"prompt": "what's the weather in Cavite?", "lang": "en", "expect": ["ciel.weather"]}
+{"prompt": "search the web for the latest Python 3.14 release notes", "lang": "en", "expect": ["ciel.web_search"]}
+{"prompt": "explain the difference between TCP and UDP", "lang": "en", "expect": ["ciel.direct"]}
+{"prompt": "write a binary search in Python", "lang": "en", "expect": ["ciel.direct"]}
+{"prompt": "what are my learned rules?", "lang": "en", "expect": ["ciel.read_rules"]}
+{"prompt": "who am I? read my profile", "lang": "en", "expect": ["ciel.read_profile"]}
+{"prompt": "what are my working preferences?", "lang": "en", "expect": ["ciel.read_preferences"]}
+{"prompt": "clear memory", "lang": "en", "expect": ["ciel.reset"]}
+{"prompt": "any suggestions on what I should do next?", "lang": "en", "expect": ["ciel.appraisal"]}
+{"prompt": "check my inbox and my PC vitals", "lang": "en", "expect": ["sakura.inbox", "eunchae.vitals"]}
+{"prompt": "tell me more about those risks", "lang": "en", "expect": ["kazuha.git_status"], "history": [{"user_prompt": "what's the git status of HQ?", "agents_called": ["kazuha"], "agent_results": {"kazuha": "Git review: Branch 'main' | Staged: 0 | Unstaged: 2 | Untracked: 1. ⚠️ 2 security risk(s) in diff!"}, "ciel_reply": "Report: HQ has 2 unstaged files and 2 possible secrets in the diff."}]}
+{"prompt": "run that again", "lang": "en", "expect": ["eunchae.vitals"], "history": [{"user_prompt": "check my PC vitals", "agents_called": ["eunchae"], "agent_results": {"eunchae": "Hardware Vitals: CPU 12% (12 Cores) | RAM 7.1GB / 15.8GB (45%) | Storage 106GB free | Uptime 8h 2m. State: Nominal 🟢."}, "ciel_reply": "Report: CPU 12 percent, RAM 45 percent, 106 GB free. All nominal."}]}
+{"prompt": "save that to my daily notes", "lang": "en", "expect": ["ciel.save_to_daily"], "history": [{"user_prompt": "explain how a B-tree stays balanced", "agents_called": [], "agent_results": {}, "ciel_reply": "A B-tree splits a full node and pushes the middle key up, so every leaf stays at the same depth."}]}
+{"prompt": "PCの状態を確認して", "lang": "ja", "expect": ["eunchae.vitals"]}
+{"prompt": "受信トレイに新しいメールある？", "lang": "ja", "expect": ["sakura.inbox"]}
+{"prompt": "ポートフォリオを監査して", "lang": "ja", "expect": ["yunjin.audit"]}
+{"prompt": "履歴書のPDFを作り直して", "lang": "ja", "expect": ["chaewon.rebuild_resume"]}
+{"prompt": "gitの状態を教えて", "lang": "ja", "expect": ["kazuha.git_status"]}
+{"prompt": "東京の天気は？", "lang": "ja", "expect": ["ciel.weather"]}
+{"prompt": "TCPとUDPの違いを説明して", "lang": "ja", "expect": ["ciel.direct"]}
+{"prompt": "今日やることは何？", "lang": "ja", "expect": ["sakura.priorities"]}
+{"prompt": "リモートのAIエンジニア求人を探して", "lang": "ja", "expect": ["chaewon.scout"]}
+{"prompt": "もう一度確認して", "lang": "ja", "expect": ["sakura.inbox"], "history": [{"user_prompt": "受信トレイに新しいメールある？", "agents_called": ["sakura"], "agent_results": {"sakura": "Gmail Inbox Triage: 3 unread message(s) in Primary (1 recruiter inquiry)."}, "ciel_reply": "解。未読メールが3件あります。"}]}
