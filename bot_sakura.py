@@ -157,7 +157,7 @@ def build_brain_embed(status: dict) -> discord.Embed:
         f"🌸 **Sakura:** `{agent_map.get('sakura', 'qwen/qwen3.8-27b')}` *(Strategic Orchestrator)*",
         f"⭐ **Chaewon:** `{agent_map.get('chaewon', 'openai/gpt-oss-120b')}` *(120B ATS Resume Copilot)*",
         f"🎨 **Yunjin:** `{agent_map.get('yunjin', 'gemini-3.6-flash')}` *(Design Director Critique)*",
-        f"💻 **Kazuha:** `{agent_map.get('kazuha', 'qwen/qwen3.8-27b')}` *(Frontend Systems Architect)*",
+        f"💻 **Kazuha:** `{agent_map.get('kazuha', 'qwen/qwen3.8-27b')}` *(Code & Knowledge)*",
         f"🛡️ **Eunchae:** `{agent_map.get('eunchae', 'openai/gpt-oss-20b')}` *(QA Verification Guardian)*"
     ]
     embed.add_field(

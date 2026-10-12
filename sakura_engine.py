@@ -180,7 +180,7 @@ Compose a structured, authoritative, and inspiring Daily Morning Briefing with t
 3. 📊 **TEAM READINESS**:
    - ⭐ **Chaewon (Career):** {app_count} applications logged; ready to tailor new roles (`!tailor`).
    - 🎨 **Yunjin (Portfolio):** ready for portfolio audits and case-study critiques (`!audit`, `!critique`).
-   - 💻 **Kazuha (Frontend):** ready for code review and knowledge-base questions (`!git review`, `!ask`).
+   - 💻 **Kazuha (Code & Knowledge):** ready for code review and knowledge-base questions (`!git review`, `!ask`).
    - Do not state scores, pass rates, asset counts or health results unless they appear in the status data above.
    - 🛡️ **Eunchae (Guardian):** {vitals_summary}.
 

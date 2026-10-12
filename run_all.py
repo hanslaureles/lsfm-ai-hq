@@ -119,7 +119,7 @@ async def main():
         ("Chaewon (Career)", chaewon_bot, os.getenv("CHAEWON_BOT_TOKEN") or os.getenv("DISCORD_BOT_TOKEN")),
         ("Yunjin (Portfolio)", yunjin_bot, os.getenv("YUNJIN_BOT_TOKEN")),
         ("Sakura (Chief of Staff)", sakura_bot, os.getenv("SAKURA_BOT_TOKEN")),
-        ("Kazuha (Frontend)", kazuha_bot, os.getenv("KAZUHA_BOT_TOKEN")),
+        ("Kazuha (Code & Knowledge)", kazuha_bot, os.getenv("KAZUHA_BOT_TOKEN")),
         ("Eunchae (Guardian)", eunchae_bot, os.getenv("EUNCHAE_BOT_TOKEN")),
     ]
 
