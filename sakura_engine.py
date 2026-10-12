@@ -87,7 +87,7 @@ def scan_morning_inbox(max_items: int = 10) -> dict:
             clean_sender = re.sub(r'<.*?>', '', sender).replace('"', '').strip()
 
             try:  # the sent date, so an old alert is not read as today's
-                sent = email.utils.parsedate_to_datetime(m.get("date", "")).strftime("%b %d")
+                sent = email.utils.parsedate_to_datetime(m.get("date", "")).strftime("%b %d, %Y")
             except (TypeError, ValueError, IndexError):
                 sent = "date unknown"
 
@@ -304,6 +304,12 @@ def _git(repo: Path, *args: str):
     return _run(["git", "-C", str(repo), *args])
 
 
+# owner/repo from an origin on github.com itself (https, scp-style or ssh://), nothing else
+GITHUB_REMOTE = re.compile(
+    r"(?:https://(?:[^@/\s]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
+
+
 def live_ci_status(projects_dir: Path = None, repos: list = None) -> list:
     """
     Each project repo's newest GitHub Actions run per workflow on main, read just now with
@@ -315,7 +321,7 @@ def live_ci_status(projects_dir: Path = None, repos: list = None) -> list:
     lines = []
     for name in ROLLUP_REPOS if repos is None else repos:
         url = _git(projects_dir / name, "remote", "get-url", "origin")
-        m = re.search(r"github\.com[/:]([^/\s]+/[^/\s]+?)(?:\.git)?$", url[0]) if url else None
+        m = GITHUB_REMOTE.match(url[0].strip()) if url else None
         out = _run(["gh", "run", "list", "-R", m.group(1), "-b", "main", "-L", "10",
                     "--json", "workflowName,status,conclusion,createdAt"]) if m else None
         try:
@@ -323,8 +329,9 @@ def live_ci_status(projects_dir: Path = None, repos: list = None) -> list:
         except (TypeError, ValueError):
             runs = []
         newest = {}
-        for r in runs:  # gh lists newest first
-            newest.setdefault(r.get("workflowName", "?"), r)
+        for r in runs if isinstance(runs, list) else []:  # gh lists newest first
+            if isinstance(r, dict) and isinstance(r.get("workflowName"), str):  # anything else: not checked
+                newest.setdefault(r["workflowName"], r)
         if not newest:
             lines.append(f"{name}: CI status unavailable (not checked)")
             continue

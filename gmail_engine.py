@@ -72,7 +72,7 @@ def get_gmail_service(interactive: bool = False):
                 print(f"⚠️ [Gmail Engine] Failed to refresh token: {e}")
                 creds = None
 
-        if not creds:
+        if not creds or not creds.valid:  # also expired with no refresh token (Codex B1)
             if not interactive:
                 print(f"⚠️ [Gmail Engine] {AUTH_HELP}", flush=True)
                 return None
