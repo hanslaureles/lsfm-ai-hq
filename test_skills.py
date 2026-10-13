@@ -184,7 +184,10 @@ class TestLimits(unittest.TestCase):
                     self.assertEqual(warned, not healthy)
 
     def test_get_system_vitals_uses_the_shared_rule(self):
-        with mock.patch.object(self.ee, "is_healthy", return_value="from is_healthy"):
+        # The engine reads C:\ (the bots run on Windows); CI runs on Linux, so fake the disk.
+        disk = mock.Mock(total=500 * 1024 ** 3, free=100 * 1024 ** 3, percent=80.0)
+        with mock.patch.object(self.ee, "is_healthy", return_value="from is_healthy"), \
+                mock.patch.object(self.ee.psutil, "disk_usage", return_value=disk):
             self.assertEqual(self.ee.get_system_vitals(cpu_interval=None)["healthy"], "from is_healthy")
 
     def test_urgent_alert_limits_live_beside_the_health_limits(self):
