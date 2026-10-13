@@ -29,14 +29,11 @@ from llm_client import query_llm, query_llm_structured, get_brain_status
 from obsidian_client import ObsidianClient, VAULT_PATHS
 from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
 from speech_stream import VoiceStream, split_sentences
-from heavy_jobs import run_heavy
+from heavy_jobs import run_blocking
 
 # Import specialist tool engines safely
-try:
-    from eunchae_engine import get_system_vitals, audit_file_qa
-except ImportError:
-    get_system_vitals = None
-    audit_file_qa = None
+import skills  # the shared skill registry (ADR-001 R1)
+
 
 try:
     from yunjin_engine import scan_html_assets, audit_full_portfolio, PORTFOLIO_DIR
@@ -101,18 +98,6 @@ def call_llm(prompt: str, system_instruction: str = "", *, on_delta=None, meta: 
     meta gets chain / provider / model / ttft_ms, even when the call raises.
     """
     return query_llm_structured(prompt, system_instruction, agent="ciel", on_delta=on_delta, meta=meta).text
-
-
-async def run_blocking(fn, *args, timeout: float, label: str, heavy: bool = False, **kwargs):
-    """
-    Runs a blocking call off the event loop; raises TimeoutError("<label> timed out
-    after N s"). heavy=True uses heavy_jobs.HEAVY_POOL instead of the default executor.
-    """
-    call = run_heavy(fn, *args, **kwargs) if heavy else asyncio.to_thread(fn, *args, **kwargs)
-    try:
-        return await asyncio.wait_for(call, timeout)
-    except TimeoutError:
-        raise TimeoutError(f"{label} timed out after {timeout:g} s") from None
 
 
 class SpeechClips:
@@ -1118,12 +1103,22 @@ Respond ONLY with valid JSON.
         # an agent whose job never started has no time (None), not a made-up 0.
         started = None
         try:
-            task, work = self._agent_job(agent, user_prompt, tool_targets)
-            if task:
+            calls = skills.legacy_calls(agent, user_prompt, tool_targets)  # R5: the plan carries the calls
+            if calls:
+                # A migrated agent runs the same skills its Discord commands use (ADR-001 R1).
+                # run_calls applies each skill's own timeout and reports it as a failed result.
+                task = "; ".join(skills.SKILLS[name].desc for name, _ in calls) + "..."
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
-            started = time.perf_counter()
-            status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize(),
-                                                     heavy=agent in HEAVY_AGENTS)
+                started = time.perf_counter()
+                result = await skills.run_calls(calls)
+                status, result_text = result.status, result.text
+            else:
+                task, work = self._agent_job(agent, user_prompt, tool_targets)
+                if task:
+                    await emit("agent_state", {"agent": agent, "status": "active", "task": task})
+                started = time.perf_counter()
+                status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize(),
+                                                         heavy=agent in HEAVY_AGENTS)
         except TimeoutError:
             status = "failed"
             result_text = f"{agent.capitalize()} failed: timed out after {timeout:g} s"
@@ -1143,31 +1138,6 @@ Respond ONLY with valid JSON.
         work() is the blocking part and returns (status, result_text). It runs in a
         worker thread, so it must not touch the event loop.
         """
-        if agent == "eunchae":
-            # Check if tests/compilation requested or hardware vitals
-            if any("test" in str(t).lower() or "compile" in str(t).lower() for t in tool_targets) or any(w in user_prompt.lower() for w in ["test", "compile", "syntax", "smoke"]):
-                def compile_check():
-                    import py_compile
-                    py_files = list(BASE_DIR.glob("*.py"))
-                    syntax_errors = []
-                    for pf in py_files:
-                        try:
-                            py_compile.compile(str(pf), doraise=True)
-                        except Exception as pe:
-                            syntax_errors.append((pf.name, str(pe)))
-                    if syntax_errors:
-                        return "attention", f"System QA check: Smoke test flagged {len(syntax_errors)} compilation error(s): {syntax_errors[0][0]} - {syntax_errors[0][1]}."
-                    return "done", f"System QA check: Compilation verification passed across {len(py_files)} Python scripts. 0 syntax errors detected. Nominal state."
-                return "Running Python script syntax & compilation verification...", compile_check
-            if get_system_vitals:
-                def read_vitals():
-                    vitals = get_system_vitals()
-                    healthy_state = "Nominal 🟢" if vitals.get("healthy") else "High Load ⚠️"
-                    status = "done" if vitals.get("healthy") else "attention"
-                    return status, f"Hardware Vitals: CPU {vitals.get('cpu_pct')}% ({vitals.get('cpu_count')} Cores) | RAM {vitals.get('ram_used_gb')}GB / {vitals.get('ram_total_gb')}GB ({vitals.get('ram_pct')}%) | Storage {vitals.get('disk_free_gb')}GB free | Uptime {vitals.get('uptime_str')}. State: {healthy_state}."
-                return "Sampling hardware vitals via psutil...", read_vitals
-            return None, lambda: ("failed", "Hardware vitals unavailable: eunchae_engine could not be imported.")
-
         if agent == "yunjin":
             def scan_portfolio():
                 if not scan_html_assets:

@@ -22,3 +22,17 @@ HEAVY_POOL = ThreadPoolExecutor(max_workers=HEAVY_WORKERS, thread_name_prefix="h
 async def run_heavy(fn, *args, **kwargs):
     """Runs a blocking heavy job on HEAVY_POOL and returns its result."""
     return await asyncio.get_running_loop().run_in_executor(HEAVY_POOL, functools.partial(fn, *args, **kwargs))
+
+
+async def run_blocking(fn, *args, timeout: float, label: str, heavy: bool = False, **kwargs):
+    """
+    Runs a blocking call off the event loop; raises TimeoutError("<label> timed out
+    after N s"). heavy=True uses HEAVY_POOL instead of the default executor.
+    A thread can't be killed, so on timeout the await is abandoned and the call may
+    still finish in the background. (Moved from ciel_orchestrator for skills.py, ADR-001 R1.)
+    """
+    call = run_heavy(fn, *args, **kwargs) if heavy else asyncio.to_thread(fn, *args, **kwargs)
+    try:
+        return await asyncio.wait_for(call, timeout)
+    except TimeoutError:
+        raise TimeoutError(f"{label} timed out after {timeout:g} s") from None

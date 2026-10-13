@@ -113,16 +113,29 @@ def _module(name, attrs):
     return mod
 
 
-_saved = {name: sys.modules.get(name) for name in [*STUBS, "ciel_orchestrator"]}
+_saved = {name: sys.modules.get(name) for name in [*STUBS, "ciel_orchestrator", "skills"]}
 for _name, _attrs in STUBS.items():
     sys.modules[_name] = _module(_name, _attrs)
-sys.modules.pop("ciel_orchestrator", None)
+sys.modules.pop("ciel_orchestrator", None); sys.modules.pop("skills", None)  # skills re-imported under the same stubs
 import ciel_orchestrator  # noqa: E402
 for _name, _orig in _saved.items():
     if _orig is None:
         sys.modules.pop(_name, None)
     else:
         sys.modules[_name] = _orig
+
+
+def _owner(name):
+    """Engine functions moved into skills.py (ADR-001 R1); everything else still lives on ciel_orchestrator."""
+    skills_mod = ciel_orchestrator.skills
+    return skills_mod if hasattr(skills_mod, name) and not hasattr(ciel_orchestrator, name) else ciel_orchestrator
+
+
+def skill_timeout(name, seconds):
+    """A migrated agent's timeout is its skill's timeout_s."""
+    import dataclasses
+    skills_mod = ciel_orchestrator.skills
+    return mock.patch.dict(skills_mod.SKILLS, {name: dataclasses.replace(skills_mod.SKILLS[name], timeout_s=seconds)})
 
 
 class MissionTestCase(unittest.IsolatedAsyncioTestCase):
@@ -196,7 +209,7 @@ class TestHonestFailures(MissionTestCase):
     """A tool that could not run must reach the HUD as "failed", never as success text."""
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     async def agent_end(self, prompt, agent):
         result = await self.run_mission(prompt)
@@ -304,7 +317,7 @@ class TestEventLoopStaysResponsive(MissionTestCase):
     SLOW_S = 0.5
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     def slow(self, value=None):
         def fn(*args, **kwargs):
@@ -401,7 +414,7 @@ class TestHudSignals(MissionTestCase):
     """5E-4a: measured per-mission values the HUD shows instead of random digits."""
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     def agent_end(self, agent):
         ends = [e for e in self.events if e["type"] == "agent_state" and e.get("agent") == agent
@@ -420,7 +433,7 @@ class TestHudSignals(MissionTestCase):
         self.assertGreaterEqual(elapsed, 45)
 
     async def test_a_timed_out_agent_reports_its_time_too(self):
-        self.enterContext(mock.patch.dict(ciel_orchestrator.AGENT_TIMEOUTS_S, {"eunchae": 0.1}))
+        self.enterContext(skill_timeout("eunchae.vitals", 0.1))
         self.patch("get_system_vitals", TestTimeouts.hang({"healthy": True}))
         await self.run_mission("check vitals")
         end = self.agent_end("eunchae")
@@ -442,7 +455,7 @@ class TestHudSignals(MissionTestCase):
     async def test_no_work_started_means_no_time(self):
         def broken_job(agent, prompt, targets):
             raise RuntimeError("no tool for this agent")
-        self.enterContext(mock.patch.object(self.ciel, "_agent_job", broken_job))
+        self.enterContext(mock.patch.object(ciel_orchestrator.skills, "legacy_calls", broken_job))
         await self.run_mission("check vitals")
         end = self.agent_end("eunchae")
         self.assertEqual(end["status"], "failed")
@@ -472,7 +485,7 @@ class TestTimeouts(MissionTestCase):
     """A call that hangs must end as an honest failure that names the timeout."""
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     @staticmethod
     def hang(value=None):
@@ -482,7 +495,7 @@ class TestTimeouts(MissionTestCase):
         return fn
 
     async def test_agent_timeout_reports_failed(self):
-        self.enterContext(mock.patch.dict(ciel_orchestrator.AGENT_TIMEOUTS_S, {"eunchae": 0.1}))
+        self.enterContext(skill_timeout("eunchae.vitals", 0.1))
         self.patch("get_system_vitals", self.hang({"healthy": True}))
         result = await self.run_mission("check vitals")
         end = [e for e in self.events if e["type"] == "agent_state" and e.get("status") not in (None, "active")]
@@ -554,7 +567,7 @@ class TestAsyncSafety(MissionTestCase):
     """Hazards that only exist because missions now overlap with each other and with threads."""
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     async def clear_mid_mission(self, prompt):
         task = asyncio.create_task(self.run_mission(prompt))
@@ -662,7 +675,7 @@ class TestStreamedSpeech(MissionTestCase):
     """3D-2: spoken sentences are voiced while the synthesis LLM is still streaming."""
 
     def patch(self, name, value):
-        self.enterContext(mock.patch.object(ciel_orchestrator, name, value))
+        self.enterContext(mock.patch.object(_owner(name), name, value))
 
     def clip_events(self):
         return [e for e in self.events if e["type"] == "ciel_audio_chunk"]

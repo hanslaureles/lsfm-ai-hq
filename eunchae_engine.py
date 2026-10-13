@@ -47,6 +47,18 @@ except Exception as _exc:
 # ==============================================================================
 # HARDWARE VITALS MONITORING (Legacy Guardian Duties)
 # ==============================================================================
+# One rule for "is the host healthy?" (ADR-001 R1): !vitals, the vitals pulse, the
+# HUD's background checks (proactive_sentinel) and the Ciel skill all use it.
+LIMITS = {"cpu_pct": 85, "ram_pct": 88, "disk_free_gb": 20}  # above CPU/RAM, or below free disk = unhealthy
+# Eunchae's urgent alert to #system-alerts (30 min cooldown) fires only well past those.
+ALERT_LIMITS = {"cpu_pct": 95, "ram_pct": 92}
+
+
+def is_healthy(v: dict) -> bool:
+    return (v["cpu_pct"] <= LIMITS["cpu_pct"] and v["ram_pct"] <= LIMITS["ram_pct"]
+            and v["disk_free_gb"] >= LIMITS["disk_free_gb"])
+
+
 def get_system_vitals(cpu_interval: float | None = 0.5) -> dict:
     """
     Reads real-time PC hardware vitals using psutil. cpu_interval=None doesn't
@@ -71,7 +83,7 @@ def get_system_vitals(cpu_interval: float | None = 0.5) -> dict:
     minutes, _ = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m"
 
-    return {
+    vitals = {
         "cpu_pct": cpu_pct,
         "cpu_count": cpu_count,
         "ram_total_gb": ram_total_gb,
@@ -81,8 +93,9 @@ def get_system_vitals(cpu_interval: float | None = 0.5) -> dict:
         "disk_free_gb": disk_free_gb,
         "disk_pct": disk_pct,
         "uptime_str": uptime_str,
-        "healthy": (ram_pct < 90 and cpu_pct < 90 and disk_pct < 95)
     }
+    vitals["healthy"] = is_healthy(vitals)
+    return vitals
 
 def generate_eunchae_report() -> str:
     """Generates an energetic system diagnostic report from Eunchae."""

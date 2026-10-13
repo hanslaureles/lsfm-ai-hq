@@ -428,7 +428,7 @@ def query_llm_structured(prompt: str, system_instruction: str = "", temperature:
                          agent: str, on_delta=None, meta: dict | None = None) -> LLMResult:
     """
     Multi-provider LLM dispatcher with per-agent model specialization. `agent` is
-    required and must be one of AGENTS; it picks the cloud model from
+    required and must be one of LLM_CALLERS (the 5 bots plus "ciel"); it picks the cloud model from
     brain_mode.json's agent_cloud_models (defaults below). on_delta streams Groq
     replies (and gives ttft_ms); Gemini and Ollama answer in one piece.
     - 'cloud':

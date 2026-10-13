@@ -23,6 +23,10 @@ try:
     from eunchae_engine import get_system_vitals
 except ImportError:
     get_system_vitals = None
+try:
+    from eunchae_engine import LIMITS  # the same health limits as !vitals (ADR-001 R1)
+except ImportError:
+    LIMITS = None  # read only after get_system_vitals ran; a failure there is a failed check
 
 try:
     from obsidian_client import ObsidianClient
@@ -61,7 +65,7 @@ def check_hardware_sentinel() -> list[dict]:
         ram_total = vitals.get("ram_total_gb", 0)
         disk_free = vitals.get("disk_free_gb", 100)
 
-        if cpu_pct > 85:
+        if cpu_pct > LIMITS["cpu_pct"]:
             suggestions.append({
                 "id": "hw_cpu_spike",
                 "severity": "warning",
@@ -73,7 +77,7 @@ def check_hardware_sentinel() -> list[dict]:
                 "action_prompt": "Eunchae, inspect active processes and hardware vitals."
             })
 
-        if ram_pct > 88:
+        if ram_pct > LIMITS["ram_pct"]:
             suggestions.append({
                 "id": "hw_ram_pressure",
                 "severity": "warning",
@@ -85,7 +89,7 @@ def check_hardware_sentinel() -> list[dict]:
                 "action_prompt": "Eunchae, sample hardware vitals and prune memory caches."
             })
 
-        if disk_free < 20:
+        if disk_free < LIMITS["disk_free_gb"]:
             suggestions.append({
                 "id": "hw_disk_low",
                 "severity": "warning",

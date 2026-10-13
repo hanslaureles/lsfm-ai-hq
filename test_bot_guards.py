@@ -449,5 +449,71 @@ class InstanceLockTest(unittest.TestCase):
             self.assertFalse((Path(d) / "bots.log").exists())
 
 
+class FakeMessage:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+    async def delete(self):
+        pass
+
+
+class FakeCtx:
+    """Enough of a discord.py Context for a command callback: replies are recorded."""
+
+    def __init__(self):
+        self.replies = []
+
+    async def reply(self, content=None, **kwargs):
+        self.replies.append({"content": content, **kwargs})
+        return FakeMessage()
+
+
+class EunchaeCommandsTest(unittest.TestCase):
+    """ADR-001 R1: !vitals and !test go through the skill registry."""
+
+    def setUp(self):
+        import bot_eunchae
+        import skills
+        self.bot, self.skills = bot_eunchae, skills
+
+    def patch(self, name, value):
+        p = mock.patch.object(self.skills, name, value)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_vitals_samples_off_the_event_loop(self):
+        # A 0.5 s psutil sample on the shared loop stalled all five bots.
+        import threading
+        threads = []
+
+        def vitals():
+            threads.append(threading.current_thread())
+            return {"cpu_pct": 12.0, "cpu_count": 12, "ram_pct": 50.0, "ram_used_gb": 8.0, "ram_total_gb": 15.8,
+                    "disk_free_gb": 100.0, "disk_pct": 50.0, "uptime_str": "1h 2m", "healthy": True}
+        self.patch("get_system_vitals", vitals)
+        ctx = FakeCtx()
+        asyncio.run(self.bot.vitals_command.callback(ctx))
+        self.assertEqual(len(threads), 1)
+        self.assertIsNot(threads[0], threading.main_thread())
+        self.assertIn("Healthy", ctx.replies[-1]["embed"].title)
+
+    def test_vitals_reports_a_failed_probe(self):
+        self.patch("get_system_vitals", None)
+        ctx = FakeCtx()
+        asyncio.run(self.bot.vitals_command.callback(ctx))
+        self.assertIn("could not be imported", ctx.replies[-1]["content"])
+
+    def test_test_command_refuses_a_path_outside_the_workspace(self):
+        calls = []
+        self.patch("test_code_file", lambda p: calls.append(p) or {"success": True})
+        ctx = FakeCtx()
+        asyncio.run(self.bot.test_command.callback(ctx, filepath="C:/Windows/System32/x.py"))
+        self.assertEqual(calls, [])
+        self.assertTrue(any("relative" in (r["content"] or "") for r in ctx.replies), ctx.replies)
+
+
 if __name__ == "__main__":
     unittest.main()

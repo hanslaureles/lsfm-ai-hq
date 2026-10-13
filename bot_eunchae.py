@@ -32,9 +32,10 @@ from eunchae_engine import (
     audit_file_qa,
     record_qa_failure,
     get_all_learned_lessons,
-    test_code_file,
-    check_obsidian_heartbeat
+    check_obsidian_heartbeat,
+    ALERT_LIMITS,
 )
+import skills  # !vitals and !test run the same skills Ciel uses (ADR-001 R1)
 from discord_utils import send_clean_embeds
 from daily_once import run_daily
 
@@ -62,8 +63,9 @@ async def watchdog_loop():
     v = await loop.run_in_executor(None, get_system_vitals)
     now_ts = asyncio.get_event_loop().time()
 
-    # 1. Check for extreme resource load (RAM > 92% or CPU > 95%) with 30m cooldown
-    if (v["ram_pct"] > 92 or v["cpu_pct"] > 95) and (now_ts - LAST_ALERT_TIME > 1800):
+    # 1. Check for extreme resource load (eunchae_engine.ALERT_LIMITS) with 30m cooldown
+    if (v["ram_pct"] > ALERT_LIMITS["ram_pct"] or v["cpu_pct"] > ALERT_LIMITS["cpu_pct"]) \
+            and (now_ts - LAST_ALERT_TIME > 1800):
         for guild in bot.guilds:
             channel = find_channel_by_name(guild, "system-alerts")
             if channel:
@@ -191,7 +193,7 @@ async def on_message(message):
         try:
             async with message.channel.typing():
                 report = await loop.run_in_executor(None, generate_eunchae_report)
-            vitals = get_system_vitals()
+            vitals = await loop.run_in_executor(None, get_system_vitals)  # a 0.5 s sample: never on the loop
             await send_clean_embeds(
                 target=message,
                 title="🛡️ Eunchae's PC Guardian Report",
@@ -261,7 +263,13 @@ async def ping(ctx):
 
 @bot.command(name="vitals")
 async def vitals_command(ctx):
-    v = get_system_vitals()
+    # The same skill Ciel runs, sampled in a worker thread: the 0.5 s psutil sample used to
+    # run on the event loop all five bots share (ADR-001 R1).
+    result = await asyncio.to_thread(skills.run_skill, "eunchae.vitals")
+    if result.status == "failed":
+        await ctx.reply(f"❌ {result.text}")
+        return
+    v = result.data
     status_icon = "🟢" if v["healthy"] else "⚠️"
     
     embed = discord.Embed(
@@ -481,6 +489,7 @@ async def test_command(ctx, *, filepath: str = None):
             "• `!test git_sentinel.py`\n"
             "• `!test agent-memory/test_memory.py`\n"
             "• `!test bot_eunchae.py`\n\n"
+            "Paths are relative to the projects workspace (the folder that holds HQ); absolute paths and `..` are refused.\n"
             "Validates Python compilation, AST structural metrics, unit test suites, import resolution, and balanced brackets."
         )
         return
@@ -489,7 +498,8 @@ async def test_command(ctx, *, filepath: str = None):
     status_msg = await ctx.reply(f"🧪 **Eunchae is testing `{clean_fp}`...**")
 
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, test_code_file, clean_fp)
+    result = await loop.run_in_executor(None, skills.run_skill, "eunchae.test", {"path": clean_fp})
+    res = result.data
 
     try:
         await status_msg.delete()
@@ -497,7 +507,7 @@ async def test_command(ctx, *, filepath: str = None):
         pass
 
     if not res.get("success"):
-        await ctx.reply(f"❌ {res.get('error', 'Unknown test failure')}")
+        await ctx.reply(f"❌ {result.text}")
         return
 
     passed = res.get("passed", False)
