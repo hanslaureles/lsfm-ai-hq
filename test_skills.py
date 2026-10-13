@@ -337,7 +337,230 @@ class TestEunchaeSkills(unittest.TestCase):
         self.assertEqual(skills.legacy_calls("eunchae", "run a syntax check", []), [("eunchae.compile_all", {})])
         self.assertEqual(skills.legacy_calls("eunchae", "how is my pc", ["run_tests"]),
                          [("eunchae.compile_all", {})])
-        self.assertEqual(skills.legacy_calls("kazuha", "git status", ["git_status"]), [])  # not migrated yet
+        self.assertEqual(skills.legacy_calls("sakura", "check inbox", ["check_inbox"]), [])  # not migrated yet
+
+
+class TestKazuhaYunjinSkills(unittest.TestCase):
+    """ADR-001 R2: Kazuha and Yunjin run through the registry from Discord and Ciel."""
+
+    def patch(self, name, value, target=skills):
+        p = mock.patch.object(target, name, value)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_registered(self):
+        for name, agent, args in (("kazuha.git_status", "kazuha", set()), ("kazuha.review", "kazuha", {"scope"}),
+                                  ("kazuha.ask", "kazuha", {"question"}), ("yunjin.audit", "yunjin", set())):
+            with self.subTest(name=name):
+                self.assertEqual(skills.SKILLS[name].agent, agent)
+                self.assertEqual(skills.SKILLS[name].args.keys(), args)
+
+    def test_audit_reads_every_html_page(self):
+        import tempfile
+        from pathlib import Path
+        ye = _load_real("yunjin_engine")
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        portfolio, audits = Path(tmp.name) / "portfolio-site", Path(tmp.name) / "audits"
+        portfolio.mkdir()
+        audits.mkdir()
+        for page in ("index.html", "case-ciel.html", "404.html"):
+            (portfolio / page).write_text("<html></html>", encoding="utf-8")
+        scanned = []
+
+        def scan(path):
+            scanned.append(Path(path).name)
+            return {"exists": True, "file": Path(path).name, "title": "t", "has_meta_desc": True,
+                    "total_images": 0, "broken_images": []}
+
+        self.patch("PORTFOLIO_DIR", portfolio, ye)
+        self.patch("AUDITS_DIR", audits, ye)
+        self.patch("scan_html_assets", scan, ye)
+        self.patch("query_llm", lambda *a, **k: "PORTFOLIO HEALTH SCORE: 88%", ye)
+        res = ye.audit_full_portfolio()
+        self.assertEqual(sorted(scanned), ["404.html", "case-ciel.html", "index.html"])
+        self.assertEqual(res["score"], 88)
+        # No score in the critique: no made-up number (it used to default to 94).
+        self.patch("query_llm", lambda *a, **k: "A critique with no score.", ye)
+        self.assertIsNone(ye.audit_full_portfolio()["score"])
+
+    def test_yunjin_audit_status(self):
+        full = {"success": True, "broken_images": [], "report": "r", "saved_file": "a.md", "filename": "a.md"}
+        cases = [({**full, "score": 95, "broken_images_count": 0}, "done"),
+                 ({**full, "score": 89, "broken_images_count": 0}, "attention"),
+                 ({**full, "score": 95, "broken_images_count": 1}, "attention"),
+                 ({**full, "score": None, "broken_images_count": 0}, "attention"),
+                 ({"success": False, "error": "Portfolio directory not found"}, "failed")]
+        for res, status in cases:
+            with self.subTest(res=res):
+                self.patch("audit_full_portfolio", lambda res=res: dict(res))
+                r = skills.run_skill("yunjin.audit")
+                self.assertEqual(r.status, status, r.text)
+                self.assertEqual(r.data, res)
+        self.patch("audit_full_portfolio", lambda: {**full, "score": 70, "broken_images_count": 2})
+        self.assertEqual(skills.run_skill("yunjin.audit").text, "Portfolio audit: score 70/100, 2 broken image(s).")
+        self.patch("audit_full_portfolio", None)
+        self.assertEqual(skills.run_skill("yunjin.audit").status, "failed")
+
+    def test_kazuha_ask_unindexed_is_attention(self):
+        asked = []
+
+        def ask(q, answer):
+            asked.append(q)
+            return {"answer": answer, "citations": ["`a.md` (h)"]}
+
+        self.patch("ask_knowledge_base", lambda q: ask(q, "⚠️ My knowledge vault is currently empty or unindexed."))
+        self.assertEqual(skills.run_skill("kazuha.ask", {"question": "what is ciel?"}).status, "attention")
+        self.patch("ask_knowledge_base", lambda q: ask(q, "Ciel is the voice copilot."))
+        r = skills.run_skill("kazuha.ask", {"question": "what is ciel?"})
+        self.assertEqual(r.status, "done")
+        self.assertEqual(r.data, {"answer": "Ciel is the voice copilot.", "citations": ["`a.md` (h)"]})
+        self.assertEqual(asked, ["what is ciel?"] * 2)
+        self.assertEqual(skills.run_skill("kazuha.ask", {"question": "  "}).status, "failed")
+        self.assertEqual(len(asked), 2)  # an empty question never reaches the engine
+        self.patch("ask_knowledge_base", None)
+        self.assertEqual(skills.run_skill("kazuha.ask", {"question": "q"}).status, "failed")
+
+    def test_kazuha_review_scope_and_status(self):
+        calls = []
+
+        def review(staged_only, **res):
+            calls.append(staged_only)
+            return {"success": True, "score": 90, "verdict": "🟢 READY TO COMMIT", "security_alerts": [],
+                    "review": "fine", "info": {"branch": "main"}, **res}
+
+        self.patch("kazuha_review_changes", lambda staged_only=False: review(staged_only))
+        self.assertEqual(skills.run_skill("kazuha.review", {"scope": "staged"}).status, "done")
+        self.assertEqual(skills.run_skill("kazuha.review").status, "done")
+        self.assertEqual(calls, [True, False])
+        self.assertEqual(skills.run_skill("kazuha.review", {"scope": "everything"}).status, "failed")
+        self.assertEqual(len(calls), 2)  # a bad scope never reaches the engine
+        self.patch("kazuha_review_changes", lambda staged_only=False: review(staged_only, security_alerts=["key"]))
+        self.assertEqual(skills.run_skill("kazuha.review").status, "attention")
+        self.patch("kazuha_review_changes", lambda staged_only=False: {"success": False, "error": "not a repo"})
+        self.assertEqual(skills.run_skill("kazuha.review").status, "failed")
+        self.patch("kazuha_review_changes", None)
+        self.assertEqual(skills.run_skill("kazuha.review").status, "failed")
+
+    def test_kazuha_git_status_texts(self):
+        self.patch("get_git_info", lambda: {"is_clean": True, "branch": "main", "total_commits": 7,
+                                            "staged": [], "unstaged": [], "untracked": []})
+        self.patch("get_git_diff", lambda: "")
+        self.patch("scan_security_risks", lambda diff: [])
+        r = skills.run_skill("kazuha.git_status")
+        self.assertEqual((r.status, r.text), ("done", "Git review: Working tree clean on branch 'main' (7 commits). "
+                                                      "0 security risks in diff."))
+        self.patch("get_git_info", lambda: {"is_clean": False, "branch": "dev", "staged": ["a"], "unstaged": [],
+                                            "untracked": ["b", "c"], "total_commits": 2})
+        self.patch("get_git_diff", lambda: "+token")
+        self.patch("scan_security_risks", lambda diff: ["secret"])
+        r = skills.run_skill("kazuha.git_status")
+        self.assertEqual(r.status, "attention")
+        self.assertIn("Branch 'dev' | Staged: 1 | Unstaged: 0 | Untracked: 2. ⚠️ 1 security risk(s) in diff!", r.text)
+
+        def broken():
+            raise OSError("git not found")
+        self.patch("get_git_info", broken)
+        r = skills.run_skill("kazuha.git_status")
+        self.assertEqual(r.status, "failed")
+        self.assertIn("git not found", r.text)
+        self.patch("get_git_info", None)
+        self.assertEqual(skills.run_skill("kazuha.git_status").status, "failed")
+
+    def test_incomplete_engine_results_fail(self):
+        # Codex R2 fix 1: an engine dict that can't back the claim (or the embed) is failed, never done.
+        review = {"success": True, "score": 95, "verdict": "🟢 READY TO COMMIT", "security_alerts": [],
+                  "review": "fine", "info": {"branch": "main"}}
+        audit = {"success": True, "score": 95, "broken_images_count": 0, "broken_images": [], "report": "r",
+                 "saved_file": "a.md", "filename": "a.md"}
+        info = {"branch": "main", "is_clean": True, "staged": [], "unstaged": [], "untracked": [], "total_commits": 3}
+        cases = [
+            ("kazuha.ask", {"question": "q"}, "ask_knowledge_base", lambda q: {}),
+            ("kazuha.ask", {"question": "q"}, "ask_knowledge_base", lambda q: {"answer": "", "citations": []}),
+            ("kazuha.ask", {"question": "q"}, "ask_knowledge_base", lambda q: {"answer": "a", "citations": None}),
+            ("kazuha.review", {}, "kazuha_review_changes", lambda staged_only=False: {"success": True}),
+            ("kazuha.review", {}, "kazuha_review_changes", lambda staged_only=False: {**review, "security_alerts": None}),
+            ("kazuha.review", {}, "kazuha_review_changes", lambda staged_only=False: {**review, "score": True}),
+            ("yunjin.audit", {}, "audit_full_portfolio", lambda: {k: v for k, v in audit.items() if k != "broken_images_count"}),
+            ("yunjin.audit", {}, "audit_full_portfolio", lambda: {k: v for k, v in audit.items() if k != "score"}),
+            ("yunjin.audit", {}, "audit_full_portfolio", lambda: {**audit, "score": 999}),
+            ("kazuha.git_status", {}, "get_git_info", lambda: {}),
+        ]
+        self.patch("get_git_diff", lambda: "")
+        self.patch("scan_security_risks", lambda diff: [])
+        for name, args, engine, fake in cases:
+            with self.subTest(name=name, engine=engine, i=cases.index((name, args, engine, fake))):
+                self.patch(engine, fake)
+                r = skills.run_skill(name, args)
+                self.assertEqual(r.status, "failed", r.text)
+                self.assertIn("incomplete", r.text)
+        # Complete results still pass, and an explicit score None stays attention with renderable data.
+        self.patch("kazuha_review_changes", lambda staged_only=False: dict(review))
+        self.assertEqual(skills.run_skill("kazuha.review").status, "done")
+        self.patch("audit_full_portfolio", lambda: {**audit, "score": None})
+        r = skills.run_skill("yunjin.audit")
+        self.assertEqual(r.status, "attention")
+        self.assertIsNone(r.data["score"])
+        self.patch("get_git_info", lambda: dict(info))
+        self.assertEqual(skills.run_skill("kazuha.git_status").status, "done")
+        # No scanner: the skill can't claim 0 security risks.
+        self.patch("scan_security_risks", None)
+        r = skills.run_skill("kazuha.git_status")
+        self.assertEqual(r.status, "failed", r.text)
+        self.assertNotIn("0 security risks", r.text)
+
+    def test_malformed_citations_and_scan_results_fail(self):
+        # Codex R2 round 2: element and return types count too, not only the outer fields.
+        self.patch("ask_knowledge_base", lambda q: {"answer": "a", "citations": [123]})
+        self.assertEqual(skills.run_skill("kazuha.ask", {"question": "q"}).status, "failed")
+        self.patch("ask_knowledge_base", lambda q: {"answer": "a", "citations": []})
+        self.assertEqual(skills.run_skill("kazuha.ask", {"question": "q"}).status, "done")
+        info = {"branch": "main", "is_clean": True, "staged": [], "unstaged": [], "untracked": [], "total_commits": 3}
+        self.patch("get_git_info", lambda: dict(info))
+        for diff, risks in ((None, []), ("changed", None), ("changed", False), ("changed", "x")):
+            with self.subTest(diff=diff, risks=risks):
+                self.patch("get_git_diff", lambda d=diff: d)
+                self.patch("scan_security_risks", lambda _d, r=risks: r)
+                r = skills.run_skill("kazuha.git_status")
+                self.assertEqual(r.status, "failed", r.text)
+                self.assertNotIn("0 security risks", r.text)
+        for diff, risks in (("", []), ("changed", [])):  # real empty results stay valid
+            with self.subTest(diff=diff, risks=risks):
+                self.patch("get_git_diff", lambda d=diff: d)
+                self.patch("scan_security_risks", lambda _d, r=risks: r)
+                self.assertEqual(skills.run_skill("kazuha.git_status").status, "done")
+
+    def test_blocked_review_is_attention(self):
+        # Codex R2 fix 2: the engine's own verdict counts, not only security alerts.
+        for score, status in ((90, "done"), (89, "attention"), (40, "attention")):
+            res = {"success": True, "score": score, "verdict": "V", "security_alerts": [], "review": "r",
+                   "info": {"branch": "main"}}
+            with self.subTest(score=score):
+                self.patch("kazuha_review_changes", lambda staged_only=False, res=res: dict(res))
+                self.assertEqual(skills.run_skill("kazuha.review").status, status)
+
+    def test_audit_with_no_pages_fails_before_the_critique(self):
+        # Codex R2 fix 3: an empty portfolio folder is not a 95% audit.
+        import tempfile
+        from pathlib import Path
+        ye = _load_real("yunjin_engine")
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        asked = []
+        self.patch("PORTFOLIO_DIR", Path(tmp.name), ye)
+        self.patch("AUDITS_DIR", Path(tmp.name), ye)
+        self.patch("query_llm", lambda *a, **k: asked.append(a) or "95%", ye)
+        res = ye.audit_full_portfolio()
+        self.assertFalse(res["success"])
+        self.assertIn("no .html pages", res["error"])
+        self.assertEqual(asked, [])
+        self.assertEqual(list(Path(tmp.name).iterdir()), [])  # no report written
+
+    def test_legacy_calls_pick_kazuha_and_yunjin_actions(self):
+        self.assertEqual(skills.legacy_calls("kazuha", "git status", ["git_status"]), [("kazuha.git_status", {})])
+        self.assertEqual(skills.legacy_calls("kazuha", "review my changes", []), [("kazuha.review", {})])
+        self.assertEqual(skills.legacy_calls("kazuha", "show the git diff", []), [("kazuha.review", {})])
+        self.assertEqual(skills.legacy_calls("yunjin", "scan portfolio", ["scan_links"]), [("yunjin.audit", {})])
 
 
 class TestRunBlockingMoved(unittest.TestCase):

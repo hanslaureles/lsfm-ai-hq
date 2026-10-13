@@ -25,12 +25,20 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 health_recorder.attach(bot, "yunjin")  # memory/health/yunjin.json (4B-2)
 
-from yunjin_engine import audit_full_portfolio, critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
+from yunjin_engine import critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
+import skills  # the audit runs the same yunjin.audit skill Ciel uses (ADR-001 R2)
 from discord_utils import send_clean_embeds
 from daily_once import run_daily
 from llm_client import get_brain_status
 
 AUDIT_DATE_FILE = MEMORY_DIR / "last_portfolio_audit_date.txt"
+
+
+def score_view(score, amber_from=80):
+    """(label, embed colour) for an audit score; None (no score in the critique) shows as n/a, in amber."""
+    if score is None:
+        return "n/a", 0xFEE75C
+    return f"{score}%", 0x57F287 if score >= 90 else (0xFEE75C if score >= amber_from else 0xED4245)
 
 def find_channel_by_name(guild: discord.Guild, name: str):
     """Locates a text channel in the guild matching name case-insensitively."""
@@ -57,14 +65,13 @@ async def post_portfolio_audit_if_due():
         return
 
     async def prepare():
-        res = await asyncio.get_running_loop().run_in_executor(None, audit_full_portfolio)
-        return res if res.get("success") else None
+        result = await asyncio.get_running_loop().run_in_executor(None, skills.run_skill, "yunjin.audit")
+        return result.data if result.status != "failed" else None
 
     async def deliver(res):
-        score = res["score"]
-        color = 0x57F287 if score >= 90 else (0xFEE75C if score >= 80 else 0xED4245)
+        score, color = score_view(res["score"])
         embed = discord.Embed(
-            title=f"🎨 Scheduled Portfolio Health Audit — Score: {score}%",
+            title=f"🎨 Scheduled Portfolio Health Audit — Score: {score}",
             description=f"### Weekly Health Check: **{now.strftime('%A, %b %d')}**\n"
                         f"**Broken Images Detected:** {res['broken_images_count']}\n"
                         f"**Audited Directory:** `portfolio-site/`\n\n"
@@ -133,11 +140,14 @@ async def on_message(message):
         status_msg = await message.reply("🎨 **Yunjin is scanning `portfolio-site/` assets, images, and UX layout...**")
         try:
             async with message.channel.typing():
-                result = await loop.run_in_executor(None, audit_full_portfolio)
-            score = result["score"]
-            color = 0x57F287 if score >= 90 else (0xFEE75C if score >= 80 else 0xED4245)
+                skill = await loop.run_in_executor(None, skills.run_skill, "yunjin.audit")
+            if skill.status == "failed":
+                await status_msg.edit(content=f"⚠️ {skill.text}")
+                return
+            result = skill.data
+            score, color = score_view(result["score"])
             embed = discord.Embed(
-                title=f"🎨 Portfolio Health Audit — Score: {score}%",
+                title=f"🎨 Portfolio Health Audit — Score: {score}",
                 description=f"Broken Images: **{result['broken_images_count']}**\nSaved Report: `{result['filename']}`\n\n{result['report'][:1800]}",
                 color=color
             )
@@ -275,22 +285,22 @@ async def audit(ctx):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, audit_full_portfolio)
+            result = await loop.run_in_executor(None, skills.run_skill, "yunjin.audit")
     except Exception as e:
         await status_msg.edit(content=f"❌ Audit failed: `{e}`")
         return
 
-    if not res["success"]:
-        await status_msg.edit(content=f"⚠️ {res['error']}")
+    if result.status == "failed":
+        await status_msg.edit(content=f"⚠️ {result.text}")
         return
 
-    score = res["score"]
+    res = result.data
+    score, color = score_view(res["score"], amber_from=75)
     broken_count = res["broken_images_count"]
-    color = 0x57F287 if score >= 90 else (0xFEE75C if score >= 75 else 0xED4245)
 
     embed = discord.Embed(
         title="🎨 Portfolio Health & Craft Audit",
-        description=f"### Overall Health Score: **{score}%**\n"
+        description=f"### Overall Health Score: **{score}**\n"
                     f"**Broken Images Detected:** {broken_count}\n"
                     f"**Audited Directory:** `portfolio-site/`",
         color=color

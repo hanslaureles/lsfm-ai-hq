@@ -33,6 +33,12 @@ def _optional(module: str, name: str):
 
 get_system_vitals = _optional("eunchae_engine", "get_system_vitals")
 test_code_file = _optional("eunchae_engine", "test_code_file")
+get_git_info = _optional("git_sentinel", "get_git_info")
+get_git_diff = _optional("git_sentinel", "get_git_diff")
+scan_security_risks = _optional("git_sentinel", "scan_security_risks")
+kazuha_review_changes = _optional("kazuha_engine", "kazuha_review_changes")
+ask_knowledge_base = _optional("rag_engine", "ask_knowledge_base")
+audit_full_portfolio = _optional("yunjin_engine", "audit_full_portfolio")
 
 # Worst first: combine() keeps the worst status of a set of results.
 STATUS_ORDER = ("failed", "needs_confirm", "attention", "done")
@@ -244,6 +250,152 @@ register(Skill(name="eunchae.test", agent="eunchae",
 
 
 # ==============================================================================
+# Engine results (Codex R2 fix 1): a successful skill claims only what the engine
+# dict backs, and its data carries every field the Discord embeds read.
+# ==============================================================================
+
+def _bad_fields(res, spec: dict) -> list:
+    """The keys of `spec` (key -> type) that `res` lacks or holds with the wrong type (True is not an int here)."""
+    if not isinstance(res, dict):
+        return ["<not a dict>"]
+    return [key for key, typ in spec.items()
+            if key not in res or not isinstance(res[key], typ) or (isinstance(res[key], bool) and typ is not bool)]
+
+
+def _incomplete(label: str, bad: list, res=None) -> SkillResult:
+    return SkillResult("failed", f"{label}: the engine returned an incomplete result (bad or missing: "
+                                 f"{', '.join(bad)}).", res if isinstance(res, dict) else {})
+
+
+def _score_ok(score) -> bool:
+    return isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100
+
+
+# ==============================================================================
+# Kazuha (Code & Knowledge)
+# ==============================================================================
+
+GIT_INFO_FIELDS = {"branch": str, "is_clean": bool, "staged": list, "unstaged": list, "untracked": list,
+                   "total_commits": int}
+
+
+def _kazuha_git_status() -> SkillResult:
+    if get_git_info is None or get_git_diff is None or scan_security_risks is None:
+        return SkillResult("failed", "Git review unavailable: git_sentinel could not be imported.")
+    try:
+        info = get_git_info()
+        bad = _bad_fields(info, GIT_INFO_FIELDS)
+        if bad:
+            return _incomplete("Git review", bad)
+        diff = get_git_diff()
+        if not isinstance(diff, str):
+            return _incomplete("Git review", ["diff"])
+        risks = scan_security_risks(diff) if diff else []
+        if not isinstance(risks, list):  # only a real list can back "0 security risks"
+            return _incomplete("Git review", ["security scan"])
+    except Exception as e:
+        return SkillResult("failed", f"Git review: git status failed: {e}")
+    status = "attention" if risks else "done"
+    risk_notice = f" ⚠️ {len(risks)} security risk(s) in diff!" if risks else " 0 security risks in diff."
+    data = {"info": info, "risks": risks}
+    if info.get("is_clean"):
+        return SkillResult(status, f"Git review: Working tree clean on branch '{info.get('branch', 'main')}' "
+                                   f"({info.get('total_commits', 0)} commits).{risk_notice}", data)
+    return SkillResult(status, f"Git review: Branch '{info.get('branch', 'main')}' | Staged: {len(info.get('staged', []))} | "
+                               f"Unstaged: {len(info.get('unstaged', []))} | Untracked: {len(info.get('untracked', []))}."
+                               f"{risk_notice}", data)
+
+
+REVIEW_FIELDS = {"score": int, "verdict": str, "security_alerts": list, "review": str, "info": dict}
+AUDIT_FIELDS = {"broken_images_count": int, "broken_images": list, "report": str, "saved_file": str, "filename": str}
+
+
+def _kazuha_review(scope: str = "all") -> SkillResult:
+    if scope not in ("all", "staged"):
+        return SkillResult("failed", f"Code review refused: scope must be 'all' or 'staged', got {scope!r:.40}.")
+    if kazuha_review_changes is None:
+        return SkillResult("failed", "Code review unavailable: kazuha_engine could not be imported.")
+    res = kazuha_review_changes(staged_only=scope == "staged")
+    if not isinstance(res, dict):
+        return _incomplete("Code review", ["<not a dict>"])
+    if not res.get("success"):
+        return SkillResult("failed", f"Code review failed: {res.get('error', 'unknown error')}", res)
+    bad = _bad_fields(res, REVIEW_FIELDS)
+    if not bad:
+        bad = [k for k, ok in (("score", _score_ok(res["score"])),
+                               ("info.branch", isinstance(res["info"].get("branch"), str))) if not ok]
+    if bad:
+        return _incomplete("Code review", bad, res)
+    alerts = res["security_alerts"]
+    text = f"Code review ({scope} changes): {res['verdict']}, score {res['score']}%."
+    if alerts:
+        text += f" ⚠️ {len(alerts)} security alert(s)."
+    # The engine's own bar (git_sentinel): 90+ is READY TO COMMIT; below is CAUTION or BLOCKED (Codex R2 fix 2).
+    return SkillResult("attention" if alerts or res["score"] < 90 else "done", text, res)
+
+
+def _kazuha_ask(question: str = "") -> SkillResult:
+    if not question.strip():
+        return SkillResult("failed", "Knowledge Q&A refused: no question given.")
+    if ask_knowledge_base is None:
+        return SkillResult("failed", "Knowledge Q&A unavailable: rag_engine could not be imported.")
+    res = ask_knowledge_base(question)
+    bad = _bad_fields(res, {"answer": str, "citations": list})
+    if not bad:  # the embed joins citations as text
+        bad = [k for k, ok in (("answer", res["answer"].strip()),
+                               ("citations", all(isinstance(c, str) for c in res["citations"]))) if not ok]
+    if bad:
+        return _incomplete("Knowledge Q&A", bad)
+    answer = res["answer"]
+    data = {"answer": answer, "citations": res["citations"]}
+    # "⚠️" is the engine's empty or unindexed vault reply: nothing was looked up.
+    return SkillResult("attention" if answer.startswith("⚠️") else "done", answer, data)
+
+
+register(Skill(name="kazuha.git_status", agent="kazuha",
+               desc="Git branch, staged/unstaged/untracked counts and a secret scan of the diff",
+               run=_kazuha_git_status, keywords=("git status", "repo status", "git branch", "secret leak")))
+register(Skill(name="kazuha.review", agent="kazuha", desc="LLM code and security review of the uncommitted git diff",
+               run=_kazuha_review, args={"scope": "'all' (default) or 'staged'"},
+               keywords=("review", "git diff"), timeout_s=90.0))
+register(Skill(name="kazuha.ask", agent="kazuha", desc="Answer a question from the indexed codebase and notes, with citations",
+               run=_kazuha_ask, args={"question": "the question, in full"}, keywords=("knowledge base",), timeout_s=60.0))
+
+
+# ==============================================================================
+# Yunjin (Document Architect & Portfolio Critic)
+# ==============================================================================
+
+def _yunjin_audit() -> SkillResult:
+    if audit_full_portfolio is None:
+        return SkillResult("failed", "Portfolio audit unavailable: yunjin_engine could not be imported.")
+    res = audit_full_portfolio()
+    if not isinstance(res, dict):
+        return _incomplete("Portfolio audit", ["<not a dict>"])
+    if not res.get("success"):
+        return SkillResult("failed", f"Portfolio audit failed: {res.get('error', 'unknown error')}", res)
+    bad = _bad_fields(res, AUDIT_FIELDS)
+    if not bad and res["broken_images_count"] < 0:
+        bad = ["broken_images_count"]
+    # An explicit None means the critique had no score (attention below); a missing or out-of-range score is bad.
+    if "score" not in res or (res["score"] is not None and not _score_ok(res["score"])):
+        bad.append("score")
+    if bad:
+        return _incomplete("Portfolio audit", bad, res)
+    score, broken = res["score"], res["broken_images_count"]
+    if score is None:  # the critique gave no score; never treat that as a pass
+        return SkillResult("attention", f"Portfolio audit: no score in the critique, {broken} broken image(s).", res)
+    status = "attention" if broken > 0 or score < 90 else "done"
+    return SkillResult(status, f"Portfolio audit: score {score}/100, {broken} broken image(s).", res)
+
+
+register(Skill(name="yunjin.audit", agent="yunjin",
+               desc="Audit every portfolio page: broken images, meta tags, and an LLM design critique with a score",
+               run=_yunjin_audit, keywords=("scan portfolio", "audit portfolio", "broken links", "portfolio audit"),
+               timeout_s=90.0))
+
+
+# ==============================================================================
 # Transitional (ADR-001 R1-R4): today's planner names agents, not skills.
 # legacy_calls reproduces the keyword pick Ciel's _agent_job made for each migrated
 # agent. R5's planner returns skills itself and this goes away.
@@ -255,4 +407,8 @@ def legacy_calls(agent: str, user_prompt: str, tool_targets: list) -> list:
         wants_tests = (any("test" in str(t).lower() or "compile" in str(t).lower() for t in tool_targets or [])
                        or any(w in prompt for w in ("test", "compile", "syntax", "smoke")))
         return [("eunchae.compile_all", {})] if wants_tests else [("eunchae.vitals", {})]
+    if agent == "kazuha":
+        return [("kazuha.review", {})] if any(w in prompt for w in ("review", "diff")) else [("kazuha.git_status", {})]
+    if agent == "yunjin":
+        return [("yunjin.audit", {})]
     return []  # not migrated yet: Ciel's _agent_job still handles it

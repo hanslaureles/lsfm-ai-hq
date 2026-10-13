@@ -29,18 +29,42 @@ from kazuha_engine import (
     generate_ui_component,
     get_git_status,
     consult_kazuha,
-    kazuha_review_changes,
     kazuha_create_commit,
     kazuha_create_pr,
     execute_research_scout
 )
-from rag_engine import ask_knowledge_base, query_rag, build_index, get_rag_stats
+from rag_engine import query_rag, build_index, get_rag_stats
 from discord_utils import send_clean_embeds, clip, EMBED_TITLE_MAX
 from llm_client import get_brain_status
+import skills  # !ask and code review run the same skills Ciel uses (ADR-001 R2)
 
 # Room left for the verdict/branch header or the code fence and footer line
 # around LLM text inside one 4096-char embed description.
 REVIEW_MAX = 3600
+
+
+async def reply_with_review(target, status_msg, staged_only: bool):
+    """Runs the kazuha.review skill and replies with its embed, or with the honest failure text."""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, skills.run_skill, "kazuha.review",
+                                        {"scope": "staged" if staged_only else "all"})
+    await status_msg.delete()
+    if result.status == "failed":
+        await target.reply(f"❌ {result.text}")
+        return
+    res = result.data
+    verdict_color = 0x57F287 if res["score"] >= 90 else (0xFEE75C if res["score"] >= 70 else 0xED4245)
+    if res.get("security_alerts"):
+        verdict_color = 0xED4245
+    embed = discord.Embed(
+        title="⚔️ Kazuha — Code & Security Review",
+        description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
+                    f"🌿 Branch: `{res['info']['branch']}`\n\n"
+                    f"{clip(res['review'], REVIEW_MAX)}",
+        color=verdict_color
+    )
+    embed.set_footer(text="Kazuha • Local Git Review")
+    await target.reply(embed=embed)
 
 # Agent-Memory Engine Integration
 MEMORY_DIR = Path(__file__).parent.parent / "agent-memory"
@@ -157,20 +181,7 @@ async def on_message(message):
     if any(k in lower for k in ["review code", "review diff", "code review", "review my changes", "review changes", "check diff"]):
         status_msg = await message.reply("🔍 **Kazuha is reviewing the code and security of your changes...**")
         async with message.channel.typing():
-            res = await loop.run_in_executor(None, kazuha_review_changes, False)
-        verdict_color = 0x57F287 if res["score"] >= 90 else (0xFEE75C if res["score"] >= 70 else 0xED4245)
-        if res.get("security_alerts"):
-            verdict_color = 0xED4245
-        embed = discord.Embed(
-            title="⚔️ Kazuha — Code & Security Review",
-            description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
-                        f"🌿 Branch: `{res['info']['branch']}`\n\n"
-                        f"{clip(res['review'], REVIEW_MAX)}",
-            color=verdict_color
-        )
-        embed.set_footer(text="Kazuha • Local Git Review")
-        await status_msg.delete()
-        await message.reply(embed=embed)
+            await reply_with_review(message, status_msg, staged_only=False)
         return
 
     if any(k in lower for k in ["write commit", "make commit", "generate commit", "commit message"]):
@@ -332,10 +343,12 @@ async def ask(ctx, *, question: str = None):
     loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await loop.run_in_executor(None, ask_knowledge_base, question)
-        
-        answer = res["answer"]
-        citations = res.get("citations", [])
+            result = await loop.run_in_executor(None, skills.run_skill, "kazuha.ask", {"question": question})
+        if result.status == "failed":
+            await status_msg.edit(content=f"❌ {result.text}")
+            return
+        answer = result.data["answer"]
+        citations = result.data["citations"]
         await send_clean_embeds(
             target=ctx,
             title=f"💻 Code & System Architecture: {question}",
@@ -456,20 +469,7 @@ async def git_command(ctx, subcmd: str = None, flag: str = None):
         staged_only = flag in ["--staged", "-s", "staged"]
         status_msg = await ctx.reply("🔍 **Kazuha is reviewing the code and security of your changes...**")
         async with ctx.typing():
-            res = await loop.run_in_executor(None, kazuha_review_changes, staged_only)
-        verdict_color = 0x57F287 if res["score"] >= 90 else (0xFEE75C if res["score"] >= 70 else 0xED4245)
-        if res.get("security_alerts"):
-            verdict_color = 0xED4245
-        embed = discord.Embed(
-            title="⚔️ Kazuha — Code & Security Review",
-            description=f"**Verdict:** {res['verdict']} | **Score:** **{res['score']}%**\n"
-                        f"🌿 Branch: `{res['info']['branch']}`\n\n"
-                        f"{clip(res['review'], REVIEW_MAX)}",
-            color=verdict_color
-        )
-        embed.set_footer(text="Kazuha • Local Git Review")
-        await status_msg.delete()
-        await ctx.reply(embed=embed)
+            await reply_with_review(ctx, status_msg, staged_only)
         return
 
     if sub == "commit":

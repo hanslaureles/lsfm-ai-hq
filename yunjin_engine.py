@@ -72,16 +72,9 @@ def audit_full_portfolio() -> dict:
             "error": f"Portfolio directory not found at: {PORTFOLIO_DIR}"
         }
 
-    target_files = [
-        "index.html",
-        "about.html",
-        "case-lsfm.html",
-        "case-memory.html",
-        "case-vellum.html",
-        "case-lumina.html",
-        "case-fintrack.html",
-        "case-aura.html"
-    ]
+    target_files = sorted(p.name for p in PORTFOLIO_DIR.glob("*.html"))  # every page, so a new one is never skipped (ADR-001 R2)
+    if not target_files:  # nothing to audit: no critique, no report (Codex R2 fix 3)
+        return {"success": False, "error": f"Portfolio audit: no .html pages under {PORTFOLIO_DIR}."}
 
     scan_results = []
     total_images_checked = 0
@@ -157,7 +150,7 @@ Format in clean, engaging Markdown. Tone: Sophisticated, insightful, encouraging
 
 
     # Extract score
-    score = 94
+    score = None  # no score in the critique stays None: never a made-up number
     score_match = re.search(r"(\d{2,3})%", critique_text)
     if score_match:
         try:

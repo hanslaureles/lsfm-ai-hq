@@ -103,7 +103,7 @@ STUBS = {
     # Optional engines: empty modules make each `from x import y` raise ImportError,
     # so the orchestrator falls back to None and tests patch in what they need.
     "eunchae_engine": {}, "yunjin_engine": {}, "sakura_engine": {}, "pdf_engine": {},
-    "git_sentinel": {}, "kazuha_engine": {},
+    "git_sentinel": {}, "kazuha_engine": {}, "rag_engine": {},
 }
 
 def _module(name, attrs):
@@ -230,7 +230,7 @@ class TestHonestFailures(MissionTestCase):
         # ("Design tokens verified ... 100%", "standby (840ms TTFT benchmark)", ...).
         cases = [
             ("check vitals", "eunchae", "get_system_vitals"),
-            ("scan portfolio", "yunjin", "scan_html_assets"),
+            ("scan portfolio", "yunjin", "audit_full_portfolio"),
             ("check inbox", "sakura", "scan_morning_inbox"),
             ("compile resume", "chaewon", "compile_master_resume"),
             ("git status", "kazuha", "get_git_info"),
@@ -271,11 +271,7 @@ class TestHonestFailures(MissionTestCase):
         self.assertIn("psutil probe crashed", end["result"])
 
     async def test_problems_found_report_attention(self):
-        # Own portfolio dir: the default is the sibling ../portfolio-site, which a CI checkout lacks.
-        portfolio = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        (portfolio / "index.html").write_text("<html></html>", encoding="utf-8")
-        self.patch("PORTFOLIO_DIR", portfolio)
-        self.patch("scan_html_assets", lambda page: {"total_images": 2, "broken_images": ["images/x.png"]})
+        self.patch("audit_full_portfolio", lambda: {"success": True, "score": 70, "broken_images_count": 1, "broken_images": ["index.html -> x.png"], "report": "r", "saved_file": "a.md", "filename": "a.md"})
         result, end = await self.agent_end("scan portfolio", "yunjin")
         self.assertEqual(end["status"], "attention")
         self.assertEqual(result["failed_agents"], [])
@@ -381,7 +377,9 @@ class TestEventLoopStaysResponsive(MissionTestCase):
 
         self.ciel.analyze_and_plan = plan
         self.patch("get_system_vitals", self.slow({"healthy": True}))
-        self.patch("get_git_info", self.slow({"is_clean": True, "branch": "main"}))
+        self.patch("get_git_info", self.slow({"is_clean": True, "branch": "main", "staged": [], "unstaged": [], "untracked": [], "total_commits": 1}))
+        self.patch("get_git_diff", lambda: "")
+        self.patch("scan_security_risks", lambda diff: [])
         started = time.perf_counter()
         result = await self.run_mission("check vitals and git status")
         elapsed = time.perf_counter() - started

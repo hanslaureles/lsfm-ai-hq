@@ -571,9 +571,29 @@ class KazuhaEmbedTest(unittest.TestCase):
         self.assert_fits(embed)
 
     def test_review_with_long_llm_text(self):
-        review = {"score": 80, "verdict": "OK", "info": {"branch": "main"}, "review": "r" * 6000}
-        (embed,) = self.run_git("review", kazuha_review_changes=lambda staged: review)
+        # !git review runs the kazuha.review skill (ADR-001 R2), so the engine is patched in skills.
+        review = {"success": True, "score": 80, "verdict": "OK", "security_alerts": [], "info": {"branch": "main"},
+                  "review": "r" * 6000}
+        ctx = FakeCtx()
+        with mock.patch.object(bot_kazuha.skills, "kazuha_review_changes", lambda staged_only=False: review):
+            asyncio.run(bot_kazuha.git_command.callback(ctx, "review"))
+        (embed,) = ctx.embeds
         self.assert_fits(embed)
+        self.assertIn("**Score:** **80%**", embed.description)
+
+    def test_failed_review_says_so(self):
+        with mock.patch.object(bot_kazuha.skills, "kazuha_review_changes", None):
+            ctx = FakeCtx()
+            ctx.replies = []
+            orig = ctx.reply
+
+            async def reply(content=None, embed=None):
+                ctx.replies.append(content)
+                return await orig(content, embed)
+            ctx.reply = reply
+            asyncio.run(bot_kazuha.git_command.callback(ctx, "review"))
+        self.assertEqual(ctx.embeds, [])
+        self.assertTrue(any(c and "could not be imported" in c for c in ctx.replies), ctx.replies)
 
     def test_commit_with_long_llm_message(self):
         commit = {"success": True, "full_message": "m" * 6000}

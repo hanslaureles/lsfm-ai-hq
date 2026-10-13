@@ -36,13 +36,6 @@ import skills  # the shared skill registry (ADR-001 R1)
 
 
 try:
-    from yunjin_engine import scan_html_assets, audit_full_portfolio, PORTFOLIO_DIR
-except ImportError:
-    scan_html_assets = None
-    audit_full_portfolio = None
-    PORTFOLIO_DIR = WORKSPACE_DIR / "portfolio-site"
-
-try:
     from sakura_engine import scan_morning_inbox, execute_morning_launchpad
 except ImportError:
     scan_morning_inbox = None
@@ -52,18 +45,6 @@ try:
     from pdf_engine import compile_master_resume
 except ImportError:
     compile_master_resume = None
-
-try:
-    from git_sentinel import get_git_info, get_git_diff, scan_security_risks
-except ImportError:
-    get_git_info = None
-    get_git_diff = None
-    scan_security_risks = None
-
-try:
-    from kazuha_engine import inspect_code_file
-except ImportError:
-    inspect_code_file = None
 
 
 # Ciel runs inside ciel_server's single aiohttp event loop, so every sync tool, LLM
@@ -1138,29 +1119,6 @@ Respond ONLY with valid JSON.
         work() is the blocking part and returns (status, result_text). It runs in a
         worker thread, so it must not touch the event loop.
         """
-        if agent == "yunjin":
-            def scan_portfolio():
-                if not scan_html_assets:
-                    return "failed", "Portfolio QA Gate unavailable: yunjin_engine could not be imported."
-                target_pages = ["index.html", "about.html", "case-ciel.html", "case-lsfm.html", "case-memory.html", "case-vellum.html", "case-lumina.html", "case-fintrack.html", "case-aura.html"]
-                scanned_pages = []
-                all_broken = []
-                total_images = 0
-                for page in target_pages:
-                    page_path = PORTFOLIO_DIR / page
-                    if page_path.exists():
-                        res = scan_html_assets(page_path)
-                        scanned_pages.append(page)
-                        total_images += res.get("total_images", 0)
-                        for b in res.get("broken_images", []):
-                            all_broken.append(f"{page}->{b}")
-                if not scanned_pages:
-                    return "failed", f"Portfolio QA Gate: no pages found under {PORTFOLIO_DIR}."
-                if all_broken:
-                    return "attention", f"Portfolio QA Gate: Scanned {len(scanned_pages)} pages ({total_images} images). ⚠️ Detected {len(all_broken)} broken asset(s): {', '.join(all_broken[:2])}."
-                return "done", f"Portfolio QA Gate: Scanned {len(scanned_pages)} pages ({total_images} images). 0 broken images."
-            return "Scanning portfolio HTML structure & image assets...", scan_portfolio
-
         if agent == "sakura":
             return self._sakura_job(user_prompt)
 
@@ -1182,29 +1140,6 @@ Respond ONLY with valid JSON.
                     return "done", f"Career & ATS Engine: Master resume PDF recompiled ({res.get('size_kb')} KB); portfolio-site copy: {res.get('portfolio_sync', 'skipped')}."
                 return "failed", f"Career & ATS Engine: resume compilation failed: {res.get('error', 'unknown error')}. The previous PDF was left unchanged."
             return "Compiling 1-page ATS Vector Resume PDF via headless browser...", compile_resume
-
-        if agent == "kazuha":
-            def git_audit():
-                if not get_git_info:
-                    return "failed", "Git review unavailable: git_sentinel could not be imported."
-                try:
-                    info = get_git_info()
-                    branch = info.get("branch", "main")
-                    staged = info.get("staged", [])
-                    unstaged = info.get("unstaged", [])
-                    untracked = info.get("untracked", [])
-                    commits = info.get("total_commits", 0)
-
-                    diff = get_git_diff() if get_git_diff else ""
-                    risks = scan_security_risks(diff) if (diff and scan_security_risks) else []
-                except Exception as ge:
-                    return "failed", f"Git review: git status failed: {ge}"
-                status = "attention" if risks else "done"
-                risk_notice = f" ⚠️ {len(risks)} security risk(s) in diff!" if risks else " 0 security risks in diff."
-                if info.get("is_clean"):
-                    return status, f"Git review: Working tree clean on branch '{branch}' ({commits} commits).{risk_notice}"
-                return status, f"Git review: Branch '{branch}' | Staged: {len(staged)} | Unstaged: {len(unstaged)} | Untracked: {len(untracked)}.{risk_notice}"
-            return "Auditing Git repository status and scanning diff for secret leaks...", git_audit
 
         return None, lambda: ("done", "")
 
