@@ -5,6 +5,7 @@ subprocess lock holders; no Discord connection.
 
 import asyncio
 import datetime as real_datetime
+import os
 import tempfile
 import types
 import unittest
@@ -666,6 +667,74 @@ class FakeCtx:
     async def reply(self, content=None, **kwargs):
         self.replies.append({"content": content, **kwargs})
         return FakeMessage()
+
+
+class RecordingCtx(FakeCtx):
+    """FakeCtx that keeps each status message, so a test can read its edits."""
+
+    def __init__(self):
+        super().__init__()
+        self.messages = []
+
+    async def reply(self, content=None, **kwargs):
+        await super().reply(content, **kwargs)
+        self.messages.append(FakeMessage())
+        return self.messages[-1]
+
+    def edited_text(self):
+        return " ".join(str(e.get("content", "")) for m in self.messages for e in m.edits)
+
+
+class ChaewonCommandsTest(unittest.TestCase):
+    """ADR-001 R3: !rebuild_resume and !scout go through the skill registry and keep their embeds."""
+
+    def setUp(self):
+        # bot_chaewon exits at import without a token (CI and worktrees have no .env); this placeholder never connects.
+        with mock.patch.dict("os.environ", {"CHAEWON_BOT_TOKEN": os.environ.get("CHAEWON_BOT_TOKEN") or "test-placeholder"}):
+            import bot_chaewon
+        import skills
+        self.bot, self.skills = bot_chaewon, skills
+
+    def patch(self, name, value):
+        p = mock.patch.object(self.skills, name, value)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_rebuild_resume_reports_the_skill_failure(self):
+        self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Edge not found"})
+        ctx = RecordingCtx()
+        asyncio.run(self.bot.cmd_rebuild_resume.callback(ctx))
+        self.assertIn("Edge not found", ctx.edited_text())
+
+    def test_rebuild_resume_shares_the_build_lock_with_ciel(self):
+        calls = []
+        self.patch("compile_master_resume", lambda **k: calls.append(k) or {"success": True})
+        ctx = RecordingCtx()
+        with self.skills.RESUME_BUILD_LOCK:  # a Ciel build is running
+            asyncio.run(self.bot.cmd_rebuild_resume.callback(ctx))
+        self.assertEqual(calls, [])
+        self.assertIn("still running", ctx.edited_text())
+
+    def test_scout_uses_the_skill_and_keeps_the_embed(self):
+        seen = {}
+
+        async def jobs(query, location, limit):
+            seen.update(query=query, location=location, limit=limit)
+            return [{"title": "AI Engineer", "company": "ECLARO", "url": "https://x/1", "score": 88, "geo": "Remote",
+                     "salary": "Competitive", "source": "LinkedIn"}]
+
+        self.patch("fetch_live_remote_jobs", jobs)
+        ctx = RecordingCtx()
+        asyncio.run(self.bot.cmd_scout.callback(ctx, query="remote ai engineer"))
+        self.assertEqual(seen, {"query": "remote ai engineer", "location": "Remote", "limit": 5})
+        embed = ctx.replies[-1]["embed"]
+        self.assertTrue(any("AI Engineer" in f.name for f in embed.fields), [f.name for f in embed.fields])
+
+    def test_scout_reports_a_failed_skill(self):
+        self.patch("fetch_live_remote_jobs", None)
+        ctx = RecordingCtx()
+        asyncio.run(self.bot.cmd_scout.callback(ctx, query="ai"))
+        self.assertIn("could not be imported", ctx.edited_text())
 
 
 class EunchaeCommandsTest(unittest.TestCase):

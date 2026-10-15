@@ -10,7 +10,6 @@ import json
 import time
 import asyncio
 import re
-import threading
 import uuid
 import urllib.request
 import urllib.parse
@@ -31,20 +30,8 @@ from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, c
 from speech_stream import VoiceStream, split_sentences
 from heavy_jobs import run_blocking
 
-# Import specialist tool engines safely
-import skills  # the shared skill registry (ADR-001 R1)
-
-
-try:
-    from sakura_engine import scan_morning_inbox, execute_morning_launchpad
-except ImportError:
-    scan_morning_inbox = None
-    execute_morning_launchpad = None
-
-try:
-    from pdf_engine import compile_master_resume
-except ImportError:
-    compile_master_resume = None
+# Every agent's work is a skill from the shared registry (ADR-001): skills.py imports the engines.
+import skills
 
 
 # Ciel runs inside ciel_server's single aiohttp event loop, so every sync tool, LLM
@@ -63,13 +50,8 @@ WEB_SEARCH_TIMEOUT_S = 10   # overall cap on a search, enforced by wait_for
 DDGS_REQUEST_TIMEOUT_S = 5
 VAULT_TIMEOUT_S = 10        # Obsidian REST calls use a 3 s urlopen timeout
 APPRAISAL_TIMEOUT_S = 30    # psutil + git + Obsidian background checks
-DEFAULT_AGENT_TIMEOUT_S = 30
-AGENT_TIMEOUTS_S = {"chaewon": 60}  # headless Edge PDF build alone may take 25 s
-HEAVY_AGENTS = {"chaewon", "sakura"}  # PDF build; Gmail inbox scan. Run on heavy_jobs.HEAVY_POOL
-
-# Serializes resume builds within this process. A threading.Lock, not an asyncio
-# one: the lock must outlive an abandoned await (see compile_resume).
-RESUME_BUILD_LOCK = threading.Lock()
+# Per-agent timeouts and the heavy pool are per-skill fields now (skills.Skill.timeout_s / heavy),
+# and the resume-build lock lives with chaewon.rebuild_resume (ADR-001 R3).
 
 
 def call_llm(prompt: str, system_instruction: str = "", *, on_delta=None, meta: dict = None) -> str:
@@ -1078,140 +1060,38 @@ Respond ONLY with valid JSON.
     async def _run_agent(self, agent: str, user_prompt: str, tool_targets: list, emit) -> tuple:
         """Runs one subordinate's tool in a worker thread and reports its honest end state."""
         await emit("agent_state", {"agent": agent, "status": "active", "task": f"Executing delegated task: {agent}"})
-        timeout = AGENT_TIMEOUTS_S.get(agent, DEFAULT_AGENT_TIMEOUT_S)
         # The HUD shows this agent's measured time (5E-4): the work only, from the start of
-        # run_blocking to its end or timeout. Status events (a slow HUD) do not count, and
-        # an agent whose job never started has no time (None), not a made-up 0.
+        # the skill calls to their end or timeout. Status events (a slow HUD) do not count, and
+        # an agent whose work never started has no time (None), not a made-up 0.
         started = None
         try:
             calls = skills.legacy_calls(agent, user_prompt, tool_targets)  # R5: the plan carries the calls
-            if calls:
-                # A migrated agent runs the same skills its Discord commands use (ADR-001 R1).
-                # run_calls applies each skill's own timeout and reports it as a failed result.
+            if not calls:
+                status, result_text = "failed", f"{agent.capitalize()} failed: no skill matches this request"
+            else:
+                # Every agent runs the same skills its Discord commands use (ADR-001 R1-R3).
+                # run_calls applies each skill's own timeout and pool and reports a timeout as failed.
                 task = "; ".join(skills.SKILLS[name].desc for name, _ in calls) + "..."
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
                 started = time.perf_counter()
                 result = await skills.run_calls(calls)
                 status, result_text = result.status, result.text
-            else:
-                task, work = self._agent_job(agent, user_prompt, tool_targets)
-                if task:
-                    await emit("agent_state", {"agent": agent, "status": "active", "task": task})
-                started = time.perf_counter()
-                status, result_text = await run_blocking(work, timeout=timeout, label=agent.capitalize(),
-                                                         heavy=agent in HEAVY_AGENTS)
-        except TimeoutError:
-            status = "failed"
-            result_text = f"{agent.capitalize()} failed: timed out after {timeout:g} s"
-            if agent == "chaewon":
-                # The thread can't be stopped; don't let "failed" imply the PDF is untouched.
-                result_text += "; the build may still finish in the background"
         except Exception as e:
             status = "failed"
             result_text = f"{agent.capitalize()} failed: {type(e).__name__}: {e}"
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1) if started is not None else None
+        if agent == "sakura":
+            await self._log_sakura_dispatch(user_prompt, result_text)
         await emit("agent_state", {"agent": agent, "status": status, "result": result_text, "elapsed_ms": elapsed_ms})
         return status, result_text
 
-    def _agent_job(self, agent: str, user_prompt: str, tool_targets: list) -> tuple:
-        """
-        Picks an agent's tool. Returns (task message for the HUD or None, work), where
-        work() is the blocking part and returns (status, result_text). It runs in a
-        worker thread, so it must not touch the event loop.
-        """
-        if agent == "sakura":
-            return self._sakura_job(user_prompt)
-
-        if agent == "chaewon":
-            def compile_resume():
-                if not compile_master_resume:
-                    return "failed", "Career & ATS Engine unavailable: pdf_engine could not be imported."
-                # Held by the build thread itself, so a build abandoned on timeout keeps
-                # it until it really ends and no second build can overwrite the PDF.
-                if not RESUME_BUILD_LOCK.acquire(blocking=False):
-                    return "failed", "Career & ATS Engine: an earlier resume build is still running; this one was not started."
-                try:
-                    res = compile_master_resume(archive=True, sync_portfolio=True, sync_obsidian=True)
-                except Exception as ce:
-                    return "failed", f"Career & ATS Engine: resume compilation raised an error: {ce}"
-                finally:
-                    RESUME_BUILD_LOCK.release()
-                if res.get("success"):
-                    return "done", f"Career & ATS Engine: Master resume PDF recompiled ({res.get('size_kb')} KB); portfolio-site copy: {res.get('portfolio_sync', 'skipped')}."
-                return "failed", f"Career & ATS Engine: resume compilation failed: {res.get('error', 'unknown error')}. The previous PDF was left unchanged."
-            return "Compiling 1-page ATS Vector Resume PDF via headless browser...", compile_resume
-
-        return None, lambda: ("done", "")
-
-    def _sakura_job(self, user_prompt: str) -> tuple:
-        p_lower = user_prompt.lower()
-        if any(w in p_lower for w in ["inbox", "email", "gmail", "unread", "recruiter", "mail"]):
-            task = "Triage Primary Gmail inbox..."
-
-            def run():
-                if not scan_morning_inbox:
-                    return "failed", "Gmail Inbox Triage unavailable: sakura_engine could not be imported."
-                inbox = scan_morning_inbox()
-                unread = inbox.get("unread_count", 0)
-                job_alerts = inbox.get("job_alerts", [])
-                highlights = inbox.get("highlights", [])
-                if not inbox.get("ok", False):
-                    # Not configured / offline / error also report 0 unread;
-                    # that must not read as a clean inbox.
-                    return "failed", f"Gmail Inbox Triage failed: {inbox.get('status', 'unknown error')}."
-                if unread > 0:
-                    alert_info = f" ({len(job_alerts)} recruiter inquiry)" if job_alerts else ""
-                    top_h = f" Top: {highlights[0]}" if highlights else ""
-                    return "done", f"Gmail Inbox Triage: {unread} unread message(s) in Primary{alert_info}.{top_h}"
-                return "done", "Gmail Inbox Triage: Primary inbox clean — 0 unread messages."
-        elif any(w in p_lower for w in ["priority", "priorities", "briefing", "schedule", "daily"]):
-            task = "Fetching daily briefing & priorities from Obsidian..."
-
-            def run():
-                try:
-                    daily_log_path = self.obsidian.ensure_daily_log()
-                    content = self.obsidian.get_file(daily_log_path)
-                except Exception as oe:
-                    return "failed", f"Obsidian daily log could not be read: {oe}"
-                priority_lines = [l.strip().lstrip("- [ ]").strip() for l in content.splitlines() if "- [ ]" in l][:3]
-                if priority_lines:
-                    return "done", f"Obsidian Second Brain: Today's log '{daily_log_path}' loaded. Priorities: {'; '.join(priority_lines)}."
-                return "done", f"Obsidian Second Brain: Daily log '{daily_log_path}' loaded; no open priorities."
-        elif any(w in p_lower for w in ["search", "find", "lookup"]):
-            task = "Searching Obsidian vault..."
-
-            def run():
-                try:
-                    matches = self.obsidian.search_simple(user_prompt)
-                except Exception as se:
-                    return "failed", f"Obsidian Search failed: {se}"
-                if matches:
-                    return "done", f"Obsidian Search: Found {len(matches)} matching note(s): {', '.join([m.get('filename', '') for m in matches[:3]])}."
-                return "done", "Obsidian Search: 0 matching notes found for query."
-        else:
-            task = None
-
-            def run():
-                try:
-                    files = self.obsidian.list_dir(VAULT_PATHS["daily_logs"])
-                except Exception as le:
-                    return "failed", f"Obsidian Second Brain unreachable: {le}"
-                return "done", f"Obsidian Second Brain online: {len(files)} daily logs found."
-
-        def run_and_log():
-            status, result_text = run()
-            # Log Ciel session dispatch to Obsidian
-            try:
-                self.obsidian.log_session(
-                    "Sakura",
-                    f"Ciel Mission: {user_prompt[:50]}",
-                    [f"Outcome: Handled ({result_text[:70]}...)"]
-                )
-            except Exception as _exc:
-                print(f"⚠️ [ciel_orchestrator.run_and_log] suppressed {type(_exc).__name__}: {_exc}", flush=True)
-            return status, result_text
-
-        return task, run_and_log
+    async def _log_sakura_dispatch(self, user_prompt: str, result_text: str) -> None:
+        """The Obsidian session line Sakura's Ciel missions always wrote; an outage never changes the result."""
+        try:
+            await run_blocking(self.obsidian.log_session, "Sakura", f"Ciel Mission: {user_prompt[:50]}",
+                               [f"Outcome: Handled ({result_text[:70]}...)"], timeout=VAULT_TIMEOUT_S, label="Obsidian")
+        except Exception as _exc:
+            print(f"⚠️ [ciel_orchestrator._log_sakura_dispatch] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
 
 if __name__ == "__main__":

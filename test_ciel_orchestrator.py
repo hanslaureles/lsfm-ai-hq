@@ -243,6 +243,9 @@ class TestHonestFailures(MissionTestCase):
                 self.assert_failed(result, end, agent)
 
     async def test_obsidian_outage_is_not_reported_as_verified(self):
+        outage = FakeObsidian()
+        outage.fail = True
+        self.enterContext(mock.patch.object(ciel_orchestrator.skills, "_vault", lambda: outage))  # R3: skills read the vault
         self.ciel.obsidian.fail = True
         result, end = await self.agent_end("morning briefing", "sakura")
         self.assert_failed(result, end, "sakura")
@@ -604,9 +607,9 @@ class TestAsyncSafety(MissionTestCase):
             peak[0] = max(peak[0], running[0])
             time.sleep(0.5)
             running[0] -= 1
-            return {"success": True, "size_kb": 82.9}
+            return {"success": True, "size_kb": 82.9, "pdf_path": Path("Hans_Resume.pdf")}
 
-        self.enterContext(mock.patch.dict(ciel_orchestrator.AGENT_TIMEOUTS_S, {"chaewon": 0.1}))
+        self.enterContext(skill_timeout("chaewon.rebuild_resume", 0.1))  # R3: the skill's own timeout
         self.patch("compile_master_resume", slow_build)
 
         first = await self.run_mission("compile resume")
@@ -620,7 +623,7 @@ class TestAsyncSafety(MissionTestCase):
         self.assertEqual(len(calls), 1)
 
         await asyncio.sleep(0.6)  # the first build ends and releases the lock
-        self.enterContext(mock.patch.dict(ciel_orchestrator.AGENT_TIMEOUTS_S, {"chaewon": 5}))
+        self.enterContext(skill_timeout("chaewon.rebuild_resume", 5))
         third = await self.run_mission("compile resume")
         self.assertEqual(third["agent_status"]["chaewon"], "done")
         self.assertEqual(len(calls), 2)
@@ -636,9 +639,9 @@ class TestHeavyAgentsUseHeavyPool(MissionTestCase):
 
         def build(**kwargs):
             threads.append(threading.current_thread().name)
-            return {"success": True, "size_kb": 82.9}
+            return {"success": True, "size_kb": 82.9, "pdf_path": Path("Hans_Resume.pdf")}
 
-        self.enterContext(mock.patch.object(ciel_orchestrator, "compile_master_resume", build))
+        self.enterContext(mock.patch.object(_owner("compile_master_resume"), "compile_master_resume", build))
         result = await self.run_mission("compile resume")
         self.assertEqual(result["agent_status"]["chaewon"], "done")
         self.assertEqual(len(threads), 1)

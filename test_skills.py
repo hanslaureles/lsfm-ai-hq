@@ -7,6 +7,7 @@ Run: python -m pytest -q test_skills.py
 import asyncio
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import skills
@@ -331,13 +332,189 @@ class TestEunchaeSkills(unittest.TestCase):
                 r = skills.run_skill("eunchae.test", {"path": "git_sentinel.py"})
                 self.assertEqual(r.status, status)
 
-    def test_legacy_calls_pick_eunchae_actions_like_the_old_agent_job(self):
-        # Transitional (deleted in R5): the keyword pick Ciel's _agent_job made.
+    def test_legacy_calls_pick_eunchae_actions_like_the_old_ciel_jobs(self):
+        # Transitional (deleted in R5): the keyword pick Ciel's old hand-written agent jobs made.
         self.assertEqual(skills.legacy_calls("eunchae", "check vitals", []), [("eunchae.vitals", {})])
         self.assertEqual(skills.legacy_calls("eunchae", "run a syntax check", []), [("eunchae.compile_all", {})])
         self.assertEqual(skills.legacy_calls("eunchae", "how is my pc", ["run_tests"]),
                          [("eunchae.compile_all", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "check inbox", ["check_inbox"]), [])  # not migrated yet
+        self.assertEqual(skills.legacy_calls("sakura", "check inbox", ["check_inbox"]), [("sakura.inbox", {})])
+
+
+class TestChaewonSakuraSkills(unittest.TestCase):
+    """ADR-001 R3: Chaewon's resume rebuild and scouting, Sakura's inbox scan, priorities and vault search."""
+
+    def patch(self, name, value):
+        self.enterContext(mock.patch.object(skills, name, value))
+
+    def test_resume_lock_blocks_second_build(self):
+        import threading
+        started, release = threading.Event(), threading.Event()
+
+        def slow_build(**kwargs):
+            started.set()
+            release.wait(5)
+            return {"success": True, "size_kb": 82.9, "pdf_path": Path("Hans_Resume.pdf")}
+
+        self.patch("compile_master_resume", slow_build)
+        first = []
+        t = threading.Thread(target=lambda: first.append(skills.run_skill("chaewon.rebuild_resume")))
+        t.start()
+        self.assertTrue(started.wait(5))
+        second = skills.run_skill("chaewon.rebuild_resume")
+        self.assertEqual(second.status, "failed")
+        self.assertIn("still running", second.text)
+        release.set()
+        t.join(5)
+        self.assertEqual(first[0].status, "done")
+        self.assertIn("82.9 KB", first[0].text)
+
+    def test_rebuild_reports_engine_failure_and_missing_engine(self):
+        self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Edge not found"})
+        r = skills.run_skill("chaewon.rebuild_resume")
+        self.assertEqual(r.status, "failed")
+        self.assertIn("Edge not found", r.text)
+        self.patch("compile_master_resume", None)
+        self.assertEqual(skills.run_skill("chaewon.rebuild_resume").status, "failed")
+
+    def test_scout_zero_jobs_is_attention(self):
+        async def none(**kwargs):
+            return []
+        self.patch("fetch_live_remote_jobs", none)
+        self.assertEqual(skills.run_skill("chaewon.scout").status, "attention")
+
+    def test_scout_lists_up_to_three_roles(self):
+        seen = {}
+
+        async def five(query, location, limit):
+            seen.update(query=query, location=location, limit=limit)
+            return [{"title": f"Role {i}", "company": f"Co {i}", "geo": "Remote", "salary": "Competitive",
+                     "url": f"https://x/{i}", "score": 90 - i, "source": "LinkedIn"} for i in range(5)]
+
+        self.patch("fetch_live_remote_jobs", five)
+        r = skills.run_skill("chaewon.scout")
+        self.assertEqual(r.status, "done")
+        self.assertEqual(seen, {"query": "applied AI engineer", "location": "Remote", "limit": 5})
+        self.assertIn("Role 0", r.text)
+        self.assertIn("Role 2", r.text)
+        self.assertNotIn("Role 3", r.text)
+        self.assertEqual(len(r.data["jobs"]), 5)
+
+    def test_scout_bad_result_or_missing_engine_is_failed(self):
+        async def broken(**kwargs):
+            return None
+        self.patch("fetch_live_remote_jobs", broken)
+        self.assertEqual(skills.run_skill("chaewon.scout").status, "failed")
+        self.patch("fetch_live_remote_jobs", None)
+        self.assertEqual(skills.run_skill("chaewon.scout").status, "failed")
+
+    def test_inbox_scan(self):
+        ok = {"ok": True, "status": "Inbox", "unread_count": 2, "job_alerts": ["x"], "highlights": ["Recruiter: hi"]}
+        self.patch("scan_morning_inbox", lambda: ok)
+        r = skills.run_skill("sakura.inbox")
+        self.assertEqual(r.status, "done")
+        self.assertIn("2 unread", r.text)
+        self.patch("scan_morning_inbox", lambda: {**ok, "ok": False, "status": "Gmail API credentials not configured",
+                                                  "unread_count": 0})
+        r = skills.run_skill("sakura.inbox")
+        self.assertEqual(r.status, "failed")
+        self.assertNotIn("clean", r.text.lower())
+        self.patch("scan_morning_inbox", lambda: {"ok": True, "unread_count": "2"})  # incomplete engine result
+        self.assertEqual(skills.run_skill("sakura.inbox").status, "failed")
+
+    def vault(self, fail=False, content="", matches=()):
+        v = mock.MagicMock()
+        if fail:
+            v.ensure_daily_log.side_effect = v.search_simple.side_effect = ConnectionError("Obsidian REST API unreachable")
+        v.ensure_daily_log.return_value = "05 Daily Logs/today.md"
+        v.get_file.return_value = content
+        v.search_simple.return_value = list(matches)
+        self.patch("_vault", lambda: v)
+        return v
+
+    def test_priorities(self):
+        self.vault(content="- [ ] Apply to Spreetail\n- [x] done\n- [ ] Re-auth Gmail\n")
+        r = skills.run_skill("sakura.priorities")
+        self.assertEqual(r.status, "done")
+        self.assertIn("Apply to Spreetail; Re-auth Gmail", r.text)
+        self.vault(fail=True)
+        r = skills.run_skill("sakura.priorities")
+        self.assertEqual(r.status, "failed")
+        self.assertIn("unreachable", r.text)
+
+    def test_vault_search(self):
+        self.vault(matches=[{"filename": "a.md"}, {"filename": "b.md"}])
+        r = skills.run_skill("sakura.vault_search", {"query": "gmail oauth"})
+        self.assertEqual(r.status, "done")
+        self.assertEqual(r.data["matches"], [{"filename": "a.md"}, {"filename": "b.md"}])
+        self.vault(fail=True)
+        self.assertEqual(skills.run_skill("sakura.vault_search", {"query": "x"}).status, "failed")
+
+    # --- Codex QA R3 (ADR-001-R3-CODEX-QA.md) ---
+    def test_search_with_no_vault_access_is_failed_not_empty(self):  # F1, real client contract
+        import tempfile
+        from pathlib import Path
+        import obsidian_client
+        missing = Path(tempfile.mkdtemp()) / "no-such-vault"
+        client = obsidian_client.ObsidianClient(vault_path=str(missing))
+        self.enterContext(mock.patch.object(client, "is_rest_api_online", return_value=False))
+        self.patch("_vault", lambda: client)
+        r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
+        self.assertEqual(r.status, "failed")
+        self.assertIn("unavailable", r.text)
+        missing.mkdir()  # the disk fallback is back: a genuine empty search is done
+        (missing / "note.md").write_text("nothing relevant", encoding="utf-8")
+        r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
+        self.assertEqual((r.status, r.data["matches"]), ("done", []))
+
+    def test_scout_cards_must_be_complete(self):  # F2
+        good = {"title": "AI Engineer", "company": "ECLARO", "url": "https://x/1", "score": 88}
+        for bad in ([{}], [{"title": "AI Engineer"}], [good, {**good, "url": ""}], [good, {**good, "score": "88"}]):
+            with self.subTest(bad=bad):
+                async def jobs(**kwargs):
+                    return bad
+                self.patch("fetch_live_remote_jobs", jobs)
+                self.assertEqual(skills.run_skill("chaewon.scout").status, "failed")
+
+    def test_resume_success_needs_the_pdf_fields(self):  # F2
+        self.patch("compile_master_resume", lambda **k: {"success": True})
+        r = skills.run_skill("chaewon.rebuild_resume")
+        self.assertEqual(r.status, "failed")
+        self.assertNotIn("None KB", r.text)
+        from pathlib import Path
+        self.patch("compile_master_resume", lambda **k: {"success": True, "pdf_path": Path("r.pdf"), "size_kb": 82.9})
+        self.assertEqual(skills.run_skill("chaewon.rebuild_resume").status, "done")
+
+    def test_negative_unread_count_is_not_a_clean_inbox(self):  # F2
+        self.patch("scan_morning_inbox", lambda: {"ok": True, "unread_count": -1, "job_alerts": [], "highlights": []})
+        r = skills.run_skill("sakura.inbox")
+        self.assertEqual(r.status, "failed")
+        self.assertNotIn("clean", r.text.lower())
+
+    def test_resume_failure_never_promises_the_old_pdf_survived(self):  # F3: the renderer writes in place
+        self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Headless browser failed"})
+        r = skills.run_skill("chaewon.rebuild_resume")
+        self.assertNotIn("unchanged", r.text)
+        self.assertIn("may be incomplete", r.text)
+
+    def test_vault_client_is_created_once(self):
+        made = []
+        self.patch("ObsidianClient", lambda: made.append(1) or object())
+        self.patch("_VAULT", None)
+        self.assertIs(skills._vault(), skills._vault())
+        self.assertEqual(len(made), 1)
+
+    def test_legacy_calls_pick_chaewon_and_sakura_actions(self):
+        self.assertEqual(skills.legacy_calls("chaewon", "compile resume", ["compile_resume"]),
+                         [("chaewon.rebuild_resume", {})])
+        self.assertEqual(skills.legacy_calls("chaewon", "find me remote AI jobs", []), [("chaewon.scout", {})])
+        self.assertEqual(skills.legacy_calls("chaewon", "scout new roles", []), [("chaewon.scout", {})])
+        self.assertEqual(skills.legacy_calls("sakura", "any recruiter emails?", []), [("sakura.inbox", {})])
+        self.assertEqual(skills.legacy_calls("sakura", "search my notes for oauth", []),
+                         [("sakura.vault_search", {"query": "search my notes for oauth"})])
+        self.assertEqual(skills.legacy_calls("sakura", "what's on today", []), [("sakura.priorities", {})])
+        for prompt in ("job hunt now", "hunt for jobs", "find jobs"):  # never the 10-minute card-posting hunt
+            self.assertNotIn("chaewon.hunt", [n for n, _ in skills.legacy_calls("chaewon", prompt, [])])
 
 
 class TestKazuhaYunjinSkills(unittest.TestCase):

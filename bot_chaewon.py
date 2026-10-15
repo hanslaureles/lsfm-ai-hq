@@ -34,6 +34,7 @@ from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, 
 from discord_utils import send_clean_embeds
 from daily_once import run_daily
 from pdf_engine import compile_master_resume, describe_portfolio_sync, OWNER_EMAIL
+import skills  # !rebuild_resume and !scout run the same skills as Ciel (ADR-001 R3)
 from llm_client import get_brain_status
 
 LAST_REBUILD_DATE_FILE = MEMORY_DIR / "last_resume_rebuild_date.txt"
@@ -403,7 +404,12 @@ async def cmd_scout(ctx, *, query: str = "ai"):
         if "remote" in query.lower():
             loc = "Remote"
 
-        jobs = await fetch_live_remote_jobs(query=query, location=loc, limit=5)
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, skills.run_skill, "chaewon.scout", {"query": query, "location": loc})
+        if result.status == "failed":
+            await status_msg.edit(content=f"❌ {result.text}")
+            return
+        jobs = result.data.get("jobs", [])  # attention = no live cards: the radar links below still help
         portals = get_portal_search_links(query=query, location=loc)
 
         embed = discord.Embed(
@@ -555,11 +561,12 @@ async def cmd_rebuild_resume(ctx):
     msg = await ctx.reply("⭐ **Chaewon is rebuilding Hans's Master ATS Vector Resume...**")
     loop = asyncio.get_running_loop()
     try:
-        res = await run_heavy(compile_master_resume, True, True, True)
-        if not res.get("success"):
-            await msg.edit(content=f"❌ Error compiling resume: {res.get('error')}")
+        # The skill holds the build lock it shares with Ciel, so two builds never overwrite the PDF at once.
+        result = await run_heavy(skills.run_skill, "chaewon.rebuild_resume")
+        if result.status != "done":
+            await msg.edit(content=f"❌ {result.text}")
             return
-        
+        res = result.data
         pdf_path = res["pdf_path"]
         size_kb = res["size_kb"]
         embed = discord.Embed(

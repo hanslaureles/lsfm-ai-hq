@@ -11,8 +11,10 @@ honest SkillResult:
 A failure is never reworded as success.
 """
 
+import asyncio
 import importlib
 import py_compile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Callable
@@ -38,6 +40,10 @@ get_git_diff = _optional("git_sentinel", "get_git_diff")
 scan_security_risks = _optional("git_sentinel", "scan_security_risks")
 kazuha_review_changes = _optional("kazuha_engine", "kazuha_review_changes")
 ask_knowledge_base = _optional("rag_engine", "ask_knowledge_base")
+compile_master_resume = _optional("pdf_engine", "compile_master_resume")
+fetch_live_remote_jobs = _optional("web_tools", "fetch_live_remote_jobs")
+scan_morning_inbox = _optional("sakura_engine", "scan_morning_inbox")
+ObsidianClient = _optional("obsidian_client", "ObsidianClient")
 audit_full_portfolio = _optional("yunjin_engine", "audit_full_portfolio")
 
 # Worst first: combine() keeps the worst status of a set of results.
@@ -396,6 +402,166 @@ register(Skill(name="yunjin.audit", agent="yunjin",
 
 
 # ==============================================================================
+# Chaewon (Career Strategist), ADR-001 R3
+# ==============================================================================
+
+# Serializes resume builds in this process. A threading.Lock held by the build thread itself:
+# a build whose await was abandoned on timeout keeps it until it really ends, so no second
+# build can overwrite the PDF meanwhile (moved from ciel_orchestrator).
+RESUME_BUILD_LOCK = threading.Lock()
+
+
+def _chaewon_rebuild_resume() -> SkillResult:
+    if compile_master_resume is None:
+        return SkillResult("failed", "Career & ATS Engine unavailable: pdf_engine could not be imported.")
+    if not RESUME_BUILD_LOCK.acquire(blocking=False):
+        return SkillResult("failed", "Career & ATS Engine: an earlier resume build is still running; "
+                                     "this one was not started.")
+    try:
+        res = compile_master_resume(archive=True, sync_portfolio=True, sync_obsidian=True)
+    except Exception as e:
+        return SkillResult("failed", f"Career & ATS Engine: resume compilation raised an error: {e}")
+    finally:
+        RESUME_BUILD_LOCK.release()
+    if not isinstance(res, dict):
+        return _incomplete("Career & ATS Engine", ["<not a dict>"])
+    if res.get("success"):
+        bad = _bad_fields(res, REBUILD_FIELDS)  # what "recompiled (N KB)" and the Discord reply need (Codex R3 F2)
+        if bad:
+            return _incomplete("Career & ATS Engine", bad, res)
+        return SkillResult("done", f"Career & ATS Engine: Master resume PDF recompiled ({res['size_kb']} KB); "
+                                   f"portfolio-site copy: {res.get('portfolio_sync', 'skipped')}.", res)
+    # The renderer writes into the existing PDF, so nothing guarantees the old one survived (Codex R3 F3).
+    return SkillResult("failed", f"Career & ATS Engine: resume compilation failed: {res.get('error', 'unknown error')}. "
+                                 f"The resume PDF may be incomplete; rebuild it before sending it anywhere.", res)
+
+
+REBUILD_FIELDS = {"pdf_path": Path, "size_kb": (int, float)}
+SCOUT_CARD_FIELDS = {"title": str, "company": str, "url": str, "score": (int, float)}
+
+
+def _chaewon_scout(query: str = "applied AI engineer", location: str = "Remote") -> SkillResult:
+    if fetch_live_remote_jobs is None:
+        return SkillResult("failed", "Job scouting unavailable: web_tools could not be imported.")
+    try:
+        # Runs in a worker thread (run_calls / run_in_executor), which has no event loop of its own.
+        jobs = asyncio.run(fetch_live_remote_jobs(query=query, location=location, limit=5))
+    except Exception as e:
+        return SkillResult("failed", f"Job scouting failed: {type(e).__name__}: {e}")
+    if not isinstance(jobs, list):
+        return _incomplete("Job scouting", ["jobs"])
+    for i, job in enumerate(jobs):  # every card, not only the three Ciel shows: Discord renders them all
+        bad = _bad_fields(job, SCOUT_CARD_FIELDS)
+        if not bad:
+            bad = [k for k in ("title", "company", "url") if not job[k].strip()]
+        if bad:
+            return _incomplete("Job scouting", [f"role {i + 1}: {', '.join(bad)}"])
+    if not jobs:
+        return SkillResult("attention", f"Job scouting: no live roles found for '{query}' ({location}).",
+                           {"jobs": [], "query": query, "location": location})
+    lines = [f"{j.get('title', '?')} at {j.get('company', '?')} ({j.get('geo', location)}, "
+             f"{j.get('salary', 'Competitive')}) {j.get('url', '')}" for j in jobs[:3]]
+    return SkillResult("done", f"Job scouting: {len(jobs)} role(s) for '{query}' ({location}). Top: " + "; ".join(lines),
+                       {"jobs": jobs, "query": query, "location": location})
+
+
+register(Skill(name="chaewon.rebuild_resume", agent="chaewon",
+               desc="Rebuild the master resume PDF and sync the portfolio and Obsidian copies",
+               run=_chaewon_rebuild_resume, keywords=("resume", "cv"), timeout_s=60.0, heavy=True))
+register(Skill(name="chaewon.scout", agent="chaewon", desc="Find a few live job postings that fit Hans's profile",
+               run=_chaewon_scout, args={"query": "role to search, e.g. applied AI engineer",
+                                         "location": "Remote or a place, e.g. Philippines"},
+               keywords=("scout", "jobs", "roles"), timeout_s=45.0))
+
+
+# ==============================================================================
+# Sakura (Chief of Staff), ADR-001 R3
+# ==============================================================================
+
+INBOX_FIELDS = {"ok": bool, "unread_count": int, "job_alerts": list, "highlights": list}
+_VAULT = None
+
+
+def _vault():
+    """The Obsidian client for Sakura's skills, created once (each ObsidianClient re-reads its config)."""
+    global _VAULT
+    if _VAULT is None:
+        if ObsidianClient is None:
+            raise ConnectionError("obsidian_client could not be imported")
+        _VAULT = ObsidianClient()
+    return _VAULT
+
+
+def _sakura_inbox() -> SkillResult:
+    if scan_morning_inbox is None:
+        return SkillResult("failed", "Gmail Inbox Triage unavailable: sakura_engine could not be imported.")
+    try:
+        inbox = scan_morning_inbox()
+    except Exception as e:
+        return SkillResult("failed", f"Gmail Inbox Triage failed: {type(e).__name__}: {e}")
+    if isinstance(inbox, dict) and inbox.get("ok") is False:
+        # Not configured / offline / error also report 0 unread; that must not read as a clean inbox.
+        return SkillResult("failed", f"Gmail Inbox Triage failed: {inbox.get('status', 'unknown error')}.", inbox)
+    bad = _bad_fields(inbox, INBOX_FIELDS)
+    if not bad and inbox["unread_count"] < 0:
+        bad = ["unread_count"]  # a negative count is not a clean inbox (Codex R3 F2)
+    if bad:
+        return _incomplete("Gmail Inbox Triage", bad, inbox)
+    unread, alerts, highlights = inbox["unread_count"], inbox["job_alerts"], inbox["highlights"]
+    if unread > 0:
+        alert_info = f" ({len(alerts)} recruiter inquiry)" if alerts else ""
+        top = f" Top: {highlights[0]}" if highlights else ""
+        return SkillResult("done", f"Gmail Inbox Triage: {unread} unread message(s) in Primary{alert_info}.{top}", inbox)
+    return SkillResult("done", "Gmail Inbox Triage: Primary inbox clean, 0 unread messages.", inbox)
+
+
+def _sakura_priorities() -> SkillResult:
+    try:
+        vault = _vault()
+        path = vault.ensure_daily_log()
+        content = vault.get_file(path)
+    except Exception as e:
+        return SkillResult("failed", f"Obsidian daily log could not be read: {e}")
+    open_tasks = [ln.strip().lstrip("- [ ]").strip() for ln in (content or "").splitlines() if "- [ ]" in ln][:3]
+    if open_tasks:
+        return SkillResult("done", f"Obsidian: today's log '{path}' loaded. Priorities: {'; '.join(open_tasks)}.",
+                           {"path": path, "priorities": open_tasks})
+    return SkillResult("done", f"Obsidian: today's log '{path}' loaded; no open priorities.",
+                       {"path": path, "priorities": []})
+
+
+def _sakura_vault_search(query: str = "") -> SkillResult:
+    if not query.strip():
+        return SkillResult("failed", "Obsidian Search: no search words given.")
+    try:
+        vault = _vault()
+        # The client returns [] when REST is offline and the vault folder is missing: that is no search,
+        # not "0 matches" (Codex R3 F1). Either access path working means [] is a real empty result.
+        vault_dir = getattr(vault, "vault_path", None)
+        if not vault.is_rest_api_online() and not (vault_dir is not None and Path(vault_dir).is_dir()):
+            return SkillResult("failed", "Obsidian Search unavailable: the REST API is offline and the vault folder "
+                                         f"was not found ({vault_dir}).")
+        matches = vault.search_simple(query)
+    except Exception as e:
+        return SkillResult("failed", f"Obsidian Search failed: {e}")
+    if not isinstance(matches, list):
+        return _incomplete("Obsidian Search", ["matches"])
+    if matches:
+        names = ", ".join(str(m.get("filename", "")) if isinstance(m, dict) else str(m) for m in matches[:3])
+        return SkillResult("done", f"Obsidian Search: {len(matches)} matching note(s): {names}.", {"matches": matches})
+    return SkillResult("done", "Obsidian Search: 0 matching notes found.", {"matches": []})
+
+
+register(Skill(name="sakura.inbox", agent="sakura", desc="Count unread Primary Gmail and flag recruiter mail (read only)",
+               run=_sakura_inbox, keywords=("inbox", "email", "gmail", "unread", "mail"), heavy=True))
+register(Skill(name="sakura.priorities", agent="sakura", desc="Today's open tasks from the Obsidian daily log",
+               run=_sakura_priorities, keywords=("priority", "priorities", "today", "schedule")))
+register(Skill(name="sakura.vault_search", agent="sakura", desc="Search the Obsidian vault for matching notes",
+               run=_sakura_vault_search, args={"query": "words to search for"},
+               keywords=("search", "find", "lookup")))
+
+
+# ==============================================================================
 # Chaewon: job hunt (JOB-HUNT-LSFM-PLAN Task 4)
 # ==============================================================================
 
@@ -417,8 +583,8 @@ register(Skill(name="chaewon.hunt", agent="chaewon",
 
 # ==============================================================================
 # Transitional (ADR-001 R1-R4): today's planner names agents, not skills.
-# legacy_calls reproduces the keyword pick Ciel's _agent_job made for each migrated
-# agent. R5's planner returns skills itself and this goes away.
+# legacy_calls reproduces the keyword pick Ciel's old hand-written agent jobs made (deleted
+# in R3). R5's planner returns skills itself and this goes away.
 # ==============================================================================
 
 def legacy_calls(agent: str, user_prompt: str, tool_targets: list) -> list:
@@ -431,4 +597,17 @@ def legacy_calls(agent: str, user_prompt: str, tool_targets: list) -> list:
         return [("kazuha.review", {})] if any(w in prompt for w in ("review", "diff")) else [("kazuha.git_status", {})]
     if agent == "yunjin":
         return [("yunjin.audit", {})]
-    return []  # not migrated yet: Ciel's _agent_job still handles it
+    if agent == "chaewon":
+        # Never chaewon.hunt: a 10-minute job that posts Discord cards (R3 ruling).
+        wants_resume = (any("resume" in str(t).lower() for t in tool_targets or [])
+                        or any(w in prompt for w in ("resume", " cv", "pdf")))
+        if not wants_resume and any(w in prompt for w in ("job", "scout", "role", "hiring", "opening", "vacanc")):
+            return [("chaewon.scout", {})]
+        return [("chaewon.rebuild_resume", {})]
+    if agent == "sakura":
+        if any(w in prompt for w in ("inbox", "email", "gmail", "unread", "recruiter", "mail")):
+            return [("sakura.inbox", {})]
+        if any(w in prompt for w in ("search", "find", "lookup")):
+            return [("sakura.vault_search", {"query": user_prompt})]
+        return [("sakura.priorities", {})]
+    return []
