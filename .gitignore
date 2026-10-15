@@ -45,3 +45,7 @@ memory/last_*_date.txt
 memory/last_*_date.txt.tmp
 # Yunjin's generated portfolio audits (yunjin_engine.AUDITS_DIR), like applications/
 portfolio_audits/
+memory/last_job_hunt_slot.txt
+memory/last_job_hunt_slot.txt.tmp
+# Sakura's pending ?/? proposals: bot runtime state, written while the bots run
+memory/pending_proposals.json

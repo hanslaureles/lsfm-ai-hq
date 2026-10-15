@@ -31,7 +31,12 @@ JOB_HUNT_DIR = default_job_hunt_dir()
 # Title words that rule a job out; the description only rules it out for the ones in DESCRIPTION_SKIPS.
 SKIP_WORDS = ["onsite", "on-site", "hybrid", "senior", "sr.", "lead", "principal", "manager", "head of",
               "staff engineer", "loom", "video introduction", "video intro", "must reside", "us only", "us-only",
-              "eu only", "virtual assistant", "administrative assistant", "sales"]
+              "eu only", "virtual assistant", "administrative assistant", "sales", "chief", "architect"]
+# A title must name a developer role (first scheduled hunt, 2026-10-15: 8 of 10 cards were accountants,
+# recruiters, technicians and admin roles that the broad search terms let in). Matched as whole words.
+ROLE_WORDS = ["engineer", "developer", "dev", "programmer", "software", "frontend", "front-end", "front end",
+              "full stack", "full-stack", "fullstack", "backend", "back-end", "ai", "ml", "machine learning",
+              "llm", "automation", "python", "react", "typescript", "javascript"]
 DESCRIPTION_SKIPS = ["loom", "video intro", "video introduction", "must reside", "us only", "eu only"]
 
 # One hunt at a time (the 10:00/20:00 loop and !hunt share it). Every stage checks one budget and CANCEL:
@@ -146,6 +151,8 @@ def _skip_reason(job: dict, rules: Rules, posted: date | None, now: datetime) ->
             return f"'{word}' in the title"
     if re.search(r"(?<![a-z])mid(?![a-z])(?!\s*-?\s*shift)", title.lower()):  # mid-level, not a mid shift
         return "'mid' in the title"
+    if not any(_has_word(title, w) for w in ROLE_WORDS):
+        return "not a developer role"
     return text_skip_reason(job.get("description") or "")
 
 
