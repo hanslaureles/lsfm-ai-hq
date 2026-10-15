@@ -31,9 +31,9 @@ health_recorder.attach(bot, "chaewon")  # memory/health/chaewon.json (4B-2)
 
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
 from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, get_portal_search_links
-from discord_utils import send_clean_embeds
+from discord_utils import send_clean_embeds, confirm_action
 from daily_once import run_daily
-from pdf_engine import compile_master_resume, describe_portfolio_sync, OWNER_EMAIL
+from pdf_engine import describe_portfolio_sync, OWNER_EMAIL
 import skills  # !rebuild_resume and !scout run the same skills as Ciel (ADR-001 R3)
 from llm_client import get_brain_status
 
@@ -66,11 +66,13 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
 
     async def prepare():
         print(f"⭐ [Chaewon] Executing Weekly Vector Resume Rebuild (Date: {today_str})...", flush=True)
-        res = await run_heavy(compile_master_resume, True, True, True)
-        if not res.get("success"):
-            print(f"⚠️ [Chaewon] Resume compilation failed: {res.get('error')}", flush=True)
+        # Scheduled and unattended: confirmed by design, never asks (ADR-001 Review Focus 1). The skill's
+        # build lock still keeps it from overlapping a !rebuild_resume or Ciel build.
+        result = await run_heavy(skills.run_skill, "chaewon.rebuild_resume", confirmed=True)
+        if result.status != "done":
+            print(f"⚠️ [Chaewon] Resume compilation failed: {result.text}", flush=True)
             return None
-        return res
+        return result.data
 
     async def deliver(res):
         pdf_path = res["pdf_path"]
@@ -558,11 +560,13 @@ async def cmd_screen(ctx, *, questions: str = None):
 @bot.command(name="rebuild_resume", aliases=["resume", "compile_resume", "master_resume"])
 async def cmd_rebuild_resume(ctx):
     """Compiles Hans's 1-page Master ATS Vector Resume PDF & syncs with Portfolio & Obsidian."""
+    # ADR-001 R4: overwriting the portfolio and Obsidian copies waits for the author's ✅ (60 s).
+    if not await confirm_action(bot, ctx, skills.SKILLS["chaewon.rebuild_resume"].confirm_text):
+        return
     msg = await ctx.reply("⭐ **Chaewon is rebuilding Hans's Master ATS Vector Resume...**")
-    loop = asyncio.get_running_loop()
     try:
         # The skill holds the build lock it shares with Ciel, so two builds never overwrite the PDF at once.
-        result = await run_heavy(skills.run_skill, "chaewon.rebuild_resume")
+        result = await run_heavy(skills.run_skill, "chaewon.rebuild_resume", confirmed=True)
         if result.status != "done":
             await msg.edit(content=f"❌ {result.text}")
             return

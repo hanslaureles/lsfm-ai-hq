@@ -168,6 +168,30 @@ DEFAULT_SESSION = "default"  # callers that name no session (curl, the bench, an
 MAX_CONVERSATIONS = 16       # one per HUD tab; the least recently used is dropped past this
 
 
+# ADR-001 R4: an action that changes things waits for this tab's "confirm" (HUD button or voice).
+PENDING_TTL_S = 120
+CONFIRM_WORDS = ("confirm", "yes", "do it", "go ahead", "はい", "実行")
+CANCEL_WORDS = ("cancel", "no", "stop", "いいえ", "キャンセル")
+_REPLY_PUNCT = " \t\r\n.,!?;:。、！？…「」\"'"
+
+
+FINDING_STATUS = {"waiting": "needs_confirm"}  # the synthesis prompt's name for an agent's "waiting"
+NEEDS_CONFIRM_RULE = ("\nIf any finding has status \"needs_confirm\", that action has NOT run: say what it would do. "
+                      "Ask Hans to say confirm or cancel. Never say it was done.")
+
+
+def reply_word(prompt: str):
+    """'confirm' or 'cancel' only when the whole prompt is one of those words ("Ciel, confirm." counts;
+    "no problem, check vitals" and "yes check vitals too" do not), else None (Review Focus 2)."""
+    s = (prompt or "").strip().lower()
+    s = re.sub(r"^ciel(?![a-z])[\s,、:]*", "", s).strip(_REPLY_PUNCT)
+    if s in CONFIRM_WORDS:
+        return "confirm"
+    if s in CANCEL_WORDS:
+        return "cancel"
+    return None
+
+
 def session_key(session_id) -> str:
     """A HUD tab's session id (the 32-hex mission-id shape), or the default conversation."""
     if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{32}", session_id):
@@ -184,10 +208,33 @@ class Conversation:
         # Bumped on every reset. A mission records its turn only if the generation
         # is unchanged, so one that was mid-flight during a clear can't revive memory.
         self.generation = 0
+        # An action waiting for this tab's "confirm": {"calls": [(name, args)], "text": str, "expires": float}.
+        self.pending = None
+        # Bumped by every reset and cancel: a mission that started before one may not hold an action
+        # afterwards, so "confirm" never runs work Hans already cleared (Codex R4 F1).
+        self.pending_epoch = 0
 
     def reset(self):
         self.turns = []
         self.generation += 1
+        self.drop_pending()
+
+    def drop_pending(self):
+        self.pending = None
+        self.pending_epoch += 1
+
+    def hold(self, calls: list, text: str, start_epoch: int) -> bool:
+        """Holds calls for "confirm" unless a reset or cancel happened since the mission started."""
+        if self.pending_epoch != start_epoch:
+            return False
+        self.pending = {"calls": calls, "text": text, "expires": time.time() + PENDING_TTL_S}
+        return True
+
+    def live_pending(self):
+        """The pending action, or None once it has expired (then it is dropped)."""
+        if self.pending and time.time() > self.pending["expires"]:
+            self.pending = None
+        return self.pending
 
     def remember(self, turn: dict, start_gen: int):
         """Records a turn unless memory was cleared while the mission ran."""
@@ -708,7 +755,10 @@ Respond ONLY with valid JSON.
 
         conv = self.conversation(session_id)  # each HUD tab has its own memory (6C)
         try:
-            return await self._run_mission(user_prompt, emit, mission_id, start_time, conv, conv.generation)
+            # Both are read before the mission's first await: a reset or cancel during any await,
+            # even the first event, must invalidate this mission (Codex R4 F1).
+            return await self._run_mission(user_prompt, emit, mission_id, start_time, conv, conv.generation,
+                                           conv.pending_epoch)
         except Exception as e:
             failure = {
                 "mission_id": mission_id,
@@ -723,12 +773,33 @@ Respond ONLY with valid JSON.
             return failure
 
     async def _run_mission(self, user_prompt: str, emit, mission_id: str, start_time: float,
-                           conv: Conversation, start_gen: int) -> dict:
+                           conv: Conversation, start_gen: int, start_epoch: int) -> dict:
         audio_filename = f"ciel_response_{mission_id}.mp3"
 
         # 1. Ciel Ingestion & Planning
         await emit("ciel_state", {"state": "analyzing", "message": "Analyzing prompt..."})
-        plan = await self.analyze_and_plan(user_prompt, history=list(conv.turns))
+        # A held action (ADR-001 R4) is answered before any planning: "confirm" runs exactly those calls,
+        # "cancel" drops them. Without a live pending action both are ordinary prompts.
+        # A reply sent before a reset or cancel never answers an action held after it.
+        pending = conv.live_pending() if conv.pending_epoch == start_epoch else None
+        word = reply_word(user_prompt) if pending else None
+        confirmed_calls = {}
+        if word == "cancel":
+            conv.drop_pending()
+            return await self._fast_reply(
+                emit, mission_id, start_time, audio_filename, conv,
+                "「告。」保留中の操作を取り消しました。何も変更していません。",
+                "Notice: Cancelled. Nothing was changed.",
+                {"source": "confirm", "provider": None, "model": None, "fallback_chain": []})
+        if word == "confirm":
+            conv.pending = None
+            for name, args in pending["calls"]:
+                confirmed_calls.setdefault(skills.SKILLS[name].agent, []).append((name, args))
+            plan = {"intent_type": "local_operation", "agents_needed": list(confirmed_calls), "tool_targets": [],
+                    "action_summary": f"Running the confirmed action: {pending['text']}",
+                    "planner": {"source": "confirm", "provider": None, "model": None, "fallback_chain": []}}
+        else:
+            plan = await self.analyze_and_plan(user_prompt, history=list(conv.turns))
         # No planner: a keyword fast path decided without a model call (the HUD shows "PLAN keyword").
         planner = plan.get("planner") or {"source": "keyword", "provider": None, "model": None, "fallback_chain": []}
         intent = plan.get("intent_type", "general_knowledge")
@@ -894,12 +965,22 @@ Respond ONLY with valid JSON.
         # A failure is never reworded as "verified" or "nominal".
         agent_status = {}
         # The agents are independent, so they run concurrently; results keep the plan's order.
+        gated = []  # calls held for this tab's "confirm" (ADR-001 R4)
         outcomes = await asyncio.gather(*(
-            self._run_agent(agent, user_prompt, tool_targets, emit) for agent in agents_to_call
+            self._run_agent(agent, user_prompt, tool_targets, emit, confirmed_calls.get(agent), gated)
+            for agent in agents_to_call
         ))
         for agent, (status, result_text) in zip(agents_to_call, outcomes):
             agent_results[agent] = result_text
             agent_status[agent] = status
+        held = None
+        if gated:
+            # A newer held action replaces an older one: "confirm" always runs what Hans was last asked.
+            text = " ".join(dict.fromkeys(skills.SKILLS[n].confirm_text for n, _ in gated))
+            if conv.hold(gated, text, start_epoch):
+                held = conv.pending
+            else:
+                await self._drop_waiting(agent_status, agent_results, emit)
 
         # 3. Ciel Final Synthesis with Multi-Turn Context and Direct Obsidian Brain Data
         await emit("ciel_state", {"state": "synthesizing", "message": "Synthesizing vocal response..."})
@@ -924,9 +1005,9 @@ Recent Dialogue Context:
 Direct Obsidian Brain Knowledge:
 {json.dumps(direct_vault_results, indent=2) if direct_vault_results else "None"}
 
-Subordinate Agent Findings (status is "done", "attention" = ran and found problems, or "failed" = could not run):
-{json.dumps({name: {"status": agent_status.get(name, "done"), "result": text} for name, text in agent_results.items()}, indent=2) if agent_results else "None"}
-If any finding has status "failed", say plainly in both voice lines and the report that the check could not run and why. Never describe a failed check as verified, nominal, synchronized, or successful.
+Subordinate Agent Findings (status is "done", "attention" = ran and found problems, "failed" = could not run, or "needs_confirm" = waiting for Hans and NOT run):
+{json.dumps({name: {"status": FINDING_STATUS.get(agent_status.get(name, "done"), agent_status.get(name, "done")), "result": text} for name, text in agent_results.items()}, indent=2) if agent_results else "None"}
+If any finding has status "failed", say plainly in both voice lines and the report that the check could not run and why. Never describe a failed check as verified, nominal, synchronized, or successful.{NEEDS_CONFIRM_RULE if "waiting" in agent_status.values() else ""}
 
 Synthesize a response as Ciel (The Divine Wisdom Core, Tensura):
 You possess both comprehensive universal knowledge across all sciences, engineering, algorithms, mathematics, philosophy, literature, and general reasoning, as well as live global internet search capabilities and real-time access to Hans's local systems, notes, and meteorological sensors.
@@ -1050,32 +1131,78 @@ Respond ONLY with valid JSON.
             # Measured on this mission's synthesis call (4B field names); absent on fast paths.
             "llm": {"provider": synth_meta.get("provider"), "model": synth_meta.get("model"),
                     "fallback_chain": synth_meta.get("chain", []), "ttft_ms": synth_meta.get("ttft_ms")},
-            "planner": planner,  # who chose the plan: llm / keyword / fallback (6C)
+            "planner": planner,  # who chose the plan: llm / keyword / fallback / confirm (6C, R4)
         }
+        if held and conv.live_pending() is not held:
+            # Reset, cancelled, replaced or expired during synthesis: "confirm" can no longer run it,
+            # so the response must not offer it (Codex R4 F2).
+            held = None
+            await self._drop_waiting(agent_status, agent_results, emit)
+            final_data["failed_agents"] = [a for a, s in agent_status.items() if s == "failed"]
+        if held:  # only this mission's own held action, never another mission's
+            # The HUD shows Confirm / Cancel for this (ADR-001 R4).
+            final_data["pending_confirm"] = {"text": held["text"], "skills": [name for name, _ in held["calls"]],
+                                             "expires_in_s": PENDING_TTL_S}
 
         await emit("ciel_complete", final_data)
         return final_data
 
+    @staticmethod
+    async def _drop_waiting(agent_status: dict, agent_results: dict, emit) -> None:
+        """Turns this mission's waiting agents into failed: their held action can no longer be confirmed."""
+        for agent, status in agent_status.items():
+            if status == "waiting":
+                agent_status[agent] = "failed"
+                agent_results[agent] = ("Not run: memory was cleared, or the action was cancelled or replaced, "
+                                        "before it could be confirmed. Nothing was changed.")
+                await emit("agent_state", {"agent": agent, "status": "failed",
+                                           "result": agent_results[agent], "elapsed_ms": None})
 
-    async def _run_agent(self, agent: str, user_prompt: str, tool_targets: list, emit) -> tuple:
-        """Runs one subordinate's tool in a worker thread and reports its honest end state."""
+    async def _fast_reply(self, emit, mission_id, start_time, audio_filename, conv, ja_speech, en_speech, planner):
+        """A spoken one-line reply with no agents (same shape as the reset-memory reply)."""
+        await text_to_speech_bilingual(ja_text=ja_speech, en_text=en_speech, output_filename=audio_filename)
+        final_data = {
+            "mission_id": mission_id, "reply": en_speech, "japanese_voice": ja_speech, "english_voice": en_speech,
+            "audio_file": audio_filename, "audio_url": f"/audio/{audio_filename}",
+            "elapsed_ms": round((time.time() - start_time) * 1000, 1), "agents_called": [], "agent_results": {},
+            "direct_obsidian": None, "memory_turns": len(conv.turns), "planner": planner,
+        }
+        await emit("ciel_complete", final_data)
+        return final_data
+
+
+    async def _run_agent(self, agent: str, user_prompt: str, tool_targets: list, emit,
+                         confirmed_calls=None, gated=None) -> tuple:
+        """Runs one subordinate's tool in a worker thread and reports its honest end state.
+        confirmed_calls: calls Hans already confirmed (run as given). Otherwise a call that changes
+        things is not run: it is appended to `gated` and the agent ends "waiting" (ADR-001 R4)."""
         await emit("agent_state", {"agent": agent, "status": "active", "task": f"Executing delegated task: {agent}"})
         # The HUD shows this agent's measured time (5E-4): the work only, from the start of
         # the skill calls to their end or timeout. Status events (a slow HUD) do not count, and
         # an agent whose work never started has no time (None), not a made-up 0.
         started = None
         try:
-            calls = skills.legacy_calls(agent, user_prompt, tool_targets)  # R5: the plan carries the calls
-            if not calls:
+            calls = confirmed_calls or skills.legacy_calls(agent, user_prompt, tool_targets)  # R5: the plan carries the calls
+            held = [] if confirmed_calls else [c for c in calls if skills.SKILLS[c[0]].changes_things]
+            calls = [c for c in calls if c not in held]
+            if gated is not None:
+                gated.extend(held)
+            if not calls and not held:
                 status, result_text = "failed", f"{agent.capitalize()} failed: no skill matches this request"
+            elif not calls:
+                status = "waiting"
+                result_text = " ".join(skills.SKILLS[name].confirm_text for name, _ in held) + " Not run yet: waiting for confirm."
             else:
                 # Every agent runs the same skills its Discord commands use (ADR-001 R1-R3).
                 # run_calls applies each skill's own timeout and pool and reports a timeout as failed.
                 task = "; ".join(skills.SKILLS[name].desc for name, _ in calls) + "..."
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
                 started = time.perf_counter()
-                result = await skills.run_calls(calls)
+                result = await skills.run_calls(calls, confirmed=bool(confirmed_calls))
                 status, result_text = result.status, result.text
+                if held:
+                    status = "failed" if status == "failed" else "waiting"
+                    result_text += " " + " ".join(skills.SKILLS[n].confirm_text for n, _ in held) + " Not run yet: waiting for confirm."
         except Exception as e:
             status = "failed"
             result_text = f"{agent.capitalize()} failed: {type(e).__name__}: {e}"

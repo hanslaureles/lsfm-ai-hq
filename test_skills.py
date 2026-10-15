@@ -358,10 +358,10 @@ class TestChaewonSakuraSkills(unittest.TestCase):
 
         self.patch("compile_master_resume", slow_build)
         first = []
-        t = threading.Thread(target=lambda: first.append(skills.run_skill("chaewon.rebuild_resume")))
+        t = threading.Thread(target=lambda: first.append(skills.run_skill("chaewon.rebuild_resume", confirmed=True)))
         t.start()
         self.assertTrue(started.wait(5))
-        second = skills.run_skill("chaewon.rebuild_resume")
+        second = skills.run_skill("chaewon.rebuild_resume", confirmed=True)
         self.assertEqual(second.status, "failed")
         self.assertIn("still running", second.text)
         release.set()
@@ -371,11 +371,11 @@ class TestChaewonSakuraSkills(unittest.TestCase):
 
     def test_rebuild_reports_engine_failure_and_missing_engine(self):
         self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Edge not found"})
-        r = skills.run_skill("chaewon.rebuild_resume")
+        r = skills.run_skill("chaewon.rebuild_resume", confirmed=True)
         self.assertEqual(r.status, "failed")
         self.assertIn("Edge not found", r.text)
         self.patch("compile_master_resume", None)
-        self.assertEqual(skills.run_skill("chaewon.rebuild_resume").status, "failed")
+        self.assertEqual(skills.run_skill("chaewon.rebuild_resume", confirmed=True).status, "failed")
 
     def test_scout_zero_jobs_is_attention(self):
         async def none(**kwargs):
@@ -478,12 +478,12 @@ class TestChaewonSakuraSkills(unittest.TestCase):
 
     def test_resume_success_needs_the_pdf_fields(self):  # F2
         self.patch("compile_master_resume", lambda **k: {"success": True})
-        r = skills.run_skill("chaewon.rebuild_resume")
+        r = skills.run_skill("chaewon.rebuild_resume", confirmed=True)
         self.assertEqual(r.status, "failed")
         self.assertNotIn("None KB", r.text)
         from pathlib import Path
         self.patch("compile_master_resume", lambda **k: {"success": True, "pdf_path": Path("r.pdf"), "size_kb": 82.9})
-        self.assertEqual(skills.run_skill("chaewon.rebuild_resume").status, "done")
+        self.assertEqual(skills.run_skill("chaewon.rebuild_resume", confirmed=True).status, "done")
 
     def test_negative_unread_count_is_not_a_clean_inbox(self):  # F2
         self.patch("scan_morning_inbox", lambda: {"ok": True, "unread_count": -1, "job_alerts": [], "highlights": []})
@@ -493,7 +493,7 @@ class TestChaewonSakuraSkills(unittest.TestCase):
 
     def test_resume_failure_never_promises_the_old_pdf_survived(self):  # F3: the renderer writes in place
         self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Headless browser failed"})
-        r = skills.run_skill("chaewon.rebuild_resume")
+        r = skills.run_skill("chaewon.rebuild_resume", confirmed=True)
         self.assertNotIn("unchanged", r.text)
         self.assertIn("may be incomplete", r.text)
 
@@ -515,6 +515,69 @@ class TestChaewonSakuraSkills(unittest.TestCase):
         self.assertEqual(skills.legacy_calls("sakura", "what's on today", []), [("sakura.priorities", {})])
         for prompt in ("job hunt now", "hunt for jobs", "find jobs"):  # never the 10-minute card-posting hunt
             self.assertNotIn("chaewon.hunt", [n for n, _ in skills.legacy_calls("chaewon", prompt, [])])
+
+
+class TestConfirmGateSkills(unittest.TestCase):
+    """ADR-001 R4: skills that change things refuse to run until confirmed."""
+
+    def patch(self, name, value):
+        self.enterContext(mock.patch.object(skills, name, value))
+
+    def test_bulk_skills_need_confirm(self):
+        calls = []
+        self.patch("sweep_inbox", lambda n: calls.append(("sweep", n)))
+        self.patch("run_mass_cleanse", lambda: calls.append("cleanse"))
+        self.patch("compile_master_resume", lambda **k: calls.append("resume"))
+        texts = {"sakura.clean": "Archive up to 50 promo and newsletter emails from Primary?",
+                 "sakura.cleanse": "Archive and file up to 250 emails across Primary?",
+                 "chaewon.rebuild_resume": "Rebuild the master resume PDF and overwrite the portfolio and Obsidian copies?"}
+        for name, text in texts.items():
+            with self.subTest(name):
+                r = skills.run_skill(name)
+                self.assertEqual((r.status, r.text), ("needs_confirm", text))
+                self.assertIs(skills.SKILLS[name].changes_things, True)
+        self.assertEqual(calls, [])
+
+    def test_clean_reports_the_sweep(self):
+        self.patch("gmail_is_configured", lambda: True)
+        self.patch("sweep_inbox", lambda n: {"success": True, "total_scanned": 40, "promos_swept": 12, "newsletters_swept": 3,
+                                             "total_swept": 15, "retained_in_inbox": 25, "categories": {}})
+        r = skills.run_skill("sakura.clean", confirmed=True)
+        self.assertEqual(r.status, "done")
+        self.assertIn("15", r.text)
+        self.assertEqual(r.data["total_swept"], 15)
+
+    def test_clean_failures_are_honest(self):
+        self.patch("gmail_is_configured", lambda: True)
+        for res in ({"success": False, "error": "token expired"}, {"success": True, "total_swept": "15"}, None):
+            with self.subTest(res=res):
+                self.patch("sweep_inbox", lambda n, res=res: res)
+                self.assertEqual(skills.run_skill("sakura.clean", confirmed=True).status, "failed")
+        self.patch("gmail_is_configured", lambda: False)
+        r = skills.run_skill("sakura.clean", confirmed=True)
+        self.assertEqual(r.status, "failed")
+        self.assertIn("not configured", r.text)
+
+    def test_cleanse_never_starts_without_gmail_and_reports_none_honestly(self):
+        calls = []
+        self.patch("gmail_is_configured", lambda: False)
+        self.patch("run_mass_cleanse", lambda: calls.append(1))  # would open an interactive OAuth flow
+        self.assertEqual(skills.run_skill("sakura.cleanse", confirmed=True).status, "failed")
+        self.assertEqual(calls, [])
+        self.patch("gmail_is_configured", lambda: True)
+        self.patch("run_mass_cleanse", lambda: None)  # not signed in, or nothing in the inbox
+        r = skills.run_skill("sakura.cleanse", confirmed=True)
+        self.assertEqual(r.status, "failed")
+        self.assertNotIn("archived 0", r.text.lower())
+        self.patch("run_mass_cleanse", lambda: {"success": True, "total": 200, "archived_count": 150,
+                                                "retained_count": 50, "categories": {"PROMO_CLUTTER": 150}})
+        self.assertEqual(skills.run_skill("sakura.cleanse", confirmed=True).status, "done")
+
+    def test_legacy_calls_route_clean_requests_to_the_gated_skills(self):
+        self.assertEqual(skills.legacy_calls("sakura", "clean my inbox", []), [("sakura.clean", {})])
+        self.assertEqual(skills.legacy_calls("sakura", "sweep the promos", []), [("sakura.clean", {})])
+        self.assertEqual(skills.legacy_calls("sakura", "run the mass cleanse", []), [("sakura.cleanse", {})])
+        self.assertEqual(skills.legacy_calls("sakura", "check my inbox", []), [("sakura.inbox", {})])
 
 
 class TestKazuhaYunjinSkills(unittest.TestCase):

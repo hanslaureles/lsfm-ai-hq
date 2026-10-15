@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands
 import re
@@ -7,6 +8,35 @@ from typing import List, Optional, Union, Any
 EMBED_TITLE_MAX = 256
 EMBED_FIELD_VALUE_MAX = 1024
 EMBED_DESCRIPTION_MAX = 4096
+
+
+CONFIRM_EMOJI, CANCEL_EMOJI = "✅", "❌"
+
+
+async def confirm_action(bot, ctx, text: str, timeout: float = 60.0) -> bool:
+    """
+    Asks the command's author to approve an action that changes things (ADR-001 R4): posts
+    `text`, adds ✅ and ❌, and waits for the author's reaction on that message only.
+    True only for the author's ✅; ❌ or no answer leaves the action unrun and says so.
+    """
+    msg = await ctx.reply(f"{text}\nReact {CONFIRM_EMOJI} to go ahead or {CANCEL_EMOJI} to cancel "
+                          f"(waiting {timeout:g} s).")
+    await msg.add_reaction(CONFIRM_EMOJI)
+    await msg.add_reaction(CANCEL_EMOJI)
+
+    def check(reaction, user):
+        return (reaction.message.id == msg.id and user.id == ctx.author.id
+                and str(reaction.emoji) in (CONFIRM_EMOJI, CANCEL_EMOJI))
+
+    try:
+        reaction, _ = await bot.wait_for("reaction_add", timeout=timeout, check=check)
+    except asyncio.TimeoutError:
+        await msg.edit(content=f"No answer in {timeout:g} s. Nothing was changed.")
+        return False
+    if str(reaction.emoji) == CONFIRM_EMOJI:
+        return True
+    await msg.edit(content="Cancelled. Nothing was changed.")
+    return False
 
 
 def clip(text: str, limit: int) -> str:

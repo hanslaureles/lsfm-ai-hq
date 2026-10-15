@@ -42,10 +42,10 @@ from yunjin_engine import select_portfolio_pitch
 import re
 from kazuha_engine import generate_tech_pitch
 from web_tools import find_url_in_text, scrape_job_url
-from discord_utils import send_clean_embeds
+from discord_utils import send_clean_embeds, confirm_action
 from daily_once import run_daily
 from heavy_jobs import run_blocking
-from skills import run_skill, SkillResult
+from skills import run_skill, SkillResult, SKILLS
 from obsidian_client import ObsidianClient
 import job_hunt
 
@@ -1245,24 +1245,27 @@ async def triage_command(ctx, scope: str = ""):
 @bot.command(name="clean")
 async def clean_command(ctx):
     """Sweeps promo clutter and newsletters out of the primary inbox to achieve Inbox Zero."""
-    from gmail_engine import is_configured, sweep_inbox
+    from gmail_engine import is_configured
 
     if not is_configured():
         await ctx.reply("⚠️ Gmail Engine is not configured. Please run `test_gmail_auth.py` first.")
         return
 
+    # ADR-001 R4: archiving mail waits for the author's ✅ (60 s); the skill refuses to run unconfirmed.
+    if not await confirm_action(bot, ctx, SKILLS["sakura.clean"].confirm_text):
+        return
     status_msg = await ctx.reply("🧹 **Sakura is sweeping promotional clutter and newsletters from your Primary Inbox...**")
-    loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await run_heavy(sweep_inbox, 50)
+            result = await run_heavy(run_skill, "sakura.clean", confirmed=True)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during sweep: `{e}`")
         return
 
-    if not res.get("success"):
-        await status_msg.edit(content=f"⚠️ {res.get('error', 'Sweep failed.')}")
+    if result.status != "done":
+        await status_msg.edit(content=f"⚠️ {result.text}")
         return
+    res = result.data
 
     total_scanned = res.get("total_scanned", 0)
     total_swept = res.get("total_swept", 0)
@@ -1355,24 +1358,26 @@ async def expenses_command(ctx):
 async def cleanse_command(ctx):
     """Executes 1-time mass cleanse across the entire primary inbox (up to 250 emails)."""
     from gmail_engine import is_configured
-    from scripts.mass_cleanse import run_mass_cleanse
 
     if not is_configured():
         await ctx.reply("⚠️ Gmail Engine is not configured. Please run `test_gmail_auth.py` first.")
         return
 
+    # ADR-001 R4: up to 250 emails are archived and filed only after the author's ✅ (60 s).
+    if not await confirm_action(bot, ctx, SKILLS["sakura.cleanse"].confirm_text):
+        return
     status_msg = await ctx.reply("🌸 **Sakura is launching the Mass Inbox Cleanse... Scanning all emails, filing noise, and organizing your high-signal workspace...**")
-    loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
-            res = await run_heavy(run_mass_cleanse)
+            result = await run_heavy(run_skill, "sakura.cleanse", confirmed=True)
     except Exception as e:
         await status_msg.edit(content=f"❌ Error during mass cleanse: `{e}`")
         return
 
-    if not res.get("success"):
-        await status_msg.edit(content=f"⚠️ {res.get('error', 'Mass cleanse failed.')}")
+    if result.status != "done":
+        await status_msg.edit(content=f"⚠️ {result.text}")
         return
+    res = result.data
 
     total = res.get("total", 0)
     archived = res.get("archived_count", 0)

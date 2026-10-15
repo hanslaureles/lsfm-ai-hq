@@ -103,7 +103,7 @@ STUBS = {
     # Optional engines: empty modules make each `from x import y` raise ImportError,
     # so the orchestrator falls back to None and tests patch in what they need.
     "eunchae_engine": {}, "yunjin_engine": {}, "sakura_engine": {}, "pdf_engine": {},
-    "git_sentinel": {}, "kazuha_engine": {}, "rag_engine": {},
+    "git_sentinel": {}, "kazuha_engine": {}, "rag_engine": {}, "gmail_engine": {},
 }
 
 def _module(name, attrs):
@@ -156,6 +156,12 @@ class MissionTestCase(unittest.IsolatedAsyncioTestCase):
         async def on_event(ev):
             self.events.append(ev)
         return await self.ciel.execute_mission(prompt, event_callback=on_event)
+
+    async def run_confirmed(self, prompt):
+        """A prompt whose action changes things, then "confirm" (ADR-001 R4): the confirmed run's result."""
+        held = await self.run_mission(prompt)
+        self.assertIn("pending_confirm", held)
+        return await self.run_mission("confirm")
 
     def completes(self):
         return [e for e in self.events if e["type"] == "ciel_complete"]
@@ -239,6 +245,11 @@ class TestHonestFailures(MissionTestCase):
             with self.subTest(agent=agent):
                 self.events.clear()
                 self.patch(engine, None)
+                if agent == "chaewon":  # R4: a rebuild waits for "confirm" before it runs (and then fails)
+                    pended = await self.run_mission(prompt)
+                    self.assertIn("pending_confirm", pended)
+                    self.events.clear()
+                    prompt = "confirm"
                 result, end = await self.agent_end(prompt, agent)
                 self.assert_failed(result, end, agent)
 
@@ -612,22 +623,184 @@ class TestAsyncSafety(MissionTestCase):
         self.enterContext(skill_timeout("chaewon.rebuild_resume", 0.1))  # R3: the skill's own timeout
         self.patch("compile_master_resume", slow_build)
 
-        first = await self.run_mission("compile resume")
+        first = await self.run_confirmed("compile resume")
         self.assertEqual(first["agent_status"]["chaewon"], "failed")
         self.assertIn("may still finish in the background", first["agent_results"]["chaewon"])
 
         # The abandoned build is still running in its thread: a second one must not start.
-        second = await self.run_mission("compile resume")
+        second = await self.run_confirmed("compile resume")
         self.assertEqual(second["agent_status"]["chaewon"], "failed")
         self.assertIn("still running", second["agent_results"]["chaewon"])
         self.assertEqual(len(calls), 1)
 
         await asyncio.sleep(0.6)  # the first build ends and releases the lock
         self.enterContext(skill_timeout("chaewon.rebuild_resume", 5))
-        third = await self.run_mission("compile resume")
+        third = await self.run_confirmed("compile resume")
         self.assertEqual(third["agent_status"]["chaewon"], "done")
         self.assertEqual(len(calls), 2)
         self.assertEqual(peak[0], 1)
+
+
+class TestConfirmGate(MissionTestCase):
+    """ADR-001 R4: Ciel holds an action that changes things until this tab says confirm."""
+
+    SESSION_A, SESSION_B = "a" * 32, "b" * 32
+
+    def setUp(self):
+        super().setUp()
+        self.sweeps = []
+        skills_mod = ciel_orchestrator.skills
+        self.enterContext(mock.patch.object(skills_mod, "gmail_is_configured", lambda: True))
+        self.enterContext(mock.patch.object(skills_mod, "sweep_inbox", lambda n: self.sweeps.append(n) or {
+            "success": True, "total_scanned": 40, "promos_swept": 12, "newsletters_swept": 3,
+            "total_swept": 15, "retained_in_inbox": 25, "categories": {}}))
+
+    async def say(self, prompt, session=None):
+        async def on_event(ev):
+            self.events.append(ev)
+        return await self.ciel.execute_mission(prompt, event_callback=on_event, session_id=session)
+
+    async def test_clean_inbox_pends_and_does_not_sweep(self):
+        result = await self.say("clean my inbox")
+        self.assertEqual(self.sweeps, [])
+        self.assertEqual(result["pending_confirm"], {"text": "Archive up to 50 promo and newsletter emails from Primary?",
+                                                     "skills": ["sakura.clean"], "expires_in_s": 120})
+        self.assertEqual(result["agent_status"]["sakura"], "waiting")
+        self.assertEqual(result["failed_agents"], [])
+        ends = [e for e in self.events if e["type"] == "agent_state" and e.get("agent") == "sakura" and e["status"] != "active"]
+        self.assertEqual([e["status"] for e in ends], ["waiting"])
+
+    async def test_confirm_runs_pending_once(self):
+        await self.say("clean my inbox")
+        result = await self.say("Ciel, confirm.")
+        self.assertEqual(self.sweeps, [50])
+        self.assertEqual(result["planner"]["source"], "confirm")
+        self.assertEqual(result["agent_status"]["sakura"], "done")
+        await self.say("confirm")  # nothing pending now: an ordinary prompt
+        self.assertEqual(self.sweeps, [50])
+
+    async def test_cancel_clears(self):
+        await self.say("clean my inbox")
+        result = await self.say("cancel")
+        self.assertIn("Nothing was changed", result["reply"])
+        await self.say("confirm")
+        self.assertEqual(self.sweeps, [])
+
+    async def test_pending_expires_after_ttl(self):
+        await self.say("clean my inbox")
+        with mock.patch.object(ciel_orchestrator.time, "time",
+                               return_value=time.time() + ciel_orchestrator.PENDING_TTL_S + 1):
+            await self.say("confirm")
+        self.assertEqual(self.sweeps, [])
+
+    async def test_pending_is_per_session(self):  # Review Focus 3
+        await self.say("clean my inbox", session=self.SESSION_A)
+        await self.say("confirm", session=self.SESSION_B)
+        self.assertEqual(self.sweeps, [])
+        await self.say("confirm", session=self.SESSION_A)
+        self.assertEqual(self.sweeps, [50])
+
+    PAUSE_AT = {  # where a running "clean my inbox" is paused
+        "first_event": lambda ev: ev["type"] == "ciel_state",  # before anything else ran
+        "agent": lambda ev: ev["type"] == "agent_state" and ev.get("agent") == "sakura" and ev["status"] == "active",
+        "synthesis": lambda ev: ev["type"] == "ciel_state" and ev.get("state") == "synthesizing",  # after the hold
+    }
+
+    async def paused_clean(self, at="agent"):
+        """Starts "clean my inbox" and pauses it at the PAUSE_AT point."""
+        reached, release = asyncio.Event(), asyncio.Event()
+
+        async def on_event(ev):
+            self.events.append(ev)
+            if self.PAUSE_AT[at](ev) and not reached.is_set():
+                reached.set()
+                await release.wait()
+
+        task = asyncio.create_task(self.ciel.execute_mission("clean my inbox", event_callback=on_event))
+        await asyncio.wait_for(reached.wait(), 5)
+        return task, release
+
+    async def test_reset_during_a_mission_drops_its_held_action(self):  # Codex R4 F1
+        for reset in ("say", "endpoint"):  # both reset-memory entry points
+            with self.subTest(reset=reset):
+                self.sweeps.clear()
+                task, release = await self.paused_clean()
+                if reset == "say":
+                    await self.say("reset memory")
+                else:
+                    self.ciel.reset_memory()
+                release.set()
+                result = await task
+                self.assertNotIn("pending_confirm", result)
+                self.assertEqual(result["agent_status"]["sakura"], "failed")
+                self.assertIn("Nothing was changed", result["agent_results"]["sakura"])
+                await self.say("confirm")
+                self.assertEqual(self.sweeps, [])
+
+    async def test_reset_or_cancel_at_any_point_of_a_mission_drops_its_held_action(self):  # Codex R4 F1/F2
+        for at in ("first_event", "synthesis"):
+            for clear in ("reset", "cancel"):
+                with self.subTest(at=at, clear=clear):
+                    self.ciel.reset_memory()
+                    self.sweeps.clear()
+                    if clear == "cancel":
+                        await self.say("clean my inbox")  # an action is held, so "cancel" is a reply
+                    task, release = await self.paused_clean(at)
+                    if clear == "reset":
+                        self.ciel.reset_memory()
+                    else:
+                        await self.say("cancel")
+                    release.set()
+                    result = await task
+                    self.assertNotIn("pending_confirm", result)
+                    self.assertEqual(result["agent_status"]["sakura"], "failed")
+                    self.assertEqual(result["failed_agents"], ["sakura"])
+                    ends = [e["status"] for e in self.events if e["type"] == "agent_state"
+                            and e.get("mission_id") == result["mission_id"] and e["status"] != "active"]
+                    self.assertEqual(ends[-1], "failed")
+                    await self.say("confirm")
+                    self.assertEqual(self.sweeps, [])
+
+    async def test_a_replaced_held_action_is_not_offered(self):  # Codex R4 F2: only the newest can be confirmed
+        task, release = await self.paused_clean("synthesis")
+        newer = await self.say("mass cleanse my inbox")
+        self.assertEqual(newer["pending_confirm"]["skills"], ["sakura.cleanse"])
+        release.set()
+        self.assertNotIn("pending_confirm", await task)
+
+    async def test_cancel_during_a_mission_drops_its_held_action(self):  # Codex R4 F1
+        await self.say("clean my inbox")  # an action is held, so "cancel" is a reply
+        task, release = await self.paused_clean()
+        await self.say("cancel")
+        release.set()
+        self.assertNotIn("pending_confirm", await task)
+        await self.say("confirm")
+        self.assertEqual(self.sweeps, [])
+        # A request made after the cancel is still held and runs on confirm.
+        self.assertIn("pending_confirm", await self.say("clean my inbox"))
+        await self.say("confirm")
+        self.assertEqual(self.sweeps, [50])
+
+    async def test_synthesis_is_told_nothing_ran(self):
+        prompts = []
+
+        def recording(prompt, system_instruction="", **kwargs):
+            prompts.append(prompt)
+            return _call_groq(prompt, system_instruction, **kwargs)
+
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_llm", recording))
+        await self.say("clean my inbox")
+        self.assertIn('"status": "needs_confirm"', prompts[-1])
+        self.assertIn("Ask Hans to say confirm or cancel. Never say it was done.", prompts[-1])
+
+    def test_reply_word_is_exact(self):  # Review Focus 2
+        rw = ciel_orchestrator.reply_word
+        for prompt in ("now", "no problem, check vitals", "yes check vitals too", "confirm the vitals", "",
+                       "cancellation policy"):
+            self.assertIsNone(rw(prompt), prompt)
+        for prompt, word in (("Ciel, confirm.", "confirm"), ("はい", "confirm"), ("  YES! ", "confirm"),
+                             ("go ahead", "confirm"), ("no", "cancel"), ("ciel cancel", "cancel"), ("キャンセル。", "cancel")):
+            self.assertEqual(rw(prompt), word, prompt)
 
 
 class TestHeavyAgentsUseHeavyPool(MissionTestCase):
@@ -642,7 +815,7 @@ class TestHeavyAgentsUseHeavyPool(MissionTestCase):
             return {"success": True, "size_kb": 82.9, "pdf_path": Path("Hans_Resume.pdf")}
 
         self.enterContext(mock.patch.object(_owner("compile_master_resume"), "compile_master_resume", build))
-        result = await self.run_mission("compile resume")
+        result = await self.run_confirmed("compile resume")
         self.assertEqual(result["agent_status"]["chaewon"], "done")
         self.assertEqual(len(threads), 1)
         self.assertTrue(threads[0].startswith("heavy"), threads)

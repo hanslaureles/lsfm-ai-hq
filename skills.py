@@ -44,6 +44,9 @@ compile_master_resume = _optional("pdf_engine", "compile_master_resume")
 fetch_live_remote_jobs = _optional("web_tools", "fetch_live_remote_jobs")
 scan_morning_inbox = _optional("sakura_engine", "scan_morning_inbox")
 ObsidianClient = _optional("obsidian_client", "ObsidianClient")
+sweep_inbox = _optional("gmail_engine", "sweep_inbox")
+gmail_is_configured = _optional("gmail_engine", "is_configured")
+run_mass_cleanse = _optional("scripts.mass_cleanse", "run_mass_cleanse")
 audit_full_portfolio = _optional("yunjin_engine", "audit_full_portfolio")
 
 # Worst first: combine() keeps the worst status of a set of results.
@@ -467,7 +470,9 @@ def _chaewon_scout(query: str = "applied AI engineer", location: str = "Remote")
 
 register(Skill(name="chaewon.rebuild_resume", agent="chaewon",
                desc="Rebuild the master resume PDF and sync the portfolio and Obsidian copies",
-               run=_chaewon_rebuild_resume, keywords=("resume", "cv"), timeout_s=60.0, heavy=True))
+               run=_chaewon_rebuild_resume, keywords=("resume", "cv"), timeout_s=60.0, heavy=True,
+               changes_things=True,
+               confirm_text="Rebuild the master resume PDF and overwrite the portfolio and Obsidian copies?"))
 register(Skill(name="chaewon.scout", agent="chaewon", desc="Find a few live job postings that fit Hans's profile",
                run=_chaewon_scout, args={"query": "role to search, e.g. applied AI engineer",
                                          "location": "Remote or a place, e.g. Philippines"},
@@ -552,6 +557,65 @@ def _sakura_vault_search(query: str = "") -> SkillResult:
     return SkillResult("done", "Obsidian Search: 0 matching notes found.", {"matches": []})
 
 
+SWEEP_FIELDS = {"total_scanned": int, "promos_swept": int, "newsletters_swept": int, "total_swept": int,
+                "retained_in_inbox": int}
+CLEANSE_FIELDS = {"total": int, "archived_count": int, "retained_count": int, "categories": dict}
+
+
+def _gmail_ready():
+    """None when Gmail is set up, else a failed result (never start a Gmail write that would ask to sign in)."""
+    if gmail_is_configured is None:
+        return SkillResult("failed", "Gmail unavailable: gmail_engine could not be imported.")
+    if not gmail_is_configured():
+        return SkillResult("failed", "Gmail is not configured: sign in with scripts/authenticate.py first. Nothing was changed.")
+    return None
+
+
+def _sakura_clean() -> SkillResult:
+    not_ready = _gmail_ready()
+    if not_ready or sweep_inbox is None:
+        return not_ready or SkillResult("failed", "Inbox sweep unavailable: gmail_engine could not be imported.")
+    try:
+        res = sweep_inbox(50)
+    except Exception as e:
+        return SkillResult("failed", f"Inbox sweep failed: {type(e).__name__}: {e}")
+    if isinstance(res, dict) and res.get("success") is False:
+        return SkillResult("failed", f"Inbox sweep failed: {res.get('error', 'unknown error')}", res)
+    bad = _bad_fields(res, SWEEP_FIELDS)
+    if bad:
+        return _incomplete("Inbox sweep", bad, res)
+    return SkillResult("done", f"Inbox sweep: archived {res['total_swept']} of {res['total_scanned']} scanned emails "
+                               f"({res['promos_swept']} promos, {res['newsletters_swept']} newsletters); "
+                               f"{res['retained_in_inbox']} kept in Primary.", res)
+
+
+def _sakura_cleanse() -> SkillResult:
+    not_ready = _gmail_ready()
+    if not_ready or run_mass_cleanse is None:
+        return not_ready or SkillResult("failed", "Mass cleanse unavailable: scripts/mass_cleanse.py could not be imported.")
+    try:
+        res = run_mass_cleanse()
+    except Exception as e:
+        return SkillResult("failed", f"Mass cleanse failed: {type(e).__name__}: {e}")
+    if res is None:
+        # run_mass_cleanse returns None both when Gmail is not signed in and when the inbox was empty.
+        return SkillResult("failed", "Mass cleanse did not run: Gmail sign-in failed or the Primary inbox was "
+                                     "already empty. Nothing was archived.")
+    if isinstance(res, dict) and res.get("success") is False:
+        return SkillResult("failed", f"Mass cleanse failed: {res.get('error', 'unknown error')}", res)
+    bad = _bad_fields(res, CLEANSE_FIELDS)
+    if bad:
+        return _incomplete("Mass cleanse", bad, res)
+    return SkillResult("done", f"Mass cleanse: scanned {res['total']} emails, archived {res['archived_count']}, "
+                               f"kept {res['retained_count']} labelled in Primary.", res)
+
+
+register(Skill(name="sakura.clean", agent="sakura", desc="Archive promo and newsletter clutter from Primary (up to 50)",
+               run=_sakura_clean, keywords=("clean", "sweep"), timeout_s=120.0, heavy=True, changes_things=True,
+               confirm_text="Archive up to 50 promo and newsletter emails from Primary?"))
+register(Skill(name="sakura.cleanse", agent="sakura", desc="Archive and file up to 250 emails across Primary",
+               run=_sakura_cleanse, keywords=("cleanse", "mass sort"), timeout_s=300.0, heavy=True,
+               changes_things=True, confirm_text="Archive and file up to 250 emails across Primary?"))
 register(Skill(name="sakura.inbox", agent="sakura", desc="Count unread Primary Gmail and flag recruiter mail (read only)",
                run=_sakura_inbox, keywords=("inbox", "email", "gmail", "unread", "mail"), heavy=True))
 register(Skill(name="sakura.priorities", agent="sakura", desc="Today's open tasks from the Obsidian daily log",
@@ -605,6 +669,11 @@ def legacy_calls(agent: str, user_prompt: str, tool_targets: list) -> list:
             return [("chaewon.scout", {})]
         return [("chaewon.rebuild_resume", {})]
     if agent == "sakura":
+        # Writes first, so "clean my inbox" never falls through to the read-only scan; both ask before running (R4).
+        if any(w in prompt for w in ("cleanse", "mass sort", "mass_sort")):
+            return [("sakura.cleanse", {})]
+        if any(w in prompt for w in ("clean", "sweep", "declutter", "tidy")):
+            return [("sakura.clean", {})]
         if any(w in prompt for w in ("inbox", "email", "gmail", "unread", "recruiter", "mail")):
             return [("sakura.inbox", {})]
         if any(w in prompt for w in ("search", "find", "lookup")):

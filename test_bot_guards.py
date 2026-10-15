@@ -685,6 +685,130 @@ class RecordingCtx(FakeCtx):
         return " ".join(str(e.get("content", "")) for m in self.messages for e in m.edits)
 
 
+class ConfirmMessage:
+    _next = 900
+
+    def __init__(self, content=None):
+        ConfirmMessage._next += 1
+        self.id, self.content, self.reactions, self.edits = ConfirmMessage._next, content, [], []
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs.get("content"))
+
+    async def delete(self):
+        pass
+
+
+class ConfirmCtx:
+    """A command context with an author, replies that can be reacted to, and typing()."""
+
+    def __init__(self, author_id=7):
+        self.author = types.SimpleNamespace(id=author_id)
+        self.messages = []
+
+    async def reply(self, content=None, **kwargs):
+        self.messages.append(ConfirmMessage(content))
+        return self.messages[-1]
+
+    def typing(self):
+        class _Typing:
+            async def __aenter__(self_inner):
+                return None
+
+            async def __aexit__(self_inner, *exc):
+                return False
+        return _Typing()
+
+    def texts(self):
+        return [m.content for m in self.messages] + [e for m in self.messages for e in m.edits]
+
+
+def fake_bot(reactions):
+    """bot.wait_for that offers each (emoji, user_id) to the check on the latest message, then times out."""
+    async def wait_for(event, timeout=None, check=None):
+        assert event == "reaction_add"
+        for emoji, user_id in reactions:
+            target = fake_bot.ctx.messages[-1]
+            reaction = types.SimpleNamespace(emoji=emoji, message=types.SimpleNamespace(id=target.id))
+            user = types.SimpleNamespace(id=user_id)
+            if check(reaction, user):
+                return reaction, user
+        raise asyncio.TimeoutError
+    return types.SimpleNamespace(wait_for=wait_for)
+
+
+class ConfirmActionTest(unittest.TestCase):
+    """ADR-001 R4: bulk actions wait 60 s for the command author's ✅/❌."""
+
+    def ask(self, reactions):
+        from discord_utils import confirm_action
+        ctx = ConfirmCtx(author_id=7)
+        fake_bot.ctx = ctx
+        ok = asyncio.run(confirm_action(fake_bot(reactions), ctx, "Archive up to 50 promo and newsletter emails from Primary?"))
+        return ok, ctx
+
+    def test_confirm_action_ignores_other_users_and_times_out(self):
+        ok, ctx = self.ask([("✅", 99)])  # someone else's ✅
+        self.assertIs(ok, False)
+        self.assertEqual(ctx.messages[0].reactions, ["✅", "❌"])
+        self.assertIn("No answer in 60 s. Nothing was changed.", ctx.texts())
+
+    def test_check_mark_from_the_author_confirms(self):
+        ok, ctx = self.ask([("👍", 7), ("✅", 7)])
+        self.assertIs(ok, True)
+
+    def test_cross_cancels(self):
+        ok, ctx = self.ask([("❌", 7)])
+        self.assertIs(ok, False)
+        self.assertIn("Cancelled. Nothing was changed.", ctx.texts())
+
+
+class SakuraConfirmTest(unittest.TestCase):
+    def run_clean(self, reactions):
+        import skills
+        import gmail_engine
+        sweeps = []
+        ctx = ConfirmCtx(author_id=7)
+        fake_bot.ctx = ctx
+        with mock.patch.object(bot_sakura, "bot", fake_bot(reactions)), \
+                mock.patch.object(gmail_engine, "is_configured", return_value=True), \
+                mock.patch.object(skills, "gmail_is_configured", lambda: True), \
+                mock.patch.object(skills, "sweep_inbox", lambda n: sweeps.append(n) or {
+                    "success": True, "total_scanned": 40, "promos_swept": 12, "newsletters_swept": 3,
+                    "total_swept": 15, "retained_in_inbox": 25, "categories": {}}):
+            asyncio.run(bot_sakura.clean_command.callback(ctx))
+        return sweeps, ctx
+
+    def test_clean_runs_only_after_check_mark(self):
+        sweeps, ctx = self.run_clean([])  # no answer
+        self.assertEqual(sweeps, [])
+        sweeps, ctx = self.run_clean([("❌", 7)])
+        self.assertEqual(sweeps, [])
+        sweeps, ctx = self.run_clean([("✅", 7)])
+        self.assertEqual(sweeps, [50])
+
+
+class ChaewonScheduledRebuildTest(unittest.TestCase):
+    def test_scheduled_resume_rebuild_does_not_ask(self):  # Review Focus 1
+        with mock.patch.dict("os.environ", {"CHAEWON_BOT_TOKEN": os.environ.get("CHAEWON_BOT_TOKEN") or "test-placeholder"}):
+            import bot_chaewon
+        import skills
+        builds = []
+        asked = mock.AsyncMock(side_effect=AssertionError("the Sunday job must not ask"))
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(bot_chaewon, "LAST_REBUILD_DATE_FILE", Path(tmp) / "last.txt"), \
+                mock.patch.object(bot_chaewon, "bot", types.SimpleNamespace(guilds=[])), \
+                mock.patch.object(bot_chaewon, "confirm_action", asked), \
+                mock.patch.object(skills, "compile_master_resume", lambda **k: builds.append(k) or {
+                    "success": True, "pdf_path": Path("r.pdf"), "size_kb": 82.9}):
+            asyncio.run(bot_chaewon.post_weekly_resume_rebuild_if_due(force=True))
+        self.assertEqual(len(builds), 1)
+        asked.assert_not_called()
+
+
 class ChaewonCommandsTest(unittest.TestCase):
     """ADR-001 R3: !rebuild_resume and !scout go through the skill registry and keep their embeds."""
 
@@ -700,13 +824,20 @@ class ChaewonCommandsTest(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def approve(self, answer=True):
+        p = mock.patch.object(self.bot, "confirm_action", mock.AsyncMock(return_value=answer))
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_rebuild_resume_reports_the_skill_failure(self):
+        self.approve()
         self.patch("compile_master_resume", lambda **k: {"success": False, "error": "Edge not found"})
         ctx = RecordingCtx()
         asyncio.run(self.bot.cmd_rebuild_resume.callback(ctx))
         self.assertIn("Edge not found", ctx.edited_text())
 
     def test_rebuild_resume_shares_the_build_lock_with_ciel(self):
+        self.approve()
         calls = []
         self.patch("compile_master_resume", lambda **k: calls.append(k) or {"success": True})
         ctx = RecordingCtx()
@@ -714,6 +845,16 @@ class ChaewonCommandsTest(unittest.TestCase):
             asyncio.run(self.bot.cmd_rebuild_resume.callback(ctx))
         self.assertEqual(calls, [])
         self.assertIn("still running", ctx.edited_text())
+
+    def test_rebuild_resume_asks_first_and_cross_builds_nothing(self):  # ADR-001 R4
+        self.approve(False)
+        calls = []
+        self.patch("compile_master_resume", lambda **k: calls.append(k))
+        asyncio.run(self.bot.cmd_rebuild_resume.callback(RecordingCtx()))
+        self.assertEqual(calls, [])
+        self.bot.confirm_action.assert_awaited_once()
+        self.assertEqual(self.bot.confirm_action.await_args.args[2],
+                         "Rebuild the master resume PDF and overwrite the portfolio and Obsidian copies?")
 
     def test_scout_uses_the_skill_and_keeps_the_embed(self):
         seen = {}
