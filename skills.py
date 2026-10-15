@@ -396,6 +396,26 @@ register(Skill(name="yunjin.audit", agent="yunjin",
 
 
 # ==============================================================================
+# Chaewon: job hunt (JOB-HUNT-LSFM-PLAN Task 4)
+# ==============================================================================
+
+def _chaewon_hunt(slot: str = "") -> SkillResult:
+    try:
+        job_hunt = importlib.import_module("job_hunt")
+    except ImportError as e:
+        return SkillResult("failed", f"Job hunt failed: {e}")
+    return job_hunt.hunt(slot=slot)
+
+
+# changes_things=False: it only writes files under the job-hunt folder and never applies anywhere,
+# so the 10:00/20:00 loop never meets the R4 confirm gate.
+register(Skill(name="chaewon.hunt", agent="chaewon",
+               desc="Find fresh remote junior jobs, tailor a resume and cover letter for each, and queue them for review",
+               run=_chaewon_hunt, args={"slot": "run label such as 2026-10-15-am"},
+               keywords=("hunt", "job hunt", "find jobs"), timeout_s=600.0, heavy=True))
+
+
+# ==============================================================================
 # Transitional (ADR-001 R1-R4): today's planner names agents, not skills.
 # legacy_calls reproduces the keyword pick Ciel's _agent_job made for each migrated
 # agent. R5's planner returns skills itself and this goes away.

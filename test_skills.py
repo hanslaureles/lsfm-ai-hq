@@ -574,5 +574,16 @@ class TestRunBlockingMoved(unittest.TestCase):
         self.assertEqual(asyncio.run(heavy_jobs.run_blocking(sum, [1, 2], timeout=1, label="Sum")), 3)
 
 
+class JobHuntSkillTest(unittest.TestCase):
+    def test_hunt_skill_registered(self):
+        skill = skills.SKILLS["chaewon.hunt"]
+        self.assertIs(skill.changes_things, False)  # scheduled runs must never hit the confirm gate
+        self.assertIs(skill.heavy, True)
+        with mock.patch("job_hunt.hunt", return_value=SkillResult("done", "ok")) as hunt:
+            res = skills.run_skill("chaewon.hunt", {"slot": "x"})
+        self.assertEqual(res.status, "done")
+        hunt.assert_called_once_with(slot="x")
+
+
 if __name__ == "__main__":
     unittest.main()

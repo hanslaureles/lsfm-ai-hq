@@ -171,7 +171,7 @@ class RunDailyTest(unittest.TestCase):
 class EveryJobUsesRunDailyTest(unittest.TestCase):
     """A scheduled job that writes its own date file again would bring the duplicates back."""
 
-    JOBS = {"bot_sakura.py": ["post_daily_briefing_if_due", "post_evening_rollup_if_due"],
+    JOBS = {"bot_sakura.py": ["post_daily_briefing_if_due", "post_evening_rollup_if_due", "post_job_hunt_if_due"],
             "bot_eunchae.py": ["watchdog_loop"],
             "bot_kazuha.py": ["post_research_scout_if_due"],
             "bot_yunjin.py": ["post_portfolio_audit_if_due"],
@@ -189,6 +189,203 @@ class EveryJobUsesRunDailyTest(unittest.TestCase):
                     names = {getattr(c.func, "id", None) or getattr(c.func, "attr", None) for c in calls}
                     self.assertIn("run_daily", names)
                     self.assertNotIn("write_text", names)
+
+
+class FakeCardMessage:
+    _next = 100
+
+    def __init__(self, content=None, embed=None, files=None):
+        FakeCardMessage._next += 1
+        self.id, self.content, self.embeds, self.files = FakeCardMessage._next, content, [embed] if embed else [], files or []
+        self.reactions, self.edits = [], []
+
+    async def add_reaction(self, emoji):
+        self.reactions.append(emoji)
+
+    async def edit(self, embed=None, **kwargs):
+        self.edits.append(embed)
+
+
+class FakeCardChannel:
+    name = "approvals"
+
+    def __init__(self):
+        self.messages = []
+
+    async def send(self, content=None, embed=None, files=None, **kwargs):
+        msg = FakeCardMessage(content, embed, files)
+        self.messages.append(msg)
+        return msg
+
+    async def fetch_message(self, msg_id):
+        return next(m for m in self.messages if m.id == msg_id)
+
+
+class JobHuntBotTest(unittest.TestCase):
+    def setUp(self):
+        # Hermetic: deliver_job_hunt scans JOB_HUNT_DIR for uncarded jobs; never the live job-hunt folder.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.object(bot_sakura.job_hunt, "JOB_HUNT_DIR", Path(tmp.name))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def folder(self, root, name, status="queued"):
+        d = Path(root) / name
+        d.mkdir()
+        bot_sakura.job_hunt.write_meta(d, {"id": name, "company": "Acme", "role": "Junior AI Engineer", "site": "LinkedIn",
+                                           "posted": "2026-10-15", "fit": 80, "why": "Fits.", "salary": "", "thin": False,
+                                           "status": status, "card_msg_id": 0})
+        return d
+
+    def meta(self, d):
+        import json
+        return json.loads((d / "meta.json").read_text(encoding="utf-8"))
+
+    def test_slots(self):  # Review Focus 4
+        at = lambda h, m=0: bot_sakura.job_hunt_slot(real_datetime.datetime(2026, 10, 15, h, m))
+        self.assertIsNone(at(9, 59))
+        self.assertEqual((at(10, 20), at(19, 59)), ("2026-10-15-am", "2026-10-15-am"))
+        self.assertEqual((at(20), at(21, 30)), ("2026-10-15-pm", "2026-10-15-pm"))
+
+    def tick(self, state_file, now, result, channel):
+        with mock.patch.object(bot_sakura, "JOB_HUNT_SLOT_FILE", state_file), \
+                mock.patch.object(bot_sakura, "datetime", fake_datetime_module(now)), \
+                mock.patch.object(bot_sakura, "first_channel", return_value=channel), \
+                mock.patch.object(bot_sakura, "run_skill", return_value=result) as run:
+            asyncio.run(bot_sakura.post_job_hunt_if_due())
+        return run
+
+    def test_late_evening_runs_pm_once(self):
+        from skills import SkillResult
+        done = SkillResult("done", "ok", {"jobs": [], "skipped": [], "failed_sources": [], "slot": "x"})
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "slot.txt"
+            state.write_text("2026-10-15-am", encoding="utf-8")
+            channel = FakeCardChannel()
+            run = self.tick(state, real_datetime.datetime(2026, 10, 15, 21, 30), done, channel)
+            self.assertEqual(run.call_args.args, ("chaewon.hunt", {"slot": "2026-10-15-pm"}))
+            run2 = self.tick(state, real_datetime.datetime(2026, 10, 15, 21, 45), done, channel)
+            run2.assert_not_called()
+            self.assertEqual(state.read_text(encoding="utf-8"), "2026-10-15-pm")
+            self.assertEqual(len(channel.messages), 1)  # the header only: no jobs
+
+    def test_failed_hunt_claims_nothing(self):
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "slot.txt"
+            channel = FakeCardChannel()
+            self.tick(state, real_datetime.datetime(2026, 10, 15, 10, 5), SkillResult("failed", "x"), channel)
+            self.assertFalse(state.exists())
+            self.assertEqual(channel.messages, [])
+
+    def test_deliver_posts_header_and_one_card_per_job(self):
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = self.folder(tmp, "a"), self.folder(tmp, "b", status="needs_claude")
+            (a / "Hans_Aaron_Laureles_Resume.pdf").write_bytes(b"%PDF")
+            result = SkillResult("done", "ok", {"jobs": [str(a), str(b)], "skipped": [{}], "failed_sources": [], "slot": "s"})
+            channel = FakeCardChannel()
+            with mock.patch.object(bot_sakura, "save_pending_proposal") as save, \
+                    mock.patch.object(bot_sakura, "ObsidianClient", create=True):
+                asyncio.run(bot_sakura.deliver_job_hunt(channel, result))
+            self.assertEqual(len(channel.messages), 3)
+            self.assertIn("2 ready for review, 1 skipped", channel.messages[0].content)
+            for msg in channel.messages[1:]:
+                self.assertEqual(msg.reactions, ["✅", "❌"])
+            self.assertEqual(save.call_args_list[0].args[1], {"type": "job_hunt", "folder": str(a)})
+            self.assertEqual(self.meta(a)["card_msg_id"], channel.messages[1].id)
+            self.assertEqual(len(channel.messages[1].files), 1)
+            self.assertIn("Claude will tailor", channel.messages[2].embeds[0].description)
+
+    def test_busy_hunt_leaves_the_slot_unclaimed(self):  # Codex F1, through the real run_skill and hunt
+        with tempfile.TemporaryDirectory() as tmp:
+            state, channel = Path(tmp) / "slot.txt", FakeCardChannel()
+            with bot_sakura.job_hunt.HUNT_LOCK, \
+                    mock.patch.object(bot_sakura, "JOB_HUNT_SLOT_FILE", state), \
+                    mock.patch.object(bot_sakura, "datetime", fake_datetime_module(real_datetime.datetime(2026, 10, 15, 10, 5))), \
+                    mock.patch.object(bot_sakura, "first_channel", return_value=channel):
+                asyncio.run(bot_sakura.post_job_hunt_if_due())
+            self.assertFalse(state.exists())
+            self.assertEqual(channel.messages, [])
+
+    def test_timeout_cancels_the_hunt_and_claims_nothing(self):  # Codex F2
+        async def too_slow(*a, **k):
+            raise TimeoutError("job hunt timed out after 660 s")
+
+        bot_sakura.job_hunt.CANCEL.clear()
+        try:
+            with mock.patch.object(bot_sakura, "run_blocking", side_effect=too_slow):
+                self.assertIsNone(asyncio.run(bot_sakura.prepare_job_hunt("2026-10-15-am")))
+            self.assertTrue(bot_sakura.job_hunt.CANCEL.is_set())
+        finally:
+            bot_sakura.job_hunt.CANCEL.clear()
+
+    def test_an_unopenable_pdf_is_left_off_and_the_other_is_closed(self):  # Codex F3
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self.folder(tmp, "a")
+            (a / "Hans_Aaron_Laureles_Resume.pdf").write_bytes(b"%PDF")
+            (a / "Hans_Aaron_Laureles_Cover_Letter.pdf").write_bytes(b"%PDF")
+            opened = []
+
+            def file_or_locked(path, filename=None):
+                if "Cover" in path:
+                    raise PermissionError("locked by another process")
+                f = mock.MagicMock()
+                opened.append(f)
+                return f
+
+            channel = FakeCardChannel()
+            result = SkillResult("done", "ok", {"jobs": [str(a)], "skipped": [], "failed_sources": [], "slot": "s"})
+            with mock.patch.object(bot_sakura.discord, "File", side_effect=file_or_locked), \
+                    mock.patch.object(bot_sakura, "save_pending_proposal"), \
+                    mock.patch.object(bot_sakura, "ObsidianClient", create=True), \
+                    mock.patch.object(bot_sakura.job_hunt, "uncarded_folders", return_value=[]):
+                asyncio.run(bot_sakura.deliver_job_hunt(channel, result))
+            self.assertEqual(len(channel.messages[1].files), 1)
+            opened[0].close.assert_called_once()
+
+    def test_deliver_also_cards_jobs_a_cancelled_run_left(self):  # Codex F2: finished before a timeout, never carded
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = self.folder(tmp, "a"), self.folder(tmp, "b")
+            result = SkillResult("done", "ok", {"jobs": [str(a)], "skipped": [], "failed_sources": [], "slot": "s"})
+            channel = FakeCardChannel()
+            with mock.patch.object(bot_sakura, "save_pending_proposal"), \
+                    mock.patch.object(bot_sakura, "ObsidianClient", create=True), \
+                    mock.patch.object(bot_sakura.job_hunt, "uncarded_folders", return_value=[str(a), str(b)]):
+                asyncio.run(bot_sakura.deliver_job_hunt(channel, result))
+            self.assertEqual(len(channel.messages), 3)  # header + a + b, a only once
+            self.assertTrue(self.meta(b)["card_msg_id"])
+
+    def test_apply_job_reaction(self):  # Review Focus 3
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = [("queued", "✅", "approved"), ("queued", "❌", "rejected"), ("rejected", "✅", "approved"),
+                     ("approved", "❌", "rejected"), ("needs_claude", "❌", "rejected"), ("ready", "❌", "withdrawn"),
+                     ("applied", "❌", None), ("ready", "✅", None)]
+            for i, (before, emoji, after) in enumerate(cases):
+                with self.subTest(f"{before} {emoji}"):
+                    d = self.folder(tmp, f"j{i}", status=before)
+                    self.assertEqual(bot_sakura.apply_job_reaction(d, emoji), after)
+                    self.assertEqual(self.meta(d)["status"], after or before)
+
+    def test_job_reaction_skips_apply_branch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.folder(tmp, "a")
+            channel = FakeCardChannel()
+            card = asyncio.run(channel.send(embed=bot_sakura.build_job_card(self.meta(d))))
+            payload = types.SimpleNamespace(user_id=7, emoji="❌", message_id=card.id, channel_id=1)
+            fake_bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1), get_channel=lambda _id: channel)
+            with mock.patch.object(bot_sakura, "bot", fake_bot), \
+                    mock.patch.object(bot_sakura, "get_pending_proposal", return_value={"type": "job_hunt", "folder": str(d)}), \
+                    mock.patch.object(bot_sakura, "mark_proposal_status") as mark, \
+                    mock.patch.object(bot_sakura, "analyze_and_tailor") as tailor:
+                asyncio.run(bot_sakura.on_raw_reaction_add(payload))
+            mark.assert_not_called()
+            tailor.assert_not_called()
+            self.assertEqual(self.meta(d)["status"], "rejected")
+            self.assertIn("Rejected", card.edits[0].footer.text)
 
 
 HOLD = (

@@ -152,7 +152,7 @@ Experienced engineer.
         self.assertEqual(ctx["education_degree"], "BS Computer Science")
         self.assertEqual(ctx["education_institution"], "Stanford University")
         self.assertEqual(ctx["education_dates"], "2016 – 2020")
-        self.assertGreaterEqual(len(ctx["bullets"]), 2)
+        self.assertEqual(ctx["bullets"], [])  # no Highlights section: experience is not repeated
 
     def test_zero_invented_credentials_rendered_in_html(self):
         """build_resume_html must only render supplied data and zero preset credentials."""

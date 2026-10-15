@@ -1,7 +1,10 @@
 from heavy_jobs import run_heavy
 import re
+import json
+import time
 import asyncio
 import subprocess
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 from bs4 import BeautifulSoup
@@ -326,5 +329,102 @@ async def fetch_live_remote_jobs(query: str = "ai", location: str = "Philippines
     # Sort descending by score
     scored_jobs.sort(key=lambda x: x["score"], reverse=True)
     return scored_jobs[:limit]
+
+
+# --- Job hunt (JOB-HUNT-LSFM-PLAN Task 2): plain-request sources, no browser ---
+JOB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+
+def get_with_backoff(url: str, tries: int = 3, timeout: float = 15) -> str:
+    """GET url as text; sleeps 2 s then 4 s between tries (MEM-009) and raises the last error."""
+    for attempt in range(1, tries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": JOB_UA, "Accept": "application/json,text/html"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", "ignore")
+        except Exception:  # quiet: retried, and the last failure is re-raised to the caller
+            if attempt == tries:
+                raise
+            time.sleep(2 ** attempt)
+
+
+def parse_jobstreet(payload: dict) -> list[dict]:
+    """Jobstreet v5 search items as job dicts. The job page itself is 403, so the text is the teaser + bullets (thin)."""
+    jobs = []
+    for j in payload.get("data") or []:
+        bullets = [b for b in (j.get("bulletPoints") or []) if isinstance(b, str)]
+        jobs.append({
+            "title": j.get("title") or "",
+            "company": (j.get("advertiser") or {}).get("description") or "",
+            "url": f"https://ph.jobstreet.com/job/{j.get('id')}",
+            "site": "Jobstreet",
+            "posted_raw": j.get("listingDate") or "",
+            "salary": j.get("salaryLabel") or "",
+            "work_arrangement": (j.get("workArrangements") or {}).get("displayText") or "",
+            "description": "\n".join([j.get("teaser") or "", *bullets]).strip(),
+            "thin": True,
+        })
+    return jobs
+
+
+def fetch_jobstreet(query: str, page_size: int = 30) -> list[dict]:
+    url = ("https://ph.jobstreet.com/api/jobsearch/v5/search?siteKey=PH-Main&where=Remote"
+           f"&keywords={quote(query)}&daterange=7&pageSize={page_size}&sortmode=ListedDate")
+    return parse_jobstreet(json.loads(get_with_backoff(url)))
+
+
+def parse_linkedin_cards(html: str) -> list[dict]:
+    """Job cards from a LinkedIn guest search page; the search URL already asked for remote jobs."""
+    jobs = []
+    for card in BeautifulSoup(html, "html.parser").find_all("li"):
+        t_el = card.find("h3", class_="base-search-card__title")
+        # Some cards carry the link on the card itself instead of an overlay link.
+        link = card.find("a", class_="base-card__full-link") or card.find("a", class_="base-card")
+        if not (t_el and link and link.has_attr("href")):
+            continue
+        c_el = card.find("h4", class_="base-search-card__subtitle")
+        time_el = card.find("time")
+        job_id = linkedin_job_id(link["href"])
+        if not job_id:
+            continue
+        jobs.append({
+            "title": t_el.get_text(strip=True),
+            "company": c_el.get_text(strip=True) if c_el else "",
+            # One URL form for every LinkedIn job, the same the Claude routine writes to seen.txt.
+            "url": f"https://www.linkedin.com/jobs/view/{job_id}/",
+            "site": "LinkedIn",
+            "posted_raw": (time_el.get("datetime") or time_el.get_text(strip=True)) if time_el else "",
+            "salary": "",
+            "work_arrangement": "Remote",
+            "description": "",
+            "thin": False,
+        })
+    return jobs
+
+
+def fetch_linkedin_remote(query: str) -> list[dict]:
+    """LinkedIn guest search: Philippines, remote (f_WT=2), past week, internship/entry/associate, newest first."""
+    url = ("https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?"
+           f"keywords={quote(query)}&location=Philippines&f_WT=2&f_TPR=r604800&f_E=1%2C2%2C3&sortBy=DD&start=0")
+    return parse_linkedin_cards(get_with_backoff(url))
+
+
+def linkedin_job_id(url: str) -> str | None:
+    m = re.search(r"/jobs/view/(?:[^/?]*-)?(\d{6,})", url or "")
+    return m.group(1) if m else None
+
+
+def linkedin_description(html: str) -> str:
+    """Text of a LinkedIn guest job posting's description block."""
+    soup = BeautifulSoup(html, "html.parser")
+    block = soup.find(class_="show-more-less-html__markup") or soup.find(class_="description__text")
+    return clean_html_text(str(block)) if block else ""
+
+
+def fetch_linkedin_description(url: str) -> str:
+    job_id = linkedin_job_id(url)
+    if not job_id:
+        raise ValueError(f"not a LinkedIn job URL: {url}")
+    return linkedin_description(get_with_backoff(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"))
 
 

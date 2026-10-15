@@ -319,13 +319,8 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 elif ls.startswith("- **Relevant Coursework:**") or "coursework:" in ls.lower():
                     ctx["education_coursework"] = ls.split(":", 1)[1].strip().strip("*").strip()
 
-    # Key Technical Impact bullets
-    if not ctx.get("bullets"):
-        all_bullets = []
-        for exp in ctx.get("experience", []):
-            all_bullets.extend(exp.get("bullets", []))
-        if all_bullets:
-            ctx["bullets"] = all_bullets[:4]
+    # Key Technical Impact bullets come only from a Highlights section: copying the
+    # experience bullets here printed the internship twice on one page.
 
     # Required fields check
     missing = []
@@ -729,8 +724,8 @@ def build_cover_letter_html(data: Dict[str, Any]) -> str:
     portfolio_url = data.get("portfolio_url") or os.getenv("PORTFOLIO_URL", "https://example.com")
     portfolio_display = data.get("portfolio_display") or os.getenv("PORTFOLIO_DISPLAY", "example.com")
     
-    portfolio_link = f'<a href="{portfolio_url}" target="_blank" style="color: #2563eb; text-decoration: none;">🌐 {portfolio_display}</a>'
-    email_link = f'<a href="mailto:{email}" style="color: #2563eb; text-decoration: none;">✉️ {email}</a>'
+    portfolio_link = f'<a href="{portfolio_url}" target="_blank" style="color: #2563eb; text-decoration: none;">{portfolio_display}</a>'
+    email_link = f'<a href="mailto:{email}" style="color: #2563eb; text-decoration: none;">{email}</a>'
 
     date_str = data.get("date_str", "October 2026")
 
@@ -876,7 +871,7 @@ def build_cover_letter_html(data: Dict[str, Any]) -> str:
     <div class="target-title">{title}</div>
   </div>
   <div class="contact-bar">
-    <span>📍 {location}</span>
+    <span>{location}</span>
     <span>{email_link}</span>
     <span>{portfolio_link}</span>
   </div>
@@ -896,7 +891,7 @@ def build_cover_letter_html(data: Dict[str, Any]) -> str:
 <div class="signoff">
   <p>Sincerely,</p>
   <div class="signature-name">{name}</div>
-  <p style="font-size: 9.2pt; color: #64748b;">Applied AI Engineer & Full-Stack Builder</p>
+  <p style="font-size: 9.2pt; color: #64748b;">{title}</p>
 </div>
 
 </body>
@@ -1034,7 +1029,7 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
 
     raw_name = context.get("name") or os.getenv("OWNER_NAME", "Candidate")
     slug_name = re.sub(r'[^A-Za-z0-9]+', '_', raw_name.strip()).strip('_')
-    master_pdf = out_dir / f"{slug_name}_Master_Resume.pdf"
+    master_pdf = out_dir / f"{slug_name}_Resume.pdf"  # no "Master": recruiters see this name
 
     html = build_resume_html(context)
     success = render_html_to_pdf(html, master_pdf)

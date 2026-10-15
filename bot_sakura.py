@@ -44,10 +44,17 @@ from kazuha_engine import generate_tech_pitch
 from web_tools import find_url_in_text, scrape_job_url
 from discord_utils import send_clean_embeds
 from daily_once import run_daily
+from heavy_jobs import run_blocking
+from skills import run_skill, SkillResult
+from obsidian_client import ObsidianClient
+import job_hunt
 
 APPLICATIONS_DIR = Path(__file__).parent / "applications"
 BRIEFING_DATE_FILE = MEMORY_DIR / "last_briefing_date.txt"
 ROLLUP_DATE_FILE = MEMORY_DIR / "last_rollup_date.txt"
+JOB_HUNT_SLOT_FILE = MEMORY_DIR / "last_job_hunt_slot.txt"
+JOB_HUNT_TIMEOUT_S = 660  # Sakura's wait; the hunt's own budget is job_hunt.HUNT_DEADLINE_S (480 s)
+JOB_HUNT_DASHBOARD = os.getenv("JOB_HUNT_DASHBOARD", "")  # the private claude.ai dashboard link, kept out of the repo
 
 def find_channel_by_name(guild: discord.Guild, name: str):
     """Locates a text channel in the guild matching name case-insensitively."""
@@ -130,6 +137,144 @@ async def scheduled_rollup_loop():
     await post_evening_rollup_if_due()
 
 
+# ------------------------------------------------------------------------------
+# Job hunt (JOB-HUNT-LSFM-PLAN Task 5): Chaewon's chaewon.hunt at 10:00 and 20:00,
+# one #approvals card per job; ✅/❌ set meta.json for the Claude form-filling run.
+# ------------------------------------------------------------------------------
+
+def job_hunt_slot(now: datetime.datetime):
+    """'YYYY-MM-DD-am' from 10:00, '-pm' from 20:00, None before 10:00."""
+    if now.hour >= 20:
+        return f"{now:%Y-%m-%d}-pm"
+    if now.hour >= 10:
+        return f"{now:%Y-%m-%d}-am"
+    return None
+
+
+def _read_meta(folder: Path) -> dict:
+    import json
+    return json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))
+
+
+def build_job_card(meta: dict) -> discord.Embed:
+    lines = []
+    if meta.get("status") == "needs_claude":
+        lines.append("Claude will tailor this one (Chaewon could not).")
+    elif meta.get("thin"):
+        lines.append("⚠️ Thin posting: Claude will re-tailor from the full page.")
+    if meta.get("why"):
+        lines.append(meta["why"])
+    embed = discord.Embed(title=f"⭐ {meta.get('role', '')} · {meta.get('company', '')}"[:256],
+                          description="\n".join(lines) or None, url=meta.get("url") or None, color=0xF472B6)
+    embed.add_field(name="Site", value=meta.get("site") or "?", inline=True)
+    embed.add_field(name="Posted", value=meta.get("posted") or "?", inline=True)
+    embed.add_field(name="Fit", value=str(meta["fit"]) if meta.get("fit") else "not tailored", inline=True)
+    if meta.get("salary"):
+        embed.add_field(name="Salary", value=meta["salary"][:100], inline=True)
+    embed.set_footer(text=f"✅ fill it · ❌ skip it · {meta.get('id', '')}"[:2048])
+    return embed
+
+
+JOB_REACTIONS = {("✅", "queued"): "approved", ("✅", "needs_claude"): "approved", ("✅", "rejected"): "approved",
+                 ("❌", "queued"): "rejected", ("❌", "needs_claude"): "rejected", ("❌", "approved"): "rejected",
+                 ("❌", "ready"): "withdrawn"}
+
+
+def apply_job_reaction(folder: Path, emoji: str):
+    """The new meta.json status for a reaction, written; None when the reaction changes nothing (e.g. applied)."""
+    meta = _read_meta(folder)
+    new = JOB_REACTIONS.get((emoji, meta.get("status")))
+    if new:
+        meta.update(status=new, updated=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"))
+        job_hunt.write_meta(Path(folder), meta)
+    return new
+
+
+async def run_job_hunt(slot: str):
+    """chaewon.hunt off the event loop. On a timeout the worker thread keeps running, so CANCEL tells it to
+    stop at its next checkpoint without writing a run summary (Codex QA F2)."""
+    try:
+        return await run_blocking(run_skill, "chaewon.hunt", {"slot": slot}, timeout=JOB_HUNT_TIMEOUT_S,
+                                  label="job hunt", heavy=True)
+    except TimeoutError as e:
+        job_hunt.CANCEL.set()
+        return SkillResult("failed", f"{e}; the hunt was cancelled. Finished jobs get their cards on the next run.")
+
+
+async def prepare_job_hunt(slot: str):
+    """The run_daily prepare step: None when the hunt failed, was busy or timed out, so the slot is not claimed."""
+    result = await run_job_hunt(slot)
+    if result.status == "failed":
+        print(f"⚠️ [Sakura] job hunt {slot} not ready: {result.text}", flush=True)
+        return None
+    return result
+
+
+async def deliver_job_hunt(channel, result):
+    data = result.data
+    # This run's jobs, plus any an earlier cancelled run finished without a card.
+    folders = list(dict.fromkeys([*data.get("jobs", []), *job_hunt.uncarded_folders(datetime.datetime.now().date())]))
+    skipped, failed = data.get("skipped", []), data.get("failed_sources", [])
+    header = f"🌸 Job hunt {data.get('slot', '')}: {len(folders)} ready for review, {len(skipped)} skipped"
+    if failed:
+        header += f"\nSources that failed: {', '.join(failed)}"
+    header += "\nNo reaction = the next Claude run fills it. ❌ = skip."
+    if JOB_HUNT_DASHBOARD:
+        header += f" Dashboard: {JOB_HUNT_DASHBOARD}"
+    await channel.send(content=header)
+    for folder in folders:
+        folder = Path(folder)
+        meta = _read_meta(folder)
+        files = []
+        try:  # open inside the cleanup scope: a second PDF that fails to open must not leak the first (Codex F3)
+            for p in (folder / "Hans_Aaron_Laureles_Resume.pdf", folder / "Hans_Aaron_Laureles_Cover_Letter.pdf"):
+                if p.exists():
+                    try:
+                        files.append(discord.File(str(p), filename=p.name))
+                    except OSError as e:  # locked or unreadable: the card goes out without it
+                        print(f"⚠️ [Sakura] could not attach {p.name}: {type(e).__name__}: {e}", flush=True)
+            msg = await channel.send(embed=build_job_card(meta), files=files)
+        finally:
+            for f in files:  # a failed send would otherwise keep the PDFs locked on Windows
+                f.close()
+        await msg.add_reaction("✅")
+        await msg.add_reaction("❌")
+        save_pending_proposal(msg.id, {"type": "job_hunt", "folder": str(folder)})
+        meta["card_msg_id"] = msg.id
+        job_hunt.write_meta(folder, meta)
+    try:
+        ObsidianClient().log_session("Sakura", f"Job hunt {data.get('slot', '')}: {len(folders)} queued",
+                                     [f"Skipped: {len(skipped)}", f"Failed sources: {', '.join(failed) or 'none'}",
+                                      f"Dashboard: {JOB_HUNT_DASHBOARD or 'not set (JOB_HUNT_DASHBOARD in .env)'}"])
+    except Exception as _exc:
+        print(f"⚠️ [bot_sakura.deliver_job_hunt] suppressed {type(_exc).__name__}: {_exc}", flush=True)
+
+
+async def post_job_hunt_if_due():
+    # Chaewon's job hunt at most once per slot (10:00 and 20:00), through run_daily like the briefings.
+    now = datetime.datetime.now()
+    slot = job_hunt_slot(now)
+    channel = first_channel("approvals", "command-center") if slot else None
+    if not channel:
+        return
+
+    async def prepare():
+        return await prepare_job_hunt(slot)
+
+    async def deliver(result):
+        await deliver_job_hunt(channel, result)
+        print(f"🌸 [Sakura] Job hunt {slot} delivered to #{channel.name}", flush=True)
+
+    await run_daily(JOB_HUNT_SLOT_FILE, slot, "job hunt (!hunt)", prepare, deliver,
+                    notify=channel.send, due=lambda last: last != slot)
+
+
+@tasks.loop(minutes=30)
+async def scheduled_job_hunt_loop():
+    await bot.wait_until_ready()
+    await post_job_hunt_if_due()
+
+
 def build_brain_embed(status: dict) -> discord.Embed:
     mode = status["mode"].upper()
     color = 0xF472B6 if mode == "AUTO" else (0x3B82F6 if mode == "CLOUD" else 0x10B981)
@@ -202,6 +347,9 @@ async def on_ready():
 
     if not scheduled_rollup_loop.is_running():
         scheduled_rollup_loop.start()
+
+    if not scheduled_job_hunt_loop.is_running():
+        scheduled_job_hunt_loop.start()
 
 
 def handle_qa_audit_failure(exc: Exception) -> dict:
@@ -536,6 +684,15 @@ async def on_raw_reaction_add(payload):
         print(f"⚠️ [bot_sakura.on_raw_reaction_add] suppressed {type(_exc).__name__}: {_exc}", flush=True)
         target_msg = None
 
+    if data.get("type") == "job_hunt":  # job hunt cards: only meta.json changes, never the !apply flow below
+        new = apply_job_reaction(Path(data["folder"]), emoji_str)
+        if new and target_msg and target_msg.embeds:
+            embed = target_msg.embeds[0]
+            embed.set_footer(text={"approved": "Approved", "rejected": "Rejected: the next Claude run skips it",
+                                   "withdrawn": "Withdrawn"}[new])
+            await target_msg.edit(embed=embed)
+        return
+
     if emoji_str == "✅":
         mark_proposal_status(payload.message_id, "Approved")
 
@@ -763,6 +920,18 @@ async def help_command(ctx):
     )
     embed.set_footer(text="LE SSERAFIM AI HQ • Sakura (Chief of Staff)")
     await ctx.reply(embed=embed)
+
+
+@bot.command(name="hunt")
+async def hunt_cmd(ctx):
+    """Runs Chaewon's job hunt now (same as the 10:00/20:00 run) and posts the cards here."""
+    await ctx.reply("🌸 Chaewon is hunting for jobs… (about 5 minutes)")
+    slot = f"manual-{datetime.datetime.now():%Y%m%d-%H%M}"
+    result = await run_job_hunt(slot)
+    if result.status == "failed":  # busy, timed out or failed: say which
+        await ctx.reply(f"⚠️ {result.text}")
+        return
+    await deliver_job_hunt(ctx.channel, result)
 
 
 @bot.command(name="apply")

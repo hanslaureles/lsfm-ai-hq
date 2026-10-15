@@ -39,3 +39,4 @@ jobs:
           test_health_recorder.py test_eunchae_publisher.py test_bot_guards.py
           bench/test_bench.py bench/test_bench_telemetry.py
           test_routing_eval.py test_skills.py
+          test_job_package.py
