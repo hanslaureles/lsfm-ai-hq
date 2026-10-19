@@ -180,6 +180,84 @@ NEEDS_CONFIRM_RULE = ("\nIf any finding has status \"needs_confirm\", that actio
                       "Ask Hans to say confirm or cancel. Never say it was done.")
 
 
+# Ciel's own vault actions and the keywords the fallback router matches for them (R5).
+CIEL_KEYWORDS = {
+    "ciel_read_rules": ("learned rule", "learned rules", "heuristics", "my rules", "engineering rules"),
+    "ciel_read_profile": ("my profile", "who am i", "candidate profile", "about me"),
+    "ciel_read_preferences": ("my preference", "my preferences", "working preferences", "working style",
+                              "communication preference"),
+    "ciel_save_to_daily": ("save that", "save this", "log that", "log this", "record that", "note that down"),
+}
+SAVE_PLACES = ("note", "daily", "obsidian", "log")  # a save also has to say where
+AGAIN_WORDS = ("again", "re-run", "rerun", "もう一度")
+ROUTER_INTENTS = ("live_weather", "web_search", "general_knowledge", "obsidian_brain", "agent_delegation")
+CIEL_TARGETS = ("live_weather", "web_search", *CIEL_KEYWORDS)  # router tool_targets _run_mission acts on
+
+
+def make_plan(calls: list, direct: str = None, intent: str = None, targets: list = (), summary: str = None) -> dict:
+    """A plan in the shape _run_mission reads: the old keys plus `calls` ([[name, args], ...])."""
+    calls = [[name, args] for name, args in calls]
+    agents = list(dict.fromkeys(name.split(".")[0] for name, _ in calls))
+    tool_targets = list(dict.fromkeys([*targets, *([direct] if direct else []), *(name for name, _ in calls)]))
+    intent = intent or ("agent_delegation" if calls else "obsidian_brain" if direct else "general_knowledge")
+    return {"intent_type": intent, "agents_needed": agents, "tool_targets": tool_targets or ["direct_knowledge"],
+            "direct_obsidian": direct, "calls": calls, "requires_real_tools": bool(calls or direct or targets),
+            "action_summary": summary or ("Executing subordinate agent delegation." if calls else
+                                          "Accessing universal knowledge base for direct intellectual synthesis.")}
+
+
+def _optional_str(parsed: dict, key: str):
+    value = parsed.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{key} must be a string or null")
+    return value or None
+
+
+def _optional_list(parsed: dict, key: str) -> list:
+    """A list field: absent or null is empty; anything else that is not a list ({}, False, 0, "") is a bad plan."""
+    value = parsed.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list or null, got {type(value).__name__}")
+    return value
+
+
+def parse_router_plan(parsed, prompt: str) -> dict:
+    """The router LLM's JSON as a plan. ValueError for anything the registry does not back
+    (unknown or hidden skill, bad arg, malformed entry, unknown action) - the caller falls back."""
+    if not isinstance(parsed, dict):
+        raise ValueError("the router answer is not a JSON object")
+    intent = parsed.get("intent_type")
+    if intent not in ROUTER_INTENTS:
+        raise ValueError(f"unknown intent_type {intent!r:.40}")
+    raw = _optional_list(parsed, "skills")
+    calls = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError(f"a skill entry must be an object, got {entry!r:.60}")
+        skill, args = skills.validate_call(entry.get("name"), entry.get("args"), planner=True)
+        calls.append((skill.name, skills.with_prompt_args(skill.name, args, prompt)))
+    if intent == "agent_delegation" and not calls:
+        raise ValueError("a delegation that names no skill")
+    targets = _optional_list(parsed, "tool_targets")
+    if not all(isinstance(x, str) for x in targets):
+        raise ValueError("tool_targets must be a list of strings")
+    targets = [x for x in targets if x in CIEL_TARGETS]  # skill names come from `skills` only
+    direct = _optional_str(parsed, "direct_obsidian")
+    if direct is not None and direct not in CIEL_KEYWORDS:
+        raise ValueError(f"unknown vault action {direct!r:.40}")
+    if intent in ("live_weather", "web_search"):
+        targets.append(intent)
+    if intent == "obsidian_brain" and not direct and not any(x in CIEL_KEYWORDS for x in targets):
+        raise ValueError("a vault plan that names no vault action")
+    summary = parsed.get("action_summary") if isinstance(parsed.get("action_summary"), str) else None
+    plan = make_plan(calls, direct, None if calls else intent, targets, summary)
+    plan["location"] = _optional_str(parsed, "location") or ""
+    plan["search_query"] = _optional_str(parsed, "search_query")
+    return plan
+
+
 def reply_word(prompt: str):
     """'confirm' or 'cancel' only when the whole prompt is one of those words ("Ciel, confirm." counts;
     "no problem, check vitals" and "yes check vitals too" do not), else None (Review Focus 2)."""
@@ -287,10 +365,6 @@ class CielOrchestrator:
             return content[:3500] if len(content) > 3500 else content
         except Exception as e:
             return f"Notice: Error reading note '{clean_path}': {e}"
-
-    def ciel_search_vault(self, query: str) -> list:
-        """Directly performs a full-text search across all markdown notes in the Obsidian Brain."""
-        return self.obsidian.search_simple(query)
 
     def ciel_log_to_daily(self, text: str, heading: str = "Ciel Direct Entry") -> bool:
         """Appends an operational insight, user preference, or mission summary directly to today's daily log."""
@@ -485,6 +559,8 @@ class CielOrchestrator:
             h_lines = []
             for idx, turn in enumerate(recent_turns, 1):
                 h_lines.append(f"Turn {idx}: User asked \"{turn.get('user_prompt')}\"")
+                if turn.get("skills_called"):
+                    h_lines.append(f"  Skills run: {', '.join(name for name, _ in turn['skills_called'])}")
                 if turn.get("agent_results"):
                     h_lines.append(f"  Findings: {json.dumps(turn.get('agent_results'))}")
                 h_lines.append(f"  Ciel reported: \"{turn.get('ciel_reply')}\"")
@@ -529,32 +605,24 @@ Queries specifically targeting Hans's personal Obsidian Second Brain vault:
 - "ciel_read_rules": Read workspace learned rules & heuristics ({VAULT_PATHS["learned_rules"]}).
 - "ciel_read_profile": Read Hans's professional profile & identity ({VAULT_PATHS["profile"]}).
 - "ciel_read_preferences": Read Hans's working style & communication preferences ({VAULT_PATHS["preferences"]}).
-- "ciel_search_vault": Search Obsidian vault notes for a specific personal note or topic.
 - "ciel_save_to_daily": Save previous findings or user notes to today's Obsidian daily log.
 - "intent_type": "obsidian_brain"
 - "agents_needed": []
 - "requires_real_tools": true
 
-5. SUBORDINATE_AGENT_DELEGATION:
-Explicit tasks targeting the local machine, repository, or workspace agents:
-- "kazuha": Local Git status, branch, staged/unstaged diff, commit verification, secret leak scanning, frontend CSS tokens.
-- "sakura": Gmail unread inbox triage, recruiter outreach, daily briefings.
-- "chaewon": ATS vector resume PDF compilation, job matching, career assets.
-- "yunjin": Portfolio DOM integrity, broken link/image scans, case study audits.
-- "eunchae": PC hardware vitals (CPU, RAM, storage, uptime), running test scripts on local system.
-- "intent_type": "agent_delegation"
-- "agents_needed": List of agents to call from ["sakura", "chaewon", "kazuha", "yunjin", "eunchae"].
-- "requires_real_tools": true
+5. SKILLS — choose zero or more from this list:
+{skills.router_catalog()}
+Choose skills for anything about Hans's own machine, repositories, inbox, notes, schedule, resume, job search or portfolio. Fill an arg only when the request gives it; leave the rest out. When you choose skills, "intent_type" is "agent_delegation".
 
 Multi-Turn Follow-Up Resolution:
-If the user refers to previous results (e.g. "what were those 2 risks?", "tell me more about that error", "save that to my notes", "re-run the check"), use the Recent Conversation Context to assign the correct agent, direct brain action, or continue direct general discussion.
+If the user refers to previous results (e.g. "what were those 2 risks?", "tell me more about that error", "save that to my notes", "re-run the check"), use the Recent Conversation Context to choose the same skill again, a direct brain action, or continue direct general discussion.
 
 Analyze the user's prompt and return a JSON object with:
 1. "intent_type": "live_weather" | "web_search" | "general_knowledge" | "obsidian_brain" | "agent_delegation"
-2. "agents_needed": List of agents from ["sakura", "chaewon", "kazuha", "yunjin", "eunchae"]. Empty if general knowledge, weather, search, or direct brain.
+2. "skills": List of {{"name": "<skill name from the list>", "args": {{"<arg>": "<string>"}}}}. Empty unless agent_delegation.
 3. "action_summary": A brief 1-sentence description of the mission plan.
 4. "requires_real_tools": Boolean.
-5. "tool_targets": List of sub-actions.
+5. "tool_targets": Ciel's own actions from categories 1-4 (e.g. "live_weather", "ciel_read_rules"), or [].
 6. "location": City name if live_weather, or null.
 7. "search_query": Query string if web_search, or null.
 8. "direct_obsidian": Name of direct vault action if applicable, or null.
@@ -573,159 +641,30 @@ Respond ONLY with valid JSON.
                 clean_json = clean_json.split("```json")[1].split("```")[0].strip()
             elif "```" in clean_json:
                 clean_json = clean_json.split("```")[1].split("```")[0].strip()
-            parsed = json.loads(clean_json)
-            intent = parsed.get("intent_type", "")
-            agents = parsed.get("agents_needed", [])
-            targets = parsed.get("tool_targets", [])
-            direct_obsidian = parsed.get("direct_obsidian")
-
-            # Check direct Obsidian triggers in fallback
-            if any(w in p_lower for w in ["learned rule", "learned rules", "heuristics", "my rules", "engineering rules"]):
-                if "ciel_read_rules" not in targets:
-                    targets.append("ciel_read_rules")
-                direct_obsidian = "ciel_read_rules"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["my profile", "who am i", "candidate profile", "about me"]):
-                if "ciel_read_profile" not in targets:
-                    targets.append("ciel_read_profile")
-                direct_obsidian = "ciel_read_profile"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["my preference", "my preferences", "working style", "communication preference"]):
-                if "ciel_read_preferences" not in targets:
-                    targets.append("ciel_read_preferences")
-                direct_obsidian = "ciel_read_preferences"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["save that", "save this", "log that", "log this", "record that", "note that down"]) and any(w in p_lower for w in ["note", "daily", "obsidian", "log"]):
-                if "ciel_save_to_daily" not in targets:
-                    targets.append("ciel_save_to_daily")
-                direct_obsidian = "ciel_save_to_daily"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["search vault", "search notes", "find in notes", "search my brain"]):
-                if "ciel_search_vault" not in targets:
-                    targets.append("ciel_search_vault")
-                direct_obsidian = "ciel_search_vault"
-                intent = "obsidian_brain"
-
-            # Multi-turn follow-up resolution if agents is empty but recent turn had an agent
-            if not agents and not direct_obsidian and turns and intent != "general_knowledge":
-                last_turn = turns[-1]
-                last_agents = last_turn.get("agents_called", [])
-                if any(w in p_lower for w in ["those", "that", "it", "more", "explain", "detail", "re-run", "again"]):
-                    if "kazuha" in last_agents and any(w in p_lower for w in ["risk", "risks", "security", "git", "file", "files", "diff", "branch", "staged"]):
-                        agents.append("kazuha")
-                        targets.append("git_status")
-                    elif "eunchae" in last_agents and any(w in p_lower for w in ["vital", "vitals", "cpu", "ram", "hardware"]):
-                        agents.append("eunchae")
-                        targets.append("check_vitals")
-                    elif "yunjin" in last_agents and any(w in p_lower for w in ["dom", "link", "links", "broken", "page", "portfolio"]):
-                        agents.append("yunjin")
-                        targets.append("scan_links")
-                    elif "sakura" in last_agents and any(w in p_lower for w in ["inbox", "email", "gmail", "mail", "unread", "briefing"]):
-                        agents.append("sakura")
-                        targets.append("check_inbox")
-                    elif "chaewon" in last_agents and any(w in p_lower for w in ["resume", "cv", "pdf", "ats"]):
-                        agents.append("chaewon")
-                        targets.append("compile_resume")
-
-            # Local action fallback: ONLY auto-assign if specific local keywords match AND not a general question
-            if not agents and not direct_obsidian and intent != "general_knowledge":
-                if any(w in p_lower for w in ["our git", "my git", "repo status", "staged changes", "git diff", "git status", "git branch", "secret leak", "kazuha"]):
-                    agents.append("kazuha")
-                    if "git_status" not in targets:
-                        targets.append("git_status")
-                elif any(w in p_lower for w in ["check inbox", "my inbox", "triage email", "unread email", "unread emails", "check gmail", "morning briefing", "recruiter email"]):
-                    agents.append("sakura")
-                    if "check_inbox" not in targets:
-                        targets.append("check_inbox")
-                elif any(w in p_lower for w in ["scan portfolio", "broken links", "audit portfolio", "audit dom", "check 404", "portfolio audit", "yunjin"]):
-                    agents.append("yunjin")
-                    if "scan_links" not in targets:
-                        targets.append("scan_links")
-                elif any(w in p_lower for w in ["compile resume", "my resume pdf", "generate resume", "ats resume", "match job", "chaewon"]):
-                    agents.append("chaewon")
-                    if "compile_resume" not in targets:
-                        targets.append("compile_resume")
-                elif any(w in p_lower for w in ["hardware vitals", "system vitals", "pc vitals", "cpu temp", "gpu temp", "ram usage", "check vitals", "eunchae"]):
-                    agents.append("eunchae")
-                    targets.append("check_vitals")
-                elif any(w in p_lower for w in ["run test suite", "run smoke tests", "run repo tests"]):
-                    agents.append("eunchae")
-                    targets.append("run_tests")
-
-            # If no local tools or agents are assigned, classify cleanly as general knowledge
-            if not agents and not direct_obsidian:
-                intent = "general_knowledge"
-                targets = ["direct_knowledge"]
-                parsed["action_summary"] = "Accessing universal knowledge base for direct intellectual synthesis."
-
-            parsed["intent_type"] = intent
-            parsed["agents_needed"] = agents
-            parsed["tool_targets"] = targets
-            parsed["direct_obsidian"] = direct_obsidian
-            parsed["requires_real_tools"] = len(agents) > 0 or bool(direct_obsidian)
-            parsed["planner"] = {"source": "llm", "provider": plan_meta.get("provider"),
-                                 "model": plan_meta.get("model"), "fallback_chain": plan_meta.get("chain", [])}
-            return parsed
-        except Exception as _exc:
+            plan = parse_router_plan(json.loads(clean_json), prompt)
+            plan["planner"] = {"source": "llm", "provider": plan_meta.get("provider"),
+                               "model": plan_meta.get("model"), "fallback_chain": plan_meta.get("chain", [])}
+            return plan
+        except Exception as _exc:  # no answer, bad JSON or an invalid skill call: the keywords decide
             print(f"⚠️ [ciel_orchestrator.analyze_and_plan] suppressed {type(_exc).__name__}: {_exc}", flush=True)
-            # Fallback heuristic router
-            agents = []
-            targets = []
-            direct_obsidian = None
-            intent = "general_knowledge"
+            plan = self.keyword_route(prompt, turns)
+            # The chain is every model tried before the failure (empty if none answered at all).
+            plan["planner"] = {"source": "fallback", "provider": None, "model": None,
+                               "fallback_chain": plan_meta.get("chain", [])}
+            return plan
 
-            if any(w in p_lower for w in ["learned rule", "learned rules", "heuristics", "my rules", "engineering rules"]):
-                targets.append("ciel_read_rules")
-                direct_obsidian = "ciel_read_rules"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["my profile", "who am i", "candidate profile", "about me"]):
-                targets.append("ciel_read_profile")
-                direct_obsidian = "ciel_read_profile"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["my preference", "my preferences", "working style", "communication preference"]):
-                targets.append("ciel_read_preferences")
-                direct_obsidian = "ciel_read_preferences"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["save that", "save this", "log that", "log this"]) and any(w in p_lower for w in ["note", "daily", "obsidian", "log"]):
-                targets.append("ciel_save_to_daily")
-                direct_obsidian = "ciel_save_to_daily"
-                intent = "obsidian_brain"
-            elif any(w in p_lower for w in ["our git", "my git", "repo status", "staged changes", "git diff", "git status", "git branch", "secret leak", "kazuha"]):
-                agents.append("kazuha")
-                targets.append("git_status")
-                intent = "agent_delegation"
-            elif any(w in p_lower for w in ["check inbox", "my inbox", "triage email", "unread email", "unread emails", "check gmail", "morning briefing", "recruiter email"]):
-                agents.append("sakura")
-                targets.append("check_inbox")
-                intent = "agent_delegation"
-            elif any(w in p_lower for w in ["scan portfolio", "broken links", "audit portfolio", "audit dom", "check 404", "portfolio audit", "yunjin"]):
-                agents.append("yunjin")
-                targets.append("scan_links")
-                intent = "agent_delegation"
-            elif any(w in p_lower for w in ["compile resume", "my resume pdf", "generate resume", "ats resume", "match job", "chaewon"]):
-                agents.append("chaewon")
-                targets.append("compile_resume")
-                intent = "agent_delegation"
-            elif any(w in p_lower for w in ["hardware vitals", "system vitals", "pc vitals", "cpu temp", "gpu temp", "ram usage", "check vitals", "eunchae"]):
-                agents.append("eunchae")
-                targets.append("check_vitals")
-                intent = "agent_delegation"
-            else:
-                # Default to general knowledge synthesis
-                targets = ["direct_knowledge"]
-                intent = "general_knowledge"
-
-            return {
-                "intent_type": intent,
-                "agents_needed": agents,
-                "action_summary": "Executing subordinate agent delegation." if agents else "Accessing universal knowledge base for direct intellectual synthesis.",
-                "requires_real_tools": len(agents) > 0 or bool(direct_obsidian),
-                "tool_targets": targets,
-                "direct_obsidian": direct_obsidian,
-                # The chain is every model tried before the failure (empty if none answered at all).
-                "planner": {"source": "fallback", "provider": None, "model": None,
-                            "fallback_chain": plan_meta.get("chain", [])},
-            }
+    def keyword_route(self, prompt: str, turns: list) -> dict:
+        """The one keyword router (R5): Ciel's vault actions, then each agent's skill keywords, then
+        "again" reuses the last turn's skills; anything else is a direct answer."""
+        p_lower = prompt.lower()
+        for action, words in CIEL_KEYWORDS.items():
+            if any(w in p_lower for w in words) and (
+                    action != "ciel_save_to_daily" or any(w in p_lower for w in SAVE_PLACES)):
+                return make_plan([], direct=action)
+        calls = skills.keyword_calls(prompt)
+        if not calls and any(w in p_lower for w in AGAIN_WORDS) and turns and turns[-1].get("skills_called"):
+            calls = [(name, args) for name, args in turns[-1]["skills_called"]]
+        return make_plan(calls)
 
     async def execute_mission(self, user_prompt: str, event_callback=None, mission_id: str = None,
                               session_id: str = None) -> dict:
@@ -783,7 +722,7 @@ Respond ONLY with valid JSON.
         # A reply sent before a reset or cancel never answers an action held after it.
         pending = conv.live_pending() if conv.pending_epoch == start_epoch else None
         word = reply_word(user_prompt) if pending else None
-        confirmed_calls = {}
+        confirmed = False
         if word == "cancel":
             conv.drop_pending()
             return await self._fast_reply(
@@ -793,11 +732,10 @@ Respond ONLY with valid JSON.
                 {"source": "confirm", "provider": None, "model": None, "fallback_chain": []})
         if word == "confirm":
             conv.pending = None
-            for name, args in pending["calls"]:
-                confirmed_calls.setdefault(skills.SKILLS[name].agent, []).append((name, args))
-            plan = {"intent_type": "local_operation", "agents_needed": list(confirmed_calls), "tool_targets": [],
-                    "action_summary": f"Running the confirmed action: {pending['text']}",
-                    "planner": {"source": "confirm", "provider": None, "model": None, "fallback_chain": []}}
+            confirmed = True
+            plan = make_plan(pending["calls"], intent="local_operation",
+                             summary=f"Running the confirmed action: {pending['text']}")
+            plan["planner"] = {"source": "confirm", "provider": None, "model": None, "fallback_chain": []}
         else:
             plan = await self.analyze_and_plan(user_prompt, history=list(conv.turns))
         # No planner: a keyword fast path decided without a model call (the HUD shows "PLAN keyword").
@@ -900,11 +838,6 @@ Respond ONLY with valid JSON.
             pref_doc = await vault(self.ciel_read_note, VAULT_PATHS["preferences"])
             direct_vault_results["user_preferences"] = pref_doc
 
-        if direct_action == "ciel_search_vault" or "ciel_search_vault" in tool_targets:
-            await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Searching vault notes..."})
-            matches = await vault(self.ciel_search_vault, user_prompt)
-            direct_vault_results["vault_matches"] = matches
-
         if direct_action == "ciel_save_to_daily" or "ciel_save_to_daily" in tool_targets:
             await emit("ciel_state", {"state": "analyzing", "message": "Accessing Obsidian Brain: Appending entry to Daily Log..."})
             last_turn = conv.turns[-1] if conv.turns else None
@@ -966,8 +899,10 @@ Respond ONLY with valid JSON.
         agent_status = {}
         # The agents are independent, so they run concurrently; results keep the plan's order.
         gated = []  # calls held for this tab's "confirm" (ADR-001 R4)
+        plan_calls = plan.get("calls") or []  # [[name, args]], validated by the planner (R5)
         outcomes = await asyncio.gather(*(
-            self._run_agent(agent, user_prompt, tool_targets, emit, confirmed_calls.get(agent), gated)
+            self._run_agent(agent, [(n, a) for n, a in plan_calls if n.split(".")[0] == agent], emit,
+                            user_prompt, confirmed, gated)
             for agent in agents_to_call
         ))
         for agent, (status, result_text) in zip(agents_to_call, outcomes):
@@ -1105,6 +1040,7 @@ Respond ONLY with valid JSON.
             "user_prompt": user_prompt,
             "intent_type": intent,
             "agents_called": agents_to_call,
+            "skills_called": plan_calls,  # what "run that again" reuses (R5)
             "agent_results": agent_results,
             "ciel_reply": final_reply,
             "japanese_voice": ja_speech,
@@ -1171,10 +1107,10 @@ Respond ONLY with valid JSON.
         return final_data
 
 
-    async def _run_agent(self, agent: str, user_prompt: str, tool_targets: list, emit,
-                         confirmed_calls=None, gated=None) -> tuple:
+    async def _run_agent(self, agent: str, calls: list, emit, user_prompt: str = "",
+                         confirmed: bool = False, gated=None) -> tuple:
         """Runs one subordinate's tool in a worker thread and reports its honest end state.
-        confirmed_calls: calls Hans already confirmed (run as given). Otherwise a call that changes
+        confirmed: Hans already confirmed these calls (run as given). Otherwise a call that changes
         things is not run: it is appended to `gated` and the agent ends "waiting" (ADR-001 R4)."""
         await emit("agent_state", {"agent": agent, "status": "active", "task": f"Executing delegated task: {agent}"})
         # The HUD shows this agent's measured time (5E-4): the work only, from the start of
@@ -1182,8 +1118,7 @@ Respond ONLY with valid JSON.
         # an agent whose work never started has no time (None), not a made-up 0.
         started = None
         try:
-            calls = confirmed_calls or skills.legacy_calls(agent, user_prompt, tool_targets)  # R5: the plan carries the calls
-            held = [] if confirmed_calls else [c for c in calls if skills.SKILLS[c[0]].changes_things]
+            held = [] if confirmed else [c for c in calls if skills.SKILLS[c[0]].changes_things]
             calls = [c for c in calls if c not in held]
             if gated is not None:
                 gated.extend(held)
@@ -1198,7 +1133,7 @@ Respond ONLY with valid JSON.
                 task = "; ".join(skills.SKILLS[name].desc for name, _ in calls) + "..."
                 await emit("agent_state", {"agent": agent, "status": "active", "task": task})
                 started = time.perf_counter()
-                result = await skills.run_calls(calls, confirmed=bool(confirmed_calls))
+                result = await skills.run_calls(calls, confirmed=confirmed)
                 status, result_text = result.status, result.text
                 if held:
                     status = "failed" if status == "failed" else "waiting"

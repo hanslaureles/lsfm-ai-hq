@@ -387,7 +387,8 @@ class TestEventLoopStaysResponsive(MissionTestCase):
     async def test_independent_agents_run_concurrently(self):
         async def plan(prompt, history=None):
             return {"intent_type": "agent_delegation", "agents_needed": ["eunchae", "kazuha"],
-                    "tool_targets": ["check_vitals", "git_status"], "direct_obsidian": None}
+                    "tool_targets": ["eunchae.vitals", "kazuha.git_status"], "direct_obsidian": None,
+                    "calls": [["eunchae.vitals", {}], ["kazuha.git_status", {}]]}
 
         self.ciel.analyze_and_plan = plan
         self.patch("get_system_vitals", self.slow({"healthy": True}))
@@ -465,9 +466,11 @@ class TestHudSignals(MissionTestCase):
         self.assertLess(self.agent_end("eunchae")["elapsed_ms"], 100)
 
     async def test_no_work_started_means_no_time(self):
-        def broken_job(agent, prompt, targets):
-            raise RuntimeError("no tool for this agent")
-        self.enterContext(mock.patch.object(ciel_orchestrator.skills, "legacy_calls", broken_job))
+        async def plan(prompt, history=None):
+            return {"intent_type": "agent_delegation", "agents_needed": ["eunchae"], "tool_targets": ["eunchae.vitals"],
+                    "direct_obsidian": None, "calls": [["eunchae.vitals", {}]]}
+        self.ciel.analyze_and_plan = plan
+        self.enterContext(mock.patch.dict(ciel_orchestrator.skills.SKILLS, clear=True))  # the lookup fails first
         await self.run_mission("check vitals")
         end = self.agent_end("eunchae")
         self.assertEqual(end["status"], "failed")
@@ -801,6 +804,128 @@ class TestConfirmGate(MissionTestCase):
         for prompt, word in (("Ciel, confirm.", "confirm"), ("はい", "confirm"), ("  YES! ", "confirm"),
                              ("go ahead", "confirm"), ("no", "cancel"), ("ciel cancel", "cancel"), ("キャンセル。", "cancel")):
             self.assertEqual(rw(prompt), word, prompt)
+
+
+class TestRegistryPlanner(MissionTestCase):
+    """ADR-001 R5: the router picks skills from the registry; anything invalid falls back to keywords."""
+
+    def route(self, plan: dict):
+        """The router LLM answers `plan`; synthesis answers as usual. Router prompts are kept."""
+        self.router_prompts = []
+
+        def call(prompt, system_instruction="", **kwargs):
+            if "routing core" in system_instruction:
+                self.router_prompts.append(prompt)
+                return json.dumps(plan)
+            return SYNTHESIS_JSON
+        self.enterContext(mock.patch.object(ciel_orchestrator, "call_llm", call))
+
+    def record(self, name):
+        """Replaces a skill's run with a recorder; returns the list of kwargs it was called with."""
+        import dataclasses
+        from skills import SkillResult
+        runs = []
+        skills_mod = ciel_orchestrator.skills
+        fake = dataclasses.replace(skills_mod.SKILLS[name],
+                                   run=lambda **kw: runs.append(kw) or SkillResult("done", f"{name} ran"))
+        self.enterContext(mock.patch.dict(skills_mod.SKILLS, {name: fake}))
+        return runs
+
+    async def test_valid_skill_plan_runs_that_skill(self):
+        runs = self.record("kazuha.git_status")
+        self.route({"intent_type": "agent_delegation", "skills": [{"name": "kazuha.git_status", "args": {}}]})
+        result = await self.run_mission("how is the repo doing?")
+        self.assertEqual(result["agents_called"], ["kazuha"])
+        self.assertEqual(result["planner"]["source"], "llm")
+        self.assertEqual(runs, [{}])
+        self.assertIn("- kazuha.git_status (kazuha): ", self.router_prompts[0])  # the catalog is in the prompt
+        self.assertNotIn("chaewon.hunt", self.router_prompts[0])
+        self.assertNotIn("ciel_search_vault", self.router_prompts[0])
+
+    async def test_args_reach_the_skill_and_query_defaults_to_the_prompt(self):
+        tests, searches = self.record("eunchae.test"), self.record("sakura.vault_search")
+        self.route({"intent_type": "agent_delegation",
+                    "skills": [{"name": "eunchae.test", "args": {"path": "git_sentinel.py"}},
+                               {"name": "sakura.vault_search"}]})
+        result = await self.run_mission("test git_sentinel.py and find my WHEA notes")
+        self.assertEqual(result["agents_called"], ["eunchae", "sakura"])
+        self.assertEqual(tests, [{"path": "git_sentinel.py"}])
+        self.assertEqual(searches, [{"query": "test git_sentinel.py and find my WHEA notes"}])
+
+    async def test_unknown_skill_falls_back(self):
+        self.route({"intent_type": "agent_delegation", "skills": [{"name": "kazuha.rm_rf", "args": {}}]})
+        result = await self.run_mission("what is a b-tree?")
+        self.assertEqual(result["planner"]["source"], "fallback")
+        self.assertEqual(result["agents_called"], [])
+        self.assertFalse([e for e in self.events if e["type"] == "agent_state"])
+
+    async def test_bad_arg_falls_back(self):  # Review Focus 4
+        runs = self.record("eunchae.test")
+        for args in ({"cmd": "rm -rf /"}, {"path": 5}, "git_sentinel.py"):
+            with self.subTest(args=args):
+                self.route({"intent_type": "agent_delegation", "skills": [{"name": "eunchae.test", "args": args}]})
+                result = await self.run_mission("what is a b-tree?")
+                self.assertEqual(result["planner"]["source"], "fallback")
+                self.assertEqual(runs, [])
+
+    async def test_hidden_skill_falls_back_and_never_runs(self):
+        hunts = self.record("chaewon.hunt")  # a 10-minute job that posts Discord cards (R3 ruling)
+        self.route({"intent_type": "agent_delegation", "skills": [{"name": "chaewon.hunt", "args": {}}]})
+        result = await self.run_mission("what is a b-tree?")
+        self.assertEqual(result["planner"]["source"], "fallback")
+        self.assertEqual(hunts, [])
+
+    async def test_malformed_plans_fall_back(self):
+        for plan in ({"intent_type": "agent_delegation", "skills": []},          # a delegation with nothing to run
+                     {"intent_type": "agent_delegation", "skills": "kazuha.git_status"},
+                     {"intent_type": "agent_delegation", "skills": [["kazuha.git_status", {}]]},
+                     {"intent_type": "obsidian_brain", "direct_obsidian": "ciel_search_vault"}):  # removed in R5
+            with self.subTest(plan=plan):
+                self.route(plan)
+                result = await self.run_mission("what is a b-tree?")
+                self.assertEqual(result["planner"]["source"], "fallback")
+
+    async def test_wrong_typed_skills_or_targets_fall_back_without_running(self):  # Codex R5 F1
+        weather = []
+        self.ciel.ciel_get_weather = lambda location="": weather.append(location) or {"success": True,
+                                                                                    "raw_summary": "Clear"}
+        for key in ("skills", "tool_targets"):
+            for bad in ({}, False, 0, ""):
+                with self.subTest(key=key, bad=bad):
+                    plan = {"intent_type": "live_weather", "location": "Tokyo", "tool_targets": ["live_weather"]}
+                    plan[key] = bad
+                    self.route(plan)
+                    result = await self.run_mission("東京の天気は？")
+                    self.assertEqual(result["planner"]["source"], "fallback")
+                    self.assertEqual(weather, [])
+        for plan in ({"intent_type": "live_weather", "location": "Tokyo"},  # omitted or null: fine
+                     {"intent_type": "live_weather", "location": "Tokyo", "skills": None, "tool_targets": None},
+                     {"intent_type": "live_weather", "location": "Tokyo", "skills": [], "tool_targets": []}):
+            with self.subTest(plan=plan):
+                self.route(plan)
+                result = await self.run_mission("東京の天気は？")
+                self.assertEqual(result["planner"]["source"], "llm")
+        self.assertEqual(weather, ["Tokyo"] * 3)
+
+    async def test_llm_weather_and_web_search_are_kept(self):
+        self.ciel.ciel_get_weather = lambda location="": {"success": True, "raw_summary": "Clear, 25C"}
+        self.route({"intent_type": "live_weather", "tool_targets": ["live_weather"], "location": "Tokyo"})
+        result = await self.run_mission("東京の天気は？")  # no English weather word: the router decides
+        self.assertEqual(result["planner"]["source"], "llm")
+        self.assertEqual(result["agent_results"]["meteorological_telemetry"], "Clear, 25C")
+
+    async def test_again_reuses_last_calls(self):
+        runs = self.record("eunchae.vitals")
+        await self.run_mission("check vitals")  # the router is offline: keywords decide
+        result = await self.run_mission("run that again")
+        self.assertEqual(result["agents_called"], ["eunchae"])
+        self.assertEqual(result["planner"]["source"], "fallback")
+        self.assertEqual(runs, [{}, {}])
+        self.assertEqual(self.ciel.history()[-1]["skills_called"], [["eunchae.vitals", {}]])
+
+    async def test_again_without_a_last_skill_is_a_direct_answer(self):
+        result = await self.run_mission("say that again")
+        self.assertEqual(result["agents_called"], [])
 
 
 class TestHeavyAgentsUseHeavyPool(MissionTestCase):

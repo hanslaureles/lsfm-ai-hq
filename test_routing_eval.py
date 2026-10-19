@@ -42,6 +42,12 @@ class TestCases(unittest.TestCase):
                 used |= set(c["expect"])
         self.assertEqual(AGENT_SKILLS - used, set(), "every agent skill needs at least one case")
 
+    def test_every_skill_label_exists(self):  # ADR-001 R5
+        import skills
+        planner_skills = {name for name, s in skills.SKILLS.items() if s.in_planner}
+        self.assertEqual(AGENT_SKILLS - set(skills.SKILLS), set(), "a label names a skill that does not exist")
+        self.assertEqual(planner_skills - AGENT_SKILLS, set(), "a skill Ciel can plan has no eval label")
+
     def test_prompts_are_unique(self):
         prompts = [c["prompt"] for c in load_cases()]
         self.assertEqual(len(prompts), len(set(prompts)))

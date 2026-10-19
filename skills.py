@@ -14,6 +14,7 @@ A failure is never reworded as success.
 import asyncio
 import importlib
 import py_compile
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PureWindowsPath
@@ -72,6 +73,7 @@ class Skill:
     confirm_text: str = ""                     # what the confirmation asks
     timeout_s: float = 30.0
     heavy: bool = False                        # run on heavy_jobs.HEAVY_POOL
+    in_planner: bool = True                    # False: Ciel's planner never sees or runs it (R5)
 
 
 SKILLS: dict = {}
@@ -86,13 +88,16 @@ def register(skill: Skill) -> Skill:
     return skill
 
 
-def validate_call(name: str, args) -> tuple:
-    """(skill, args) for a call; ValueError for an unknown skill, an unknown arg or a non-string value."""
+def validate_call(name: str, args, *, planner: bool = False) -> tuple:
+    """(skill, args) for a call; ValueError for an unknown skill, an unknown arg or a non-string value.
+    planner=True (a call from Ciel's LLM plan) also refuses a skill hidden from the planner."""
     if not isinstance(name, str) or not name:
         raise ValueError(f"a skill name must be a non-empty string, got {name!r:.40}")
     skill = SKILLS.get(name)
     if skill is None:
         raise ValueError(f"unknown skill {name!r}")
+    if planner and not skill.in_planner:
+        raise ValueError(f"{name} is not available to Ciel's planner")
     if args is None:
         return skill, {}
     if not isinstance(args, dict):
@@ -249,9 +254,9 @@ def _eunchae_test(path: str = "") -> SkillResult:
 
 
 register(Skill(name="eunchae.vitals", agent="eunchae", desc="CPU, RAM, free disk and uptime of the host PC",
-               run=_eunchae_vitals, keywords=("vitals", "cpu", "ram", "hardware")))
+               run=_eunchae_vitals, keywords=("vitals", "cpu", "ram", "hardware", "pc")))
 register(Skill(name="eunchae.compile_all", agent="eunchae", desc="Syntax-check every top-level HQ Python file",
-               run=_eunchae_compile_all, keywords=("syntax", "compile", "smoke")))
+               run=_eunchae_compile_all, keywords=("syntax", "compile all", "compile check", "smoke")))
 register(Skill(name="eunchae.test", agent="eunchae",
                desc="Code QA on one workspace file (.py: compile, AST, imports, unit tests; web files: static checks)",
                run=_eunchae_test, args={"path": "relative path inside the workspace, e.g. git_sentinel.py"},
@@ -400,7 +405,7 @@ def _yunjin_audit() -> SkillResult:
 
 register(Skill(name="yunjin.audit", agent="yunjin",
                desc="Audit every portfolio page: broken images, meta tags, and an LLM design critique with a score",
-               run=_yunjin_audit, keywords=("scan portfolio", "audit portfolio", "broken links", "portfolio audit"),
+               run=_yunjin_audit, keywords=("portfolio", "broken links", "broken image"),
                timeout_s=90.0))
 
 
@@ -610,19 +615,21 @@ def _sakura_cleanse() -> SkillResult:
                                f"kept {res['retained_count']} labelled in Primary.", res)
 
 
-register(Skill(name="sakura.clean", agent="sakura", desc="Archive promo and newsletter clutter from Primary (up to 50)",
-               run=_sakura_clean, keywords=("clean", "sweep"), timeout_s=120.0, heavy=True, changes_things=True,
-               confirm_text="Archive up to 50 promo and newsletter emails from Primary?"))
+# Cleanse before clean: keyword_calls takes each agent's first match, and "clean" starts "cleanse".
 register(Skill(name="sakura.cleanse", agent="sakura", desc="Archive and file up to 250 emails across Primary",
                run=_sakura_cleanse, keywords=("cleanse", "mass sort"), timeout_s=300.0, heavy=True,
                changes_things=True, confirm_text="Archive and file up to 250 emails across Primary?"))
+register(Skill(name="sakura.clean", agent="sakura", desc="Archive promo and newsletter clutter from Primary (up to 50)",
+               run=_sakura_clean, keywords=("clean", "sweep"), timeout_s=120.0, heavy=True, changes_things=True,
+               confirm_text="Archive up to 50 promo and newsletter emails from Primary?"))
 register(Skill(name="sakura.inbox", agent="sakura", desc="Count unread Primary Gmail and flag recruiter mail (read only)",
                run=_sakura_inbox, keywords=("inbox", "email", "gmail", "unread", "mail"), heavy=True))
 register(Skill(name="sakura.priorities", agent="sakura", desc="Today's open tasks from the Obsidian daily log",
-               run=_sakura_priorities, keywords=("priority", "priorities", "today", "schedule")))
+               run=_sakura_priorities, keywords=("priority", "priorities", "today", "schedule", "briefing")))
 register(Skill(name="sakura.vault_search", agent="sakura", desc="Search the Obsidian vault for matching notes",
                run=_sakura_vault_search, args={"query": "words to search for"},
-               keywords=("search", "find", "lookup")))
+               keywords=("search my notes", "search notes", "search vault", "search the vault", "search my brain",
+                         "find in notes", "my notes", "notes about")))  # not bare "search" / "find": code and jobs
 
 
 # ==============================================================================
@@ -642,41 +649,56 @@ def _chaewon_hunt(slot: str = "") -> SkillResult:
 register(Skill(name="chaewon.hunt", agent="chaewon",
                desc="Find fresh remote junior jobs, tailor a resume and cover letter for each, and queue them for review",
                run=_chaewon_hunt, args={"slot": "run label such as 2026-10-15-am"},
-               keywords=("hunt", "job hunt", "find jobs"), timeout_s=600.0, heavy=True))
+               keywords=("hunt", "job hunt", "find jobs"), timeout_s=600.0, heavy=True,
+               in_planner=False))  # R3 ruling: Ciel has no way to deliver its Discord cards
 
 
 # ==============================================================================
-# Transitional (ADR-001 R1-R4): today's planner names agents, not skills.
-# legacy_calls reproduces the keyword pick Ciel's old hand-written agent jobs made (deleted
-# in R3). R5's planner returns skills itself and this goes away.
+# Ciel's planner (ADR-001 R5): the catalog the router LLM picks from, and the keyword fallback.
 # ==============================================================================
 
-def legacy_calls(agent: str, user_prompt: str, tool_targets: list) -> list:
-    prompt = user_prompt.lower()
-    if agent == "eunchae":
-        wants_tests = (any("test" in str(t).lower() or "compile" in str(t).lower() for t in tool_targets or [])
-                       or any(w in prompt for w in ("test", "compile", "syntax", "smoke")))
-        return [("eunchae.compile_all", {})] if wants_tests else [("eunchae.vitals", {})]
-    if agent == "kazuha":
-        return [("kazuha.review", {})] if any(w in prompt for w in ("review", "diff")) else [("kazuha.git_status", {})]
-    if agent == "yunjin":
-        return [("yunjin.audit", {})]
-    if agent == "chaewon":
-        # Never chaewon.hunt: a 10-minute job that posts Discord cards (R3 ruling).
-        wants_resume = (any("resume" in str(t).lower() for t in tool_targets or [])
-                        or any(w in prompt for w in ("resume", " cv", "pdf")))
-        if not wants_resume and any(w in prompt for w in ("job", "scout", "role", "hiring", "opening", "vacanc")):
-            return [("chaewon.scout", {})]
-        return [("chaewon.rebuild_resume", {})]
-    if agent == "sakura":
-        # Writes first, so "clean my inbox" never falls through to the read-only scan; both ask before running (R4).
-        if any(w in prompt for w in ("cleanse", "mass sort", "mass_sort")):
-            return [("sakura.cleanse", {})]
-        if any(w in prompt for w in ("clean", "sweep", "declutter", "tidy")):
-            return [("sakura.clean", {})]
-        if any(w in prompt for w in ("inbox", "email", "gmail", "unread", "recruiter", "mail")):
-            return [("sakura.inbox", {})]
-        if any(w in prompt for w in ("search", "find", "lookup")):
-            return [("sakura.vault_search", {"query": user_prompt})]
-        return [("sakura.priorities", {})]
-    return []
+# The arg that takes the whole request when a plan leaves it out. Not chaewon.scout's query: that is
+# a role name, and a whole sentence would search for the sentence.
+PROMPT_ARGS = {"sakura.vault_search": "query", "kazuha.ask": "question"}
+
+
+def planner_skills() -> list:
+    return [s for s in SKILLS.values() if s.in_planner]
+
+
+def router_catalog() -> str:
+    """One line per skill Ciel may plan, in registration order."""
+    lines = []
+    for s in planner_skills():
+        line = f"- {s.name} ({s.agent}): {s.desc}."
+        if s.args:
+            line += " Args: " + "; ".join(f"{k}: {v}" for k, v in s.args.items()) + "."
+        if s.changes_things:
+            line += " Asks Hans to confirm first."
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def with_prompt_args(name: str, args: dict, prompt: str) -> dict:
+    """Fills a missing query / question arg with the whole request."""
+    filled = dict(args)
+    key = PROMPT_ARGS.get(name)
+    if key and not filled.get(key):
+        filled[key] = prompt
+    return filled
+
+
+def _has_keyword(text: str, keyword: str) -> bool:
+    # At the start of a word only, so "ram" never matches "program" ("vital" still matches "vitals").
+    return re.search(r"(?<![a-z0-9])" + re.escape(keyword), text) is not None
+
+
+def keyword_calls(prompt: str) -> list:
+    """For each agent, the first planner skill (registration order) with a keyword in the prompt."""
+    text = (prompt or "").lower()
+    calls, agents = [], set()
+    for s in planner_skills():
+        if s.agent not in agents and any(_has_keyword(text, k) for k in s.keywords):
+            agents.add(s.agent)
+            calls.append((s.name, with_prompt_args(s.name, {}, prompt)))
+    return calls

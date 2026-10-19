@@ -332,13 +332,16 @@ class TestEunchaeSkills(unittest.TestCase):
                 r = skills.run_skill("eunchae.test", {"path": "git_sentinel.py"})
                 self.assertEqual(r.status, status)
 
-    def test_legacy_calls_pick_eunchae_actions_like_the_old_ciel_jobs(self):
-        # Transitional (deleted in R5): the keyword pick Ciel's old hand-written agent jobs made.
-        self.assertEqual(skills.legacy_calls("eunchae", "check vitals", []), [("eunchae.vitals", {})])
-        self.assertEqual(skills.legacy_calls("eunchae", "run a syntax check", []), [("eunchae.compile_all", {})])
-        self.assertEqual(skills.legacy_calls("eunchae", "how is my pc", ["run_tests"]),
-                         [("eunchae.compile_all", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "check inbox", ["check_inbox"]), [("sakura.inbox", {})])
+    def test_keyword_calls_pick_eunchae_actions(self):  # R5: the one keyword fallback
+        kc = skills.keyword_calls
+        self.assertEqual(kc("check vitals"), [("eunchae.vitals", {})])
+        self.assertEqual(kc("run a syntax check"), [("eunchae.compile_all", {})])
+        self.assertEqual(kc("compile resume"), [("chaewon.rebuild_resume", {})])  # not Eunchae's compile check
+        self.assertEqual(kc("write a python program"), [])  # "ram" only matches at the start of a word
+        self.assertEqual(kc("write a binary search in Python"), [])  # a coding question, not a vault search
+        self.assertEqual(kc("is my PC struggling?"), [("eunchae.vitals", {})])
+        self.assertEqual(kc("audit my portfolio site"), [("yunjin.audit", {})])
+        self.assertEqual(kc("check my inbox and my PC vitals"), [("eunchae.vitals", {}), ("sakura.inbox", {})])
 
 
 class TestChaewonSakuraSkills(unittest.TestCase):
@@ -504,17 +507,35 @@ class TestChaewonSakuraSkills(unittest.TestCase):
         self.assertIs(skills._vault(), skills._vault())
         self.assertEqual(len(made), 1)
 
-    def test_legacy_calls_pick_chaewon_and_sakura_actions(self):
-        self.assertEqual(skills.legacy_calls("chaewon", "compile resume", ["compile_resume"]),
-                         [("chaewon.rebuild_resume", {})])
-        self.assertEqual(skills.legacy_calls("chaewon", "find me remote AI jobs", []), [("chaewon.scout", {})])
-        self.assertEqual(skills.legacy_calls("chaewon", "scout new roles", []), [("chaewon.scout", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "any recruiter emails?", []), [("sakura.inbox", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "search my notes for oauth", []),
+    def test_keyword_calls_pick_chaewon_and_sakura_actions(self):
+        kc = skills.keyword_calls
+        self.assertEqual(kc("find me remote AI jobs"), [("chaewon.scout", {})])
+        self.assertEqual(kc("scout new roles"), [("chaewon.scout", {})])
+        self.assertEqual(kc("any recruiter emails?"), [("sakura.inbox", {})])
+        self.assertEqual(kc("search my notes for oauth"),
                          [("sakura.vault_search", {"query": "search my notes for oauth"})])
-        self.assertEqual(skills.legacy_calls("sakura", "what's on today", []), [("sakura.priorities", {})])
+        self.assertEqual(kc("what's on today"), [("sakura.priorities", {})])
+        self.assertEqual(kc("morning briefing"), [("sakura.priorities", {})])
         for prompt in ("job hunt now", "hunt for jobs", "find jobs"):  # never the 10-minute card-posting hunt
-            self.assertNotIn("chaewon.hunt", [n for n, _ in skills.legacy_calls("chaewon", prompt, [])])
+            self.assertNotIn("chaewon.hunt", [n for n, _ in kc(prompt)])
+
+    def test_router_catalog_lists_every_planner_skill(self):
+        catalog = skills.router_catalog()
+        lines = catalog.splitlines()
+        self.assertEqual(len(lines), sum(s.in_planner for s in skills.SKILLS.values()))
+        self.assertNotIn("chaewon.hunt", catalog)
+        self.assertIn("- eunchae.test (eunchae): ", catalog)
+        self.assertIn("Args: path: relative path inside the workspace", catalog)
+        clean = next(line for line in lines if line.startswith("- sakura.clean "))
+        self.assertTrue(clean.endswith(" Asks Hans to confirm first."), clean)
+        vitals = next(line for line in lines if line.startswith("- eunchae.vitals "))
+        self.assertNotIn("Args:", vitals)
+        self.assertNotIn("confirm", vitals)
+
+    def test_validate_call_refuses_skills_hidden_from_the_planner(self):
+        with self.assertRaises(ValueError):
+            skills.validate_call("chaewon.hunt", {}, planner=True)
+        self.assertEqual(skills.validate_call("chaewon.hunt", {})[1], {})  # Discord and the 10:00/20:00 loop still run it
 
 
 class TestConfirmGateSkills(unittest.TestCase):
@@ -573,11 +594,12 @@ class TestConfirmGateSkills(unittest.TestCase):
                                                 "retained_count": 50, "categories": {"PROMO_CLUTTER": 150}})
         self.assertEqual(skills.run_skill("sakura.cleanse", confirmed=True).status, "done")
 
-    def test_legacy_calls_route_clean_requests_to_the_gated_skills(self):
-        self.assertEqual(skills.legacy_calls("sakura", "clean my inbox", []), [("sakura.clean", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "sweep the promos", []), [("sakura.clean", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "run the mass cleanse", []), [("sakura.cleanse", {})])
-        self.assertEqual(skills.legacy_calls("sakura", "check my inbox", []), [("sakura.inbox", {})])
+    def test_keyword_calls_route_clean_requests_to_the_gated_skills(self):
+        kc = skills.keyword_calls
+        self.assertEqual(kc("clean my inbox"), [("sakura.clean", {})])
+        self.assertEqual(kc("sweep the promos"), [("sakura.clean", {})])
+        self.assertEqual(kc("run the mass cleanse"), [("sakura.cleanse", {})])
+        self.assertEqual(kc("check my inbox"), [("sakura.inbox", {})])
 
 
 class TestKazuhaYunjinSkills(unittest.TestCase):
@@ -796,11 +818,12 @@ class TestKazuhaYunjinSkills(unittest.TestCase):
         self.assertEqual(asked, [])
         self.assertEqual(list(Path(tmp.name).iterdir()), [])  # no report written
 
-    def test_legacy_calls_pick_kazuha_and_yunjin_actions(self):
-        self.assertEqual(skills.legacy_calls("kazuha", "git status", ["git_status"]), [("kazuha.git_status", {})])
-        self.assertEqual(skills.legacy_calls("kazuha", "review my changes", []), [("kazuha.review", {})])
-        self.assertEqual(skills.legacy_calls("kazuha", "show the git diff", []), [("kazuha.review", {})])
-        self.assertEqual(skills.legacy_calls("yunjin", "scan portfolio", ["scan_links"]), [("yunjin.audit", {})])
+    def test_keyword_calls_pick_kazuha_and_yunjin_actions(self):
+        kc = skills.keyword_calls
+        self.assertEqual(kc("git status"), [("kazuha.git_status", {})])
+        self.assertEqual(kc("review my changes"), [("kazuha.review", {})])
+        self.assertEqual(kc("show the git diff"), [("kazuha.review", {})])
+        self.assertEqual(kc("scan portfolio"), [("yunjin.audit", {})])
 
 
 class TestRunBlockingMoved(unittest.TestCase):
