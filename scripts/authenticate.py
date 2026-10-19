@@ -34,7 +34,7 @@ def main():
         redirect_uri="http://localhost:8080/"
     )
 
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    auth_url, state = flow.authorization_url(prompt="consent", access_type="offline")
 
     # Save to file for easy clicking/opening
     AUTH_FILE.write_text(auth_url, encoding="utf-8")
@@ -50,7 +50,9 @@ def main():
         webbrowser.open(auth_url)
 
     print("⏳ Waiting for you to sign in with your Google account and click Allow...", flush=True)
-    creds = flow.run_local_server(port=8080, open_browser=False)
+    # run_local_server builds its own URL; reuse the opened link's state or the callback fails the CSRF check
+    creds = flow.run_local_server(port=8080, open_browser=False, state=state,
+                                  prompt="consent", access_type="offline")
 
     TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
     print("\n🎉 SUCCESS! token.json has been created!", flush=True)

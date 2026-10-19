@@ -387,6 +387,47 @@ class JobHuntBotTest(unittest.TestCase):
             tailor.assert_not_called()
             self.assertEqual(self.meta(d)["status"], "rejected")
             self.assertIn("Rejected", card.edits[0].footer.text)
+            self.assertIn("· a", card.edits[0].footer.text)  # the job id survives the footer edit
+
+    def test_reaction_on_a_deleted_job_folder_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(bot_sakura.apply_job_reaction(Path(tmp) / "gone", "✅"))
+
+    def test_one_failed_card_does_not_stop_the_rest(self):
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c = self.folder(tmp, "a"), self.folder(tmp, "b"), self.folder(tmp, "c")
+            (b / "meta.json").write_text("{broken", encoding="utf-8")
+            result = SkillResult("done", "ok", {"jobs": [str(a), str(b), str(c)], "skipped": [], "failed_sources": [],
+                                                "slot": "s"})
+            channel = FakeCardChannel()
+            with mock.patch.object(bot_sakura, "save_pending_proposal"), \
+                    mock.patch.object(bot_sakura, "ObsidianClient", create=True), \
+                    mock.patch.object(bot_sakura.job_hunt, "uncarded_folders", return_value=[]):
+                asyncio.run(bot_sakura.deliver_job_hunt(channel, result))
+            self.assertEqual(len(channel.messages), 4)  # header, a, c, the not-sent notice
+            self.assertTrue(self.meta(a)["card_msg_id"] and self.meta(c)["card_msg_id"])
+            self.assertIn("could not be sent", channel.messages[3].content)
+            self.assertIn("b", channel.messages[3].content)
+
+    def test_card_id_keeps_a_status_the_claude_run_wrote_meanwhile(self):
+        from skills import SkillResult
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self.folder(tmp, "a")
+
+            def claude_run_marks_ready(*_):  # runs between the upload and the card id write
+                meta = self.meta(a)
+                meta["status"] = "ready"
+                bot_sakura.job_hunt.write_meta(a, meta)
+
+            result = SkillResult("done", "ok", {"jobs": [str(a)], "skipped": [], "failed_sources": [], "slot": "s"})
+            channel = FakeCardChannel()
+            with mock.patch.object(bot_sakura, "save_pending_proposal", side_effect=claude_run_marks_ready), \
+                    mock.patch.object(bot_sakura, "ObsidianClient", create=True), \
+                    mock.patch.object(bot_sakura.job_hunt, "uncarded_folders", return_value=[]):
+                asyncio.run(bot_sakura.deliver_job_hunt(channel, result))
+            self.assertEqual(self.meta(a)["status"], "ready")
+            self.assertEqual(self.meta(a)["card_msg_id"], channel.messages[1].id)
 
 
 HOLD = (

@@ -389,6 +389,19 @@ class TestPortfolioSync(unittest.TestCase):
         self.assertEqual(sync_pdf_copy(self.src, self.dest), "copied")
         self.assertEqual(self.dest.read_bytes(), rebuilt)
 
+    def test_same_html_with_reencoded_fonts_is_not_copied(self):
+        # 2026-10-18: Edge re-encoded the font subsets, so the same resume differed in its streams.
+        from pdf_engine import sync_pdf_copy
+        stamp = self.dir / "source.sha256"
+        self.dest.write_bytes(_fake_pdf("154.0.0.0", "20261008124347", "BT (Hans) Tj ET"))
+        self.src.write_bytes(_fake_pdf("155.0.0.0", "20261018143951", "BT (Hans, re-encoded) Tj ET"))
+        self.assertEqual(sync_pdf_copy(self.src, self.dest, "<html>v1</html>", stamp), "copied")  # no stamp yet
+        committed = self.dest.read_bytes()
+        self.src.write_bytes(_fake_pdf("155.0.0.0", "20261025143951", "BT (Hans, re-encoded again) Tj ET"))
+        self.assertEqual(sync_pdf_copy(self.src, self.dest, "<html>v1</html>", stamp), "unchanged")
+        self.assertEqual(self.dest.read_bytes(), committed)
+        self.assertEqual(sync_pdf_copy(self.src, self.dest, "<html>v2</html>", stamp), "copied")  # new content
+
     def test_a_missing_copy_is_created(self):
         from pdf_engine import sync_pdf_copy
         self.src.write_bytes(_fake_pdf("155.0.0.0", "20261011142411", "BT (Hans) Tj ET"))

@@ -20,7 +20,7 @@ def _install_stubs():
     """Replace the orchestrator and engine modules with inert fakes before importing ciel_server."""
 
     class FakeCiel:
-        def __init__(self):
+        def __init__(self, store=None):
             self.conversation_history = []
             self.missions = []
             self.mission_ids = []

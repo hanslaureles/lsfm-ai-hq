@@ -644,6 +644,42 @@ class TestAsyncSafety(MissionTestCase):
         self.assertEqual(peak[0], 1)
 
 
+class TestConversationStore(MissionTestCase):
+    """A tab's turns survive a Ciel server restart; a held action never does."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.store = Path(tmp.name) / "ciel_conversations.json"
+        self.ciel = ciel_orchestrator.CielOrchestrator(store=self.store)
+        skills_mod = ciel_orchestrator.skills
+        self.enterContext(mock.patch.object(skills_mod, "gmail_is_configured", lambda: True))
+        self.enterContext(mock.patch.object(skills_mod, "sweep_inbox", lambda n: {}))
+
+    async def test_turns_survive_a_restart_and_a_held_action_does_not(self):
+        tab = "c" * 32
+        await self.ciel.execute_mission("what is a b-tree?", session_id=tab)
+        await self.ciel.execute_mission("clean my inbox", session_id=tab)  # held for confirm
+        restarted = ciel_orchestrator.CielOrchestrator(store=self.store)
+        self.assertEqual([t["user_prompt"] for t in restarted.history(tab)][0], "what is a b-tree?")
+        self.assertIsNone(restarted.conversation(tab).live_pending())
+
+    async def test_a_cleared_tab_stays_cleared_after_a_restart(self):
+        await self.ciel.execute_mission("what is a b-tree?")
+        self.ciel.reset_memory()
+        self.assertEqual(ciel_orchestrator.CielOrchestrator(store=self.store).history(), [])
+
+    def test_an_unreadable_store_starts_empty(self):
+        self.store.write_text("{not json", encoding="utf-8")
+        with mock.patch("builtins.print"):
+            self.assertEqual(ciel_orchestrator.CielOrchestrator(store=self.store).conversations, {})
+
+    def test_no_store_writes_nothing(self):  # the default for tests and the bench
+        ciel_orchestrator.CielOrchestrator().reset_memory()
+        self.assertFalse(self.store.exists())
+
+
 class TestConfirmGate(MissionTestCase):
     """ADR-001 R4: Ciel holds an action that changes things until this tab says confirm."""
 

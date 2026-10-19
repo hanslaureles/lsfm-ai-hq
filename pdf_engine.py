@@ -973,19 +973,32 @@ def pdf_content_key(data: bytes) -> bytes:
     return data[:cut] if cut != -1 else data[:data.rfind(b"startxref")]
 
 
-def sync_pdf_copy(src: Path, dest: Path) -> str:
+PORTFOLIO_SOURCE_STAMP = APPLICATIONS_DIR / "portfolio_resume_source.sha256"  # gitignored, like applications/
+
+
+def sync_pdf_copy(src: Path, dest: Path, source: str = "", stamp: Path = None) -> str:
     """
-    Copy src over dest unless only the build stamps differ. The Sunday rebuild used to
+    Copy src over dest unless it holds the same resume. The Sunday rebuild used to
     rewrite portfolio-site's committed resume every week, leaving that repo dirty with
-    a 17-byte Edge-version change (audit 2026-10-12, F4).
+    a 17-byte Edge-version change (audit 2026-10-12, F4). Build stamps are ignored; and
+    when `source` (the HTML the PDF was built from) is given, a dest built from the same
+    HTML is current too: Edge re-encodes its font subsets from build to build, so on
+    2026-10-18 an identical resume differed in 65,000 bytes. `stamp` keeps that HTML's hash.
     Returns "copied", "unchanged" or "failed: <reason>".
     """
+    import hashlib
     import shutil
+    key = hashlib.sha256(source.encode("utf-8")).hexdigest() if source and stamp else ""
     try:
-        if dest.is_file() and pdf_content_key(dest.read_bytes()) == pdf_content_key(src.read_bytes()):
-            return "unchanged"
-        shutil.copy2(src, dest)
-        return "copied"
+        same_source = bool(key) and stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == key
+        if dest.is_file() and (same_source or pdf_content_key(dest.read_bytes()) == pdf_content_key(src.read_bytes())):
+            status = "unchanged"
+        else:
+            shutil.copy2(src, dest)
+            status = "copied"
+        if key:
+            stamp.write_text(key, encoding="utf-8")
+        return status
     except OSError as e:
         print(f"⚠️ [PDF Engine] Portfolio sync error: {e}", flush=True)
         return f"failed: {type(e).__name__}"
@@ -1049,7 +1062,8 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
     portfolio_pdf = portfolio_dir / portfolio_target
     portfolio_sync = "skipped"
     if sync_portfolio:
-        portfolio_sync = sync_pdf_copy(master_pdf, portfolio_pdf) if portfolio_dir.exists() else "no portfolio-site folder"
+        portfolio_sync = (sync_pdf_copy(master_pdf, portfolio_pdf, html, PORTFOLIO_SOURCE_STAMP)
+                          if portfolio_dir.exists() else "no portfolio-site folder")
 
     # 2. Archive timestamped copy
     archive_pdf = None

@@ -53,7 +53,10 @@ async def reset_client(bot_instance, name: str):
     the connector that session owned, and static_login only builds a fresh one
     when http.connector is MISSING; clear() reopens the client. close() reaches
     http.close() only after state and gateway cleanup, so if it raises, the
-    session is closed here directly.
+    session is closed here directly. close() also sets client.loop to MISSING, and
+    login() only rebuilds it from the constructor's sentinel, so the loop is set up
+    again here (2026-10-18: after a DNS outage every reconnect then failed on
+    MISSING.create_task until a restart).
     """
     try:
         await bot_instance.close()
@@ -62,6 +65,7 @@ async def reset_client(bot_instance, name: str):
         await bot_instance.http.close()
     bot_instance.http.connector = discord.utils.MISSING
     bot_instance.clear()
+    await bot_instance._async_setup_hook()  # private in discord.py 2.x; test_reliability pins the behavior
 
 
 async def run_bot_resilient(bot_instance, token: str, name: str):

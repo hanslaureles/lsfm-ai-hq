@@ -181,8 +181,12 @@ JOB_REACTIONS = {("✅", "queued"): "approved", ("✅", "needs_claude"): "approv
 
 
 def apply_job_reaction(folder: Path, emoji: str):
-    """The new meta.json status for a reaction, written; None when the reaction changes nothing (e.g. applied)."""
-    meta = _read_meta(folder)
+    """The new meta.json status for a reaction, written; None when the reaction changes nothing (e.g. applied)
+    or the job folder is gone (deleted by hand)."""
+    try:
+        meta = _read_meta(folder)
+    except (OSError, ValueError):
+        return None
     new = JOB_REACTIONS.get((emoji, meta.get("status")))
     if new:
         meta.update(status=new, updated=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"))
@@ -210,6 +214,31 @@ async def prepare_job_hunt(slot: str):
     return result
 
 
+async def send_job_card(channel, folder: Path):
+    """One #approvals card with its PDFs and ✅/❌; its message id goes into meta.json."""
+    meta = _read_meta(folder)
+    files = []
+    try:  # open inside the cleanup scope: a second PDF that fails to open must not leak the first (Codex F3)
+        for p in (folder / "Hans_Aaron_Laureles_Resume.pdf", folder / "Hans_Aaron_Laureles_Cover_Letter.pdf"):
+            if p.exists():
+                try:
+                    files.append(discord.File(str(p), filename=p.name))
+                except OSError as e:  # locked or unreadable: the card goes out without it
+                    print(f"⚠️ [Sakura] could not attach {p.name}: {type(e).__name__}: {e}", flush=True)
+        msg = await channel.send(embed=build_job_card(meta), files=files)
+    finally:
+        for f in files:  # a failed send would otherwise keep the PDFs locked on Windows
+            f.close()
+    save_pending_proposal(msg.id, {"type": "job_hunt", "folder": str(folder)})
+    # Re-read after the awaits: the Claude run may have changed meta.json while the card was uploading.
+    # ponytail: the re-read narrows the race with the Claude run to one read/write, no file lock
+    meta = _read_meta(folder)
+    meta["card_msg_id"] = msg.id
+    job_hunt.write_meta(folder, meta)
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
+
+
 async def deliver_job_hunt(channel, result):
     data = result.data
     # This run's jobs, plus any an earlier cancelled run finished without a card.
@@ -222,26 +251,17 @@ async def deliver_job_hunt(channel, result):
     if JOB_HUNT_DASHBOARD:
         header += f" Dashboard: {JOB_HUNT_DASHBOARD}"
     await channel.send(content=header)
+    not_sent = []
     for folder in folders:
         folder = Path(folder)
-        meta = _read_meta(folder)
-        files = []
-        try:  # open inside the cleanup scope: a second PDF that fails to open must not leak the first (Codex F3)
-            for p in (folder / "Hans_Aaron_Laureles_Resume.pdf", folder / "Hans_Aaron_Laureles_Cover_Letter.pdf"):
-                if p.exists():
-                    try:
-                        files.append(discord.File(str(p), filename=p.name))
-                    except OSError as e:  # locked or unreadable: the card goes out without it
-                        print(f"⚠️ [Sakura] could not attach {p.name}: {type(e).__name__}: {e}", flush=True)
-            msg = await channel.send(embed=build_job_card(meta), files=files)
-        finally:
-            for f in files:  # a failed send would otherwise keep the PDFs locked on Windows
-                f.close()
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
-        save_pending_proposal(msg.id, {"type": "job_hunt", "folder": str(folder)})
-        meta["card_msg_id"] = msg.id
-        job_hunt.write_meta(folder, meta)
+        try:
+            await send_job_card(channel, folder)
+        except Exception as e:  # one bad card never stops the rest; it stays uncarded, so the next run retries it
+            not_sent.append(folder.name)
+            print(f"⚠️ [Sakura] job card {folder.name} not sent: {type(e).__name__}: {e}", flush=True)
+    if not_sent:
+        await channel.send(content=f"⚠️ {len(not_sent)} card(s) could not be sent; the next run retries them: "
+                                   + ", ".join(not_sent)[:1800])
     try:
         ObsidianClient().log_session("Sakura", f"Job hunt {data.get('slot', '')}: {len(folders)} queued",
                                      [f"Skipped: {len(skipped)}", f"Failed sources: {', '.join(failed) or 'none'}",
@@ -406,6 +426,42 @@ def format_proposal_qa_status(
     return qa_summary_line, action_instructions, proposal_color
 
 
+APPLY_STEP_TIMEOUT_S = {"chaewon": 180, "yunjin": 90, "kazuha": 90}  # ponytail: guessed limits; tune from real !apply timings
+APPLY_TASKS = {"chaewon": "tailor the resume and cover letter", "yunjin": "curate the portfolio pitch",
+               "kazuha": "write the tech pitch"}
+
+
+async def run_apply_steps(job_text: str, company: str, role: str) -> dict:
+    """
+    ADR-001 R6: Chaewon, Yunjin and Kazuha at once, each with its own timeout.
+    {"chaewon"|"yunjin"|"kazuha": ("done"|"failed", result or None, error text)}; never raises.
+    """
+    calls = {"chaewon": (analyze_and_tailor, (job_text, company, role)),
+             "yunjin": (select_portfolio_pitch, (job_text, role, company)),
+             "kazuha": (generate_tech_pitch, (job_text, role, company))}
+
+    async def step(name, fn, args):
+        try:
+            res = await run_blocking(fn, *args, timeout=APPLY_STEP_TIMEOUT_S[name], label=f"{name.title()}'s step")
+            if not isinstance(res, dict):
+                raise TypeError(f"returned {type(res).__name__}, not a result")
+            if name == "chaewon" and not isinstance(res.get("score"), (int, float)):
+                raise ValueError("returned no fit score")  # never fall back to a made-up one
+            return name, ("done", res, "")
+        except Exception as e:
+            print(f"⚠️ [bot_sakura.run_apply_steps] {name} failed: {type(e).__name__}: {e}", flush=True)
+            return name, ("failed", None, str(e) if isinstance(e, TimeoutError) else f"{type(e).__name__}: {e}")
+
+    return dict(await asyncio.gather(*(step(n, fn, args) for n, (fn, args) in calls.items())))
+
+
+def _apply_files(tailor_res: dict) -> list:
+    """Chaewon's package file and PDFs that exist, as fresh discord.File objects (a File can be sent once)."""
+    paths = [(tailor_res.get("saved_file"), tailor_res.get("filename")),
+             (tailor_res.get("resume_pdf"), None), (tailor_res.get("cover_pdf"), None)]
+    return [discord.File(p, filename=name or Path(p).name) for p, name in paths if p and Path(p).exists()]
+
+
 async def handle_apply_orchestration(target_message, job_input: str = "", attachments = None):
     """
     Core team collaboration pipeline:
@@ -497,50 +553,37 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     dispatch_embed.set_footer(text="LE SSERAFIM AI HQ • Multi-Agent Pipeline")
     await handoffs_ch.send(embed=dispatch_embed)
 
-    # 2. Chaewon Handoff: Analyze and Tailor
-    await status_msg.edit(content=f"⭐ **Chaewon is analyzing ATS fit & tailoring resume/cover letter...**")
-    try:
-        tailor_res = await loop.run_in_executor(None, analyze_and_tailor, job_text, company, role)
-    except Exception as e:
-        await handoffs_ch.send(f"⚠️ Chaewon encountered an error: `{e}`")
-        tailor_res = {"score": 80, "report": "Error generating full report", "saved_file": "", "filename": "error.md"}
+    # 2-4. Chaewon, Yunjin and Kazuha at once (R6): the dispatch card's "in parallel" is true now
+    await status_msg.edit(content="⭐🎨💻 **Chaewon, Yunjin and Kazuha are working in parallel...**")
+    steps = await run_apply_steps(job_text, company, role)
+    failed = [name for name, (status, _res, _err) in steps.items() if status == "failed"]
 
-    score = tailor_res["score"]
-    score_color = 0x57F287 if score >= 85 else (0xFEE75C if score >= 70 else 0xED4245)
+    def failure_line(name):
+        return f"⚠️ {name.title()} could not {APPLY_TASKS[name]}: {steps[name][2]}"
 
-    chaewon_embed = discord.Embed(
-        title=f"⭐ CHAEWON — Fit Analysis & Application Package",
-        description=f"**Target:** `{role}` at **{company}**\n"
-                    f"**ATS Match Score:** **{score}% Fit**\n\n"
-                    f"**Executive Synthesis:**\n"
-                    f"{tailor_res['report'][:500]}...\n\n"
-                    f"📁 Archive: `{tailor_res['filename']}`",
-        color=0xF1C40F
-    )
+    tailor_res = steps["chaewon"][1]
+    if tailor_res:
+        score = tailor_res["score"]
+        score_color = 0x57F287 if score >= 85 else (0xFEE75C if score >= 70 else 0xED4245)
+        chaewon_text = (f"**Target:** `{role}` at **{company}**\n"
+                        f"**ATS Match Score:** **{score}% Fit**\n\n"
+                        f"**Executive Synthesis:**\n"
+                        f"{str(tailor_res.get('report', ''))[:500]}...\n\n"
+                        f"📁 Archive: `{tailor_res.get('filename', '')}`")
+    else:
+        score, score_color = None, 0xED4245
+        chaewon_text = f"**Target:** `{role}` at **{company}**\n\n{failure_line('chaewon')}"
+    chaewon_embed = discord.Embed(title=f"⭐ CHAEWON — Fit Analysis & Application Package",
+                                  description=chaewon_text, color=0xF1C40F if tailor_res else 0xED4245)
     chaewon_embed.set_footer(text="Chaewon • Career Copilot • Handoff 1/3")
+    await handoffs_ch.send(embed=chaewon_embed, files=_apply_files(tailor_res) if tailor_res else [])
 
-    files_handoff = []
-    if tailor_res.get("saved_file") and Path(tailor_res["saved_file"]).exists():
-        files_handoff.append(discord.File(tailor_res["saved_file"], filename=tailor_res["filename"]))
-    if tailor_res.get("resume_pdf") and Path(tailor_res["resume_pdf"]).exists():
-        files_handoff.append(discord.File(tailor_res["resume_pdf"], filename=Path(tailor_res["resume_pdf"]).name))
-    if tailor_res.get("cover_pdf") and Path(tailor_res["cover_pdf"]).exists():
-        files_handoff.append(discord.File(tailor_res["cover_pdf"], filename=Path(tailor_res["cover_pdf"]).name))
-
-    await handoffs_ch.send(embed=chaewon_embed, files=files_handoff)
-
-    # 3. Yunjin Handoff: Portfolio Curation
-    await status_msg.edit(content=f"🎨 **Yunjin is curating flagship portfolio case studies & UX strategy...**")
-    try:
-        yunjin_res = await loop.run_in_executor(None, select_portfolio_pitch, job_text, role, company)
-        rec_projects = ", ".join(yunjin_res.get("recommended_projects", ["Vellum OS", "Lumina Analytics"]))
+    yunjin_res = steps["yunjin"][1]
+    if yunjin_res:
+        rec_projects = ", ".join(yunjin_res.get("recommended_projects") or []) or "none named"
         pitch_text = yunjin_res.get("pitch_text", "")
-    except Exception as e:
-        # Invariant 7: say the step failed instead of presenting stock picks as Yunjin's curation.
-        print(f"⚠️ [bot_sakura.handle_apply_orchestration] Yunjin curation failed: {type(e).__name__}: {e}", flush=True)
-        rec_projects = "none (curation failed)"
-        pitch_text = f"⚠️ Yunjin could not run the curation step: {type(e).__name__}: {e}"
-
+    else:
+        rec_projects, pitch_text = "none (curation failed)", failure_line("yunjin")
     yunjin_embed = discord.Embed(
         title=f"🎨 YUNJIN — Portfolio Curation & UX Pitch Strategy",
         description=f"**Lead Flagship Projects:** **{rec_projects}**\n\n"
@@ -550,15 +593,8 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     yunjin_embed.set_footer(text="Yunjin • Senior UX Critic • Handoff 2/3")
     await handoffs_ch.send(embed=yunjin_embed)
 
-    # 4. Kazuha Handoff: Frontend Architecture Pitch
-    await status_msg.edit(content=f"💻 **Kazuha is architecting frontend tech pitch & CS positioning...**")
-    try:
-        kazuha_res = await loop.run_in_executor(None, generate_tech_pitch, job_text, role, company)
-        tech_pitch = kazuha_res.get("tech_pitch", "")
-    except Exception as e:
-        print(f"⚠️ [bot_sakura.handle_apply_orchestration] Kazuha tech pitch failed: {type(e).__name__}: {e}", flush=True)
-        tech_pitch = f"⚠️ Kazuha could not write the tech pitch: {type(e).__name__}: {e}"
-
+    kazuha_res = steps["kazuha"][1]
+    tech_pitch = kazuha_res.get("tech_pitch", "") if kazuha_res else failure_line("kazuha")
     kazuha_embed = discord.Embed(
         title=f"💻 KAZUHA — Frontend Engineering & Technical Rigor",
         description=tech_pitch[:1500],
@@ -567,35 +603,59 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     kazuha_embed.set_footer(text="Kazuha • Lead Frontend Architect • Handoff 3/4")
     await handoffs_ch.send(embed=kazuha_embed)
 
-    # 5. Eunchae Handoff: Quality Assurance Gatekeeper Audit
-    await status_msg.edit(content=f"🛡️ **Eunchae is running QA Gatekeeper audit on all deliverables...**")
-    try:
-        from eunchae_engine import audit_application_package
-        qa_res = await loop.run_in_executor(
-            None,
-            audit_application_package,
-            tailor_res,
-            yunjin_res,
-            kazuha_res,
-            company,
-            role
-        )
-    except Exception as e:
-        qa_res = handle_qa_audit_failure(e)
+    # 5. Eunchae: QA only on a complete package
+    if failed:
+        qa_skip = ("QA skipped: Chaewon's package is missing" if "chaewon" in failed
+                   else f"QA skipped: {' and '.join(n.title() for n in failed)} failed")
+        eunchae_qa_embed = discord.Embed(title=f"🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
+                                         description=f"{qa_skip}. Nothing was audited.", color=0xFEE75C)
+    else:
+        await status_msg.edit(content=f"🛡️ **Eunchae is running QA Gatekeeper audit on all deliverables...**")
+        try:
+            from eunchae_engine import audit_application_package
+            qa_res = await loop.run_in_executor(
+                None,
+                audit_application_package,
+                tailor_res,
+                yunjin_res,
+                kazuha_res,
+                company,
+                role
+            )
+        except Exception as e:
+            qa_res = handle_qa_audit_failure(e)
 
-    qa_color = 0x57F287 if qa_res["score"] >= 90 else (0xFEE75C if qa_res["score"] >= 75 else 0xED4245)
-    eunchae_qa_embed = discord.Embed(
-        title=f"🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
-        description=f"**Verdict:** **{qa_res['verdict']}** | **QA Score:** **{qa_res['score']}%**\n\n"
-                    f"{qa_res['review'][:1200]}\n\n"
-                    f"🔍 Heuristics Checked: `{qa_res.get('heuristics_checked', 0)} active memory rules`",
-        color=qa_color
-    )
+        qa_color = 0x57F287 if qa_res["score"] >= 90 else (0xFEE75C if qa_res["score"] >= 75 else 0xED4245)
+        eunchae_qa_embed = discord.Embed(
+            title=f"🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
+            description=f"**Verdict:** **{qa_res['verdict']}** | **QA Score:** **{qa_res['score']}%**\n\n"
+                        f"{qa_res['review'][:1200]}\n\n"
+                        f"🔍 Heuristics Checked: `{qa_res.get('heuristics_checked', 0)} active memory rules`",
+            color=qa_color
+        )
     eunchae_qa_embed.set_footer(text="Eunchae • Team QA Inspector & Gatekeeper • Handoff 4/4")
     await handoffs_ch.send(embed=eunchae_qa_embed)
 
     # 6. Sakura Master Proposal Card in #approvals
     await status_msg.edit(content=f"📋 **Sakura is compiling Master Proposal in <#{approvals_ch.id}>...**")
+
+    if not tailor_res:
+        # No package, no fit score: nothing to approve (R6, P7).
+        proposal_embed = discord.Embed(
+            title=f"📋 MASTER APPLICATION PROPOSAL: {role} @ {company}",
+            description=f"The pipeline for **{company}** did not finish.\n\n"
+                        f"{failure_line('chaewon')}\n"
+                        f"🎨 **Yunjin (Portfolio):** {'Lead with **' + rec_projects + '**' if yunjin_res else failure_line('yunjin')}\n"
+                        f"💻 **Kazuha (Frontend):** {'pitch ready' if kazuha_res else failure_line('kazuha')}\n"
+                        f"🛡️ **Eunchae (QA):** QA skipped: Chaewon's package is missing\n\n"
+                        f"Re-run !apply once Chaewon is back.",
+            color=0xED4245
+        )
+        proposal_embed.set_footer(text="Sakura • Chief of Staff • Nothing to approve")
+        await approvals_ch.send(embed=proposal_embed)
+        await status_msg.edit(content=f"⚠️ **Pipeline stopped:** Chaewon could not build the package. "
+                                      f"Details in <#{handoffs_ch.id}>; re-run !apply once Chaewon is back.")
+        return
 
     pdf_line = ""
     if tailor_res.get("resume_pdf") and Path(tailor_res["resume_pdf"]).exists():
@@ -603,36 +663,37 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     if tailor_res.get("cover_pdf") and Path(tailor_res["cover_pdf"]).exists():
         pdf_line += f"✉️ **Cover Letter PDF:** `{Path(tailor_res['cover_pdf']).name}`\n"
 
-    qa_line, action_instructions, proposal_color = format_proposal_qa_status(
-        qa_res=qa_res,
-        default_score_color=score_color,
-        handoffs_channel_mention=f"<#{handoffs_ch.id}>"
-    )
+    if failed:
+        qa_line, action_instructions, proposal_color = format_proposal_qa_status(
+            qa_res={"passed": False, "score": 0}, default_score_color=score_color,
+            handoffs_channel_mention=f"<#{handoffs_ch.id}>")
+        qa_line = f"🛡️ **Eunchae (QA):** {qa_skip}; review the handoff cards before approving\n"
+    else:
+        qa_line, action_instructions, proposal_color = format_proposal_qa_status(
+            qa_res=qa_res,
+            default_score_color=score_color,
+            handoffs_channel_mention=f"<#{handoffs_ch.id}>"
+        )
 
+    yunjin_line = f"Lead with **{rec_projects}**" if yunjin_res else failure_line("yunjin")
+    kazuha_line = ("CS degree rigor & design-token architecture talking points locked" if kazuha_res
+                   else failure_line("kazuha"))
     proposal_embed = discord.Embed(
         title=f"📋 MASTER APPLICATION PROPOSAL: {role} @ {company}",
         description=f"The team has completed the multi-agent tailoring pipeline for **{company}**!\n\n"
                     f"⭐ **Chaewon (Career):** **{score}% Match** — Tailored resume bullets & custom cover letter generated\n"
-                    f"🎨 **Yunjin (Portfolio):** Lead with **{rec_projects}**\n"
-                    f"💻 **Kazuha (Frontend):** CS degree rigor & design-token architecture talking points locked\n"
+                    f"🎨 **Yunjin (Portfolio):** {yunjin_line}\n"
+                    f"💻 **Kazuha (Frontend):** {kazuha_line}\n"
                     f"{qa_line}"
                     f"{pdf_line}"
-                    f"📁 **Package File:** `{tailor_res['filename']}`\n\n"
+                    f"📁 **Package File:** `{tailor_res.get('filename', '')}`\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{action_instructions}",
         color=proposal_color
     )
     proposal_embed.set_footer(text="Sakura • Chief of Staff • React below to Approve or Discard")
 
-    proposal_files = []
-    if tailor_res.get("saved_file") and Path(tailor_res["saved_file"]).exists():
-        proposal_files.append(discord.File(tailor_res["saved_file"], filename=tailor_res["filename"]))
-    if tailor_res.get("resume_pdf") and Path(tailor_res["resume_pdf"]).exists():
-        proposal_files.append(discord.File(tailor_res["resume_pdf"], filename=Path(tailor_res["resume_pdf"]).name))
-    if tailor_res.get("cover_pdf") and Path(tailor_res["cover_pdf"]).exists():
-        proposal_files.append(discord.File(tailor_res["cover_pdf"], filename=Path(tailor_res["cover_pdf"]).name))
-
-    proposal_msg = await approvals_ch.send(embed=proposal_embed, files=proposal_files)
+    proposal_msg = await approvals_ch.send(embed=proposal_embed, files=_apply_files(tailor_res))
 
     # Add reaction buttons for Hans
     try:
@@ -688,8 +749,9 @@ async def on_raw_reaction_add(payload):
         new = apply_job_reaction(Path(data["folder"]), emoji_str)
         if new and target_msg and target_msg.embeds:
             embed = target_msg.embeds[0]
-            embed.set_footer(text={"approved": "Approved", "rejected": "Rejected: the next Claude run skips it",
-                                   "withdrawn": "Withdrawn"}[new])
+            label = {"approved": "Approved", "rejected": "Rejected: the next Claude run skips it",
+                     "withdrawn": "Withdrawn"}[new]
+            embed.set_footer(text=f"{label} · {Path(data['folder']).name}"[:2048])
             await target_msg.edit(embed=embed)
         return
 

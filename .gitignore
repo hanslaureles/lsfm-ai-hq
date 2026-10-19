@@ -49,3 +49,6 @@ memory/last_job_hunt_slot.txt
 memory/last_job_hunt_slot.txt.tmp
 # Sakura's pending ?/? proposals: bot runtime state, written while the bots run
 memory/pending_proposals.json
+# Ciel's per-tab conversation turns, kept across server restarts
+memory/ciel_conversations.json
+memory/ciel_conversations.json.tmp

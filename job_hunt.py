@@ -91,9 +91,9 @@ def load_rules(path: Path) -> Rules:
         if line.startswith("#"):
             section = line.lstrip("#").strip().lower()
             continue
-        bullet = re.match(r"^[-*+]\s+(.*)", line)
+        bullet = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)", line)  # '- x', '* x' or '1. x'
         if section.startswith("roles") and bullet:
-            for q in bullet.group(1).split("/"):
+            for q in re.split(r"\s+/\s+", bullet.group(1)):  # 'A / B' is two roles; 'AI/ML Engineer' is one
                 q = q.strip().lower()
                 if q and q not in rules.queries:
                     rules.queries.append(q)
@@ -116,7 +116,9 @@ def parse_posted(raw: str, now: datetime) -> date | None:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.upper().replace("Z", "+00:00")).date()
+        stamp = datetime.fromisoformat(s.upper().replace("Z", "+00:00"))
+        # a UTC stamp is read on this PC's day (PHT): 2026-10-15T20:00Z was posted on the 16th here
+        return (stamp.astimezone() if stamp.tzinfo else stamp).date()
     except ValueError:
         pass
     if s in ("today", "just now") or s.endswith("just now"):
@@ -220,21 +222,29 @@ def folder_name(found: date, company: str, role: str, existing: set) -> str:
 
 
 SOURCES = (("LinkedIn", fetch_linkedin_remote), ("Jobstreet", fetch_jobstreet))
+PAUSE_S = {"LinkedIn": 2.0}  # between one site's queries: the guest search throttles bursts
 
 
 def scout(rules: Rules) -> tuple:
-    """(jobs, failed_sources) from LinkedIn (remote filter) and Jobstreet; one source failing never stops the other."""
+    """(jobs, failed_sources) from LinkedIn (remote filter) and Jobstreet; one source failing never stops the other.
+    A source that answers every query with no jobs is listed too: it is usually blocked, not quiet."""
     jobs, failed = [], []
     for site, fetch in SOURCES:
-        errors = []
-        for q in rules.queries:
+        errors, found = [], 0
+        for i, q in enumerate(rules.queries):
+            if i and PAUSE_S.get(site):
+                CANCEL.wait(PAUSE_S[site])  # a cancel ends the pause at once; the checkpoint then stops the hunt
             _checkpoint()
             try:
-                jobs.extend(fetch(q))
+                batch = fetch(q)
+                found += len(batch)
+                jobs.extend(batch)
             except Exception as e:
                 errors.append(f"{type(e).__name__} {e}"[:80])
         if errors and len(errors) == len(rules.queries):
             failed.append(f"{site}: {errors[0]}")
+        elif rules.queries and not found:
+            failed.append(f"{site}: no jobs for any query")
     return jobs, failed
 
 
@@ -359,6 +369,8 @@ def _hunt(slot: str, SkillResult):
     today = now.date()
     try:
         rules = load_rules(JOB_HUNT_DIR / "rules.md")
+        if not rules.queries:
+            return SkillResult("failed", "Job hunt failed: rules.md lists no roles under '## Roles to search'")
         seen_path = JOB_HUNT_DIR / "seen.txt"
         ctx = load_master_resume_context()
         if "_error" in ctx:

@@ -35,7 +35,7 @@ from eunchae_engine import get_system_vitals
 from llm_client import get_brain_status
 from proactive_sentinel import evaluate_proactive_suggestions
 
-ciel = CielOrchestrator()
+ciel = CielOrchestrator(store=BASE_DIR / "memory" / "ciel_conversations.json")  # tabs keep their turns over a restart
 active_websockets = {}  # socket -> its HUD tab's session key (6C)
 ws_missions = set()  # strong refs to missions started over WS (the loop keeps only weak ones)
 

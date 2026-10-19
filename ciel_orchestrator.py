@@ -291,11 +291,17 @@ class Conversation:
         # Bumped by every reset and cancel: a mission that started before one may not hold an action
         # afterwards, so "confirm" never runs work Hans already cleared (Codex R4 F1).
         self.pending_epoch = 0
+        self.on_change = None  # set by CielOrchestrator to save the turns
+
+    def _changed(self):
+        if self.on_change:
+            self.on_change()
 
     def reset(self):
         self.turns = []
         self.generation += 1
         self.drop_pending()
+        self._changed()
 
     def drop_pending(self):
         self.pending = None
@@ -320,21 +326,50 @@ class Conversation:
             return
         self.turns.append(turn)
         self.turns = self.turns[-self.max_turns:]
+        self._changed()
 
 
 class CielOrchestrator:
     """The central intelligence coordinating the 5-agent team and Web HUD."""
 
-    def __init__(self, max_history_turns: int = 8):
+    def __init__(self, max_history_turns: int = 8, store: Path = None):
         self.obsidian = ObsidianClient()
         self.active_agents = set()
         self.max_history_turns = max_history_turns
         self.conversations = {}  # session key -> Conversation, least recently used first
+        # Optional file that keeps each tab's turns across server restarts (ciel_server passes one).
+        # A held "confirm" action is never saved: it must not outlive the process that asked.
+        self.store = Path(store) if store else None
+        self._load()
+
+    def _load(self):
+        try:
+            saved = json.loads(self.store.read_text(encoding="utf-8")) if self.store and self.store.is_file() else {}
+        except (OSError, ValueError) as e:
+            print(f"⚠️ [Ciel] conversation store unreadable, starting empty: {type(e).__name__}: {e}", flush=True)
+            saved = {}
+        for key, turns in (saved.items() if isinstance(saved, dict) else []):
+            if session_key(key) == key and isinstance(turns, list):
+                conv = self.conversation(key)
+                conv.turns = [t for t in turns if isinstance(t, dict)][-self.max_history_turns:]
+
+    def _save(self):
+        """Writes every tab's turns (temp file + os.replace); a failed write only costs the restart memory."""
+        if not self.store:
+            return
+        try:
+            tmp = self.store.with_name(self.store.name + ".tmp")
+            tmp.write_text(json.dumps({k: c.turns for k, c in self.conversations.items()},
+                                      ensure_ascii=False, default=str), encoding="utf-8")
+            os.replace(tmp, self.store)
+        except OSError as e:
+            print(f"⚠️ [Ciel] could not save conversations: {type(e).__name__}: {e}", flush=True)
 
     def conversation(self, session_id=None) -> Conversation:
         """The session's conversation, created on first use; marks it most recently used."""
         key = session_key(session_id)
         conv = self.conversations.pop(key, None) or Conversation(self.max_history_turns)
+        conv.on_change = self._save
         self.conversations[key] = conv
         # ponytail: a fixed cap with no timer; an idle tab's memory goes once 16 others were used after it.
         while len(self.conversations) > MAX_CONVERSATIONS:

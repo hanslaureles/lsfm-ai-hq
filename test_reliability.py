@@ -296,6 +296,9 @@ class FakeBot:
     def clear(self):
         pass
 
+    async def _async_setup_hook(self):
+        pass
+
     async def start(self, token):
         self.calls += 1
         if self.calls > 4:
@@ -361,6 +364,28 @@ class RetrySessionLeakTest(unittest.TestCase):
         self.assertEqual(len({id(s) for s, _ in attempts}), 3)  # one session per login
         self.assertEqual([dead for _, dead in attempts], [False] * 3)  # never built on a closed connector
         self.assertTrue(all(s.closed for s, _ in attempts), "a retried session was left open")
+
+    def test_a_retried_client_has_a_live_event_loop(self):
+        # 2026-10-18: after a DNS outage every retry failed with "'_MissingSentinel' object has no
+        # attribute 'create_task'": close() sets client.loop to MISSING and login() only rebuilds it
+        # from the constructor's sentinel, so the bots stayed offline until a restart.
+        loops = []
+
+        async def run():
+            bot = discord.Client(intents=discord.Intents.none())
+            running = asyncio.get_running_loop()
+
+            async def fake_request(http, route, **kwargs):
+                loops.append(bot.loop is running)
+                raise (ConnectionError("getaddrinfo failed") if len(loops) == 1
+                       else discord.errors.LoginFailure("Improper token has been passed."))
+
+            with mock.patch.object(discord.http.HTTPClient, "request", fake_request), \
+                    mock.patch.object(run_all.asyncio, "sleep", mock.AsyncMock()), mock.patch("builtins.print"):
+                await run_all.run_bot_resilient(bot, "token", "Test")
+
+        asyncio.run(run())
+        self.assertEqual(loops, [True, True])
 
     def test_session_is_closed_even_when_client_close_raises(self):
         # Client.close() awaits state and gateway cleanup before http.close(); if
