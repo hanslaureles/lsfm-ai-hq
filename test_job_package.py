@@ -83,7 +83,10 @@ class BuildTest(unittest.TestCase):
                 mock.patch("pdf_engine.render_html_to_pdf", side_effect=two_pages):
             res = build(d)
         self.assertFalse(res["ok"])
-        self.assertIn("2 pages", " ".join(res["errors"]))
+        resume_err, cover_err = res["errors"]
+        self.assertIn("2 pages; shorten the Resume bullets or skills", resume_err)
+        self.assertIn("2 pages; shorten cover_paragraphs", cover_err)
+        self.assertNotIn("summary", " ".join(res["errors"]))  # the resume prints no summary
         self.assertFalse(Path(res["resume"]).exists())
 
     def test_build_ok(self):

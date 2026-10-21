@@ -12,6 +12,8 @@ LIVE_PORTFOLIO_URL = os.getenv("PORTFOLIO_URL", "https://example.com")
 LIVE_PORTFOLIO_DISPLAY = os.getenv("PORTFOLIO_DISPLAY", "example.com")
 # Contact line on generated resumes and cover letters; set OWNER_EMAIL in .env.
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "you@example.com")
+# The serif (Harvard) layout embeds regular, bold and italic font subsets: 107 KB on 2026-10-21.
+RESUME_SIZE_TARGET_KB = 125
 
 def find_browser_path() -> Optional[str]:
     """Locates Microsoft Edge or Google Chrome for headless PDF rendering."""
@@ -230,9 +232,11 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
         elif "project" in sec_name:
             proj_items = []
             curr_proj: Optional[Dict[str, Any]] = None
+            in_resume_bullets = False  # inside an indented "- **Resume bullets:**" list
             for l in sec_lines:
                 ls = l.strip()
                 if ls.startswith("### "):
+                    in_resume_bullets = False
                     if curr_proj:
                         proj_items.append(curr_proj)
                     heading = ls[4:].strip()
@@ -249,7 +253,15 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
                 elif curr_proj:
                     if ls.startswith("- ") or ls.startswith("* "):
                         bullet = ls[2:].strip()
-                        if bullet.lower().startswith("**resume line:**"):
+                        if l[:1] not in " \t":  # a top-level field ends the Resume bullets list
+                            in_resume_bullets = bullet.lower().startswith("**resume bullets:**")
+                        if bullet.lower().startswith("**resume bullets:**"):
+                            pass
+                        elif in_resume_bullets:  # the bullets the resume prints for this project
+                            curr_proj.setdefault("resume_bullets", []).append(bullet)
+                        elif bullet.lower().startswith("**period:**"):
+                            curr_proj["date"] = bullet.split(":", 1)[1].lstrip("* ").strip()
+                        elif bullet.lower().startswith("**resume line:**"):
                             curr_proj["desc"] = bullet.split(":", 1)[1].lstrip("* ").strip()
                         elif bullet.lower().startswith("**role:**"):
                             credit_m = re.search(r'\(([^)]+)\)\s*$', bullet)  # "Developer (Solo Project)"
@@ -288,6 +300,8 @@ def parse_markdown_resume(content: str) -> Tuple[Dict[str, Any], Optional[str]]:
                         key = "skills_sys"
                     elif any(k in cat_lower for k in ["front", "ui", "mobile", "design"]):
                         key = "skills_ui"
+                    elif any(k in cat_lower for k in ["cloud", "data"]):
+                        key = "skills_cloud"
                     if key:  # several lines can feed one row; keep them all
                         ctx[key] = f"{ctx[key]}, {vals_clean}" if ctx.get(key) else vals_clean
 
@@ -359,71 +373,50 @@ def load_master_resume_context(resume_path: Optional[Path] = None) -> Dict[str, 
 
 def build_resume_html(data: Dict[str, Any]) -> str:
     """
-    Builds an executive, Swiss-inspired, ATS-optimized 1-page HTML resume.
+    Builds a 1-page Harvard-style HTML resume: centered name and contact line, then
+    Education, Experience, Projects and Skills; serif, black only, single column.
     Uses semantic HTML5 and selectable text so ATS parsers can read every section.
     Renders ONLY data supplied in data dictionary (zero invented credentials).
+    The summary and title stay in the data (cover letters, tailoring) but are not printed.
     """
     name = data.get("name") or os.getenv("OWNER_NAME", "Candidate Name")
-    title = data.get("title") or os.getenv("OWNER_TITLE", "Software Engineer")
-    if not title or title in ["Design / Engineering Role", "Target Role", "Role", "Application"]:
-        title = os.getenv("OWNER_TITLE", "Software Engineer")
 
     location = data.get("location_short") or data.get("location") or os.getenv("OWNER_LOCATION", "")
     email = data.get("email") or os.getenv("OWNER_EMAIL", OWNER_EMAIL)
     portfolio_url = data.get("portfolio_url") or os.getenv("PORTFOLIO_URL", "")
     portfolio_display = data.get("portfolio_display") or os.getenv("PORTFOLIO_DISPLAY", portfolio_url.replace("https://", "").replace("http://", "").rstrip("/"))
-    
-    portfolio_link = f'<a href="{portfolio_url}" target="_blank" style="color: #2563eb; text-decoration: none;">{portfolio_display}</a>' if portfolio_url else ""
-    email_link = f'<a href="mailto:{email}" style="color: #2563eb; text-decoration: none;">{email}</a>' if email else ""
-
     github_url = data.get("github_url") or os.getenv("OWNER_GITHUB", "")
     github_display = github_url.replace("https://", "").replace("http://", "").rstrip("/")
-    github_link = f'<a href="{github_url}" target="_blank" style="color: #2563eb; text-decoration: none;">{github_display}</a>' if github_url else ""
-
-    education_short = data.get("education_short") or data.get("education_degree", "")
 
     contact_parts = []
     if location:
         contact_parts.append(f"<span>{location}</span>")
-    if email_link:
-        contact_parts.append(f"<span>{email_link}</span>")
-    if portfolio_link:
-        contact_parts.append(f"<span>{portfolio_link}</span>")
-    if github_link:
-        contact_parts.append(f"<span>{github_link}</span>")
-    if education_short:
-        contact_parts.append(f"<span>{education_short}</span>")
-    contact_bar_html = '<span class="sep"> · </span>'.join(contact_parts)
+    if email:
+        contact_parts.append(f'<span><a href="mailto:{email}">{email}</a></span>')
+    if portfolio_url:
+        contact_parts.append(f'<span><a href="{portfolio_url}">{portfolio_display}</a></span>')
+    if github_url:
+        contact_parts.append(f'<span><a href="{github_url}">{github_display}</a></span>')
+    contact_html = " • ".join(contact_parts)
 
-    summary = data.get("summary", "")
-    if len(summary) > 280:
-        sentences = [s.strip().rstrip('.') for s in summary.split(". ") if s.strip()]
-        if len(sentences) >= 2:
-            summary = sentences[0] + ". " + sentences[1] + "."
-        else:
-            summary = summary[:280].rsplit(" ", 1)[0] + "..."
-    summary_html = format_inline_markdown(summary) if summary else ""
-    
-    bullets = data.get("bullets", [])
-    bullets = [b for b in bullets if b][:4]
-    bullet_items_html = "".join(f"<li>{format_inline_markdown(b)}</li>" for b in bullets)
+    def entry(left_bold: str, right_1: str, left_italic: str, right_2: str, bullets: List[str]) -> str:
+        """One Harvard entry: bold name | place, italic role | dates, then bullets."""
+        rows = f'<div class="row"><span class="org">{left_bold}</span><span>{right_1}</span></div>'
+        if left_italic or right_2:
+            rows += f'<div class="row"><span class="role">{left_italic}</span><span>{right_2}</span></div>'
+        items = "".join(f"<li>{format_inline_markdown(b)}</li>" for b in bullets if b)
+        return f'<div class="entry">{rows}{f"<ul>{items}</ul>" if items else ""}</div>'
 
-    projects = data.get("projects", [])
-    project_items_html = ""
-    for p in projects[:4]:
-        p_name = p.get('name', '')
-        p_tag = " · ".join(x for x in (p.get('tag', ''), p.get('credit', '')) if x)
-        tag_html = f'<span class="item-meta">{p_tag}</span>' if p_tag else ''
-        p_desc = p.get('desc', '')
-        project_items_html += f"""
-        <div class="item">
-          <div class="item-header">
-            <span class="item-title">{p_name}</span>
-            {tag_html}
-          </div>
-          <p class="item-desc">{format_inline_markdown(p_desc)}</p>
-        </div>
-        """
+    edu_degree = data.get("education_degree", "")
+    edu_school = data.get("education_institution", "")
+    edu_dates = data.get("education_dates", "")
+    edu_coursework = data.get("education_coursework", "").rstrip(".")
+    edu_html = ""
+    if edu_degree or edu_school:
+        course_html = f'<p>Relevant coursework: {edu_coursework}.</p>' if edu_coursework else ""
+        edu_html = (f'<div class="entry"><div class="row"><span class="org">{edu_school or edu_degree}</span><span>{edu_dates}</span></div>'
+                    + (f'<div class="row"><span class="role">{edu_degree}</span><span></span></div>' if edu_school else "")
+                    + f'{course_html}</div>')
 
     experiences = data.get("experience", [])
     if not experiences and (data.get("experience_title") or data.get("experience_company")):
@@ -434,39 +427,23 @@ def build_resume_html(data: Dict[str, Any]) -> str:
             "desc": data.get("experience_desc", ""),
             "bullets": data.get("experience_bullets", [])
         }]
-    exp_items_html = ""
+    exp_html = ""
     for exp in experiences[:3]:
-        e_title = exp.get("title", "")
-        e_company = exp.get("company", "")
-        e_date = exp.get("date", "")
-        e_desc = exp.get("desc", "")
-        e_bullets = exp.get("bullets", [])
-        header_sub = f" · <span class=\"item-subtitle\">{e_company}</span>" if e_company else ""
-        desc_html = f"<p class=\"item-desc\">{format_inline_markdown(e_desc)}</p>" if e_desc else ""
-        b_html = ""
-        if e_bullets and not e_desc:
-            b_html = "<ul class=\"bullet-list\" style=\"margin-top: 1px;\">" + "".join(f"<li>{format_inline_markdown(b)}</li>" for b in e_bullets[:3]) + "</ul>"
-        exp_items_html += f"""
-        <div class="item">
-          <div class="item-header">
-            <div>
-              <span class="item-title">{e_title}</span>{header_sub}
-            </div>
-            <span class="item-date">{e_date}</span>
-          </div>
-          {desc_html}
-          {b_html}
-        </div>
-        """
+        org, _, place = exp.get("company", "").partition(" · ")  # "Company · City, Country"
+        bullets = exp.get("bullets", [])[:3] or [exp.get("desc", "")]
+        exp_html += entry(org or exp.get("title", ""), place, exp.get("title", "") if org else "", exp.get("date", ""), bullets)
 
-    edu_degree = data.get("education_degree", "")
-    edu_school = data.get("education_institution", "")
-    edu_dates = data.get("education_dates", "")
-    edu_coursework = data.get("education_coursework", "")
+    highlights = [b for b in data.get("bullets", []) if b][:4]
+    highlights_html = "".join(f"<li>{format_inline_markdown(b)}</li>" for b in highlights)
 
-    skills_ai = data.get("skills_ai", "")
-    skills_sys = data.get("skills_sys", "")
-    skills_ui = data.get("skills_ui", "")
+    proj_html = ""
+    for p in data.get("projects", [])[:4]:
+        bullets = p.get("resume_bullets") or [p.get("desc", "")]
+        proj_html += entry(p.get("name", ""), p.get("credit", ""), p.get("tag", ""), p.get("date", ""), bullets)
+
+    skill_rows = [("AI & LLM", data.get("skills_ai", "")), ("Languages & Backend", data.get("skills_sys", "")),
+                  ("Frontend & Design", data.get("skills_ui", "")), ("Cloud & Data", data.get("skills_cloud", ""))]
+    skills_html = "".join(f"<p><strong>{label}:</strong> {vals}</p>" for label, vals in skill_rows if vals)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -474,232 +451,43 @@ def build_resume_html(data: Dict[str, Any]) -> str:
 <meta charset="utf-8">
 <title>{name} — Resume</title>
 <style>
-  @page {{
-    size: letter;
-    margin: 0.26in 0.38in 0.20in 0.38in;
-  }}
-  * {{
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    color: #1a1a1a;
-    background: #ffffff;
-    font-size: 8.7pt;
-    line-height: 1.26;
-    -webkit-font-smoothing: antialiased;
-  }}
-  header {{
-    margin-bottom: 7px;
-    border-bottom: 2px solid #111827;
-    padding-bottom: 4px;
-  }}
-  .name-row {{
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 2px;
-  }}
-  h1 {{
-    font-size: 18.5pt;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    color: #0f172a;
-  }}
-  .target-title {{
-    font-size: 9.8pt;
-    font-weight: 600;
-    color: #2563eb;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-  }}
-  .contact-bar {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    font-size: 8.3pt;
-    color: #475569;
-    font-weight: 500;
-    margin-top: 2px;
-  }}
-  .contact-bar span.sep {{
-    color: #cbd5e1;
-  }}
-  section {{
-    margin-bottom: 6px;
-  }}
-  h2 {{
-    font-size: 8.6pt;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: #0f172a;
-    border-bottom: 1px solid #e2e8f0;
-    padding-bottom: 2px;
-    margin-bottom: 3px;
-  }}
-  .summary-text {{
-    font-size: 8.5pt;
-    color: #334155;
-    line-height: 1.25;
-  }}
-  .item {{
-    margin-bottom: 3.5px;
-  }}
-  .item:last-child {{
-    margin-bottom: 0;
-  }}
-  .item-header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 1px;
-  }}
-  .item-title {{
-    font-weight: 700;
-    font-size: 8.9pt;
-    color: #0f172a;
-  }}
-  .item-subtitle {{
-    font-weight: 600;
-    color: #334155;
-  }}
-  .item-date {{
-    font-size: 8pt;
-    font-weight: 600;
-    color: #64748b;
-    text-align: right;
-  }}
-  .item-meta {{
-    font-size: 8pt;
-    font-weight: 500;
-    color: #2563eb;
-  }}
-  .item-desc {{
-    font-size: 8.3pt;
-    color: #334155;
-    line-height: 1.22;
-  }}
-  ul.bullet-list {{
-    list-style-type: square;
-    margin-left: 14px;
-    margin-top: 2px;
-  }}
-  ul.bullet-list li {{
-    font-size: 8.3pt;
-    color: #334155;
-    margin-bottom: 2px;
-    line-height: 1.22;
-  }}
-  ul.bullet-list li strong {{
-    color: #0f172a;
-  }}
-  .skills-grid {{
-    display: grid;
-    grid-template-columns: 125px 1fr;
-    row-gap: 2px;
-    font-size: 8.2pt;
-    line-height: 1.22;
-  }}
-  .skills-label {{
-    font-weight: 700;
-    color: #0f172a;
-  }}
-  .skills-val {{
-    color: #334155;
-  }}
+  @page {{ size: letter; margin: 0.5in 0.65in; }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: "Times New Roman", Times, serif; color: #000; background: #fff; font-size: 10.5pt; line-height: 1.22; }}
+  a {{ color: #000; text-decoration: none; }}
+  header {{ text-align: center; margin-bottom: 10px; }}
+  h1 {{ font-size: 18pt; font-weight: 700; }}
+  .contact {{ margin-top: 2px; }}
+  h2 {{ font-size: 10.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+        border-bottom: 1px solid #000; padding-bottom: 1px; margin: 10px 0 5px; }}
+  .entry {{ margin-bottom: 6px; }}
+  .row {{ display: flex; justify-content: space-between; gap: 12px; }}
+  .org {{ font-weight: 700; }}
+  .role {{ font-style: italic; }}
+  ul {{ margin: 2px 0 0 18px; }}
+  li {{ margin-bottom: 1px; }}
+  .skills p {{ margin-bottom: 2px; }}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="name-row">
-    <h1>{name}</h1>
-    <div class="target-title">{title}</div>
-  </div>
-  <div class="contact-bar">
-    {contact_bar_html}
-  </div>
+  <h1>{name}</h1>
+  <p class="contact">{contact_html}</p>
 </header>
 
 <main>
 """
-
-    if summary_html:
-        html += f"""
-  <section>
-    <h2>Professional Summary</h2>
-    <p class="summary-text">{summary_html}</p>
-  </section>
-"""
-
-    if exp_items_html:
-        html += f"""
-  <section>
-    <h2>Professional Work Experience</h2>
-    {exp_items_html}
-  </section>
-"""
-
-    if bullet_items_html:
-        html += f"""
-  <section>
-    <h2>Key Technical Impact</h2>
-    <ul class="bullet-list">
-      {bullet_items_html}
-    </ul>
-  </section>
-"""
-
-    if project_items_html:
-        html += f"""
-  <section>
-    <h2>Featured Engineering Projects</h2>
-    {project_items_html}
-  </section>
-"""
-
-    if edu_degree or edu_school:
-        edu_meta = f'<span class="item-date">{edu_dates}</span>' if edu_dates else ''
-        course_meta = f'<span class="item-date">{edu_coursework}</span>' if edu_coursework else ''
-        school_sub = f'<span class="item-subtitle">{edu_school}</span>' if edu_school else ''
-        html += f"""
-  <section>
-    <h2>Education</h2>
-    <div class="item">
-      <div class="item-header">
-        <div>
-          <span class="item-title">{edu_degree}</span>
-        </div>
-        {edu_meta}
-      </div>
-      <div class="item-header">
-        {school_sub}
-        {course_meta}
-      </div>
-    </div>
-  </section>
-"""
-
-    skills_rows = ""
-    if skills_ai:
-        skills_rows += f'<div class="skills-label">AI & LLM Orchestration:</div><div class="skills-val">{skills_ai}</div>\n'
-    if skills_sys:
-        skills_rows += f'<div class="skills-label">Languages & Backend:</div><div class="skills-val">{skills_sys}</div>\n'
-    if skills_ui:
-        skills_rows += f'<div class="skills-label">Frontend & Design:</div><div class="skills-val">{skills_ui}</div>\n'
-
-    if skills_rows:
-        html += f"""
-  <section>
-    <h2>Technical Proficiencies & Capabilities</h2>
-    <div class="skills-grid" style="grid-template-columns: 160px 1fr;">
-      {skills_rows}
-    </div>
-  </section>
-"""
+    if edu_html:
+        html += f"\n  <section>\n    <h2>Education</h2>\n    {edu_html}\n  </section>\n"
+    if exp_html:
+        html += f"\n  <section>\n    <h2>Experience</h2>\n    {exp_html}\n  </section>\n"
+    if highlights_html:
+        html += f"\n  <section>\n    <h2>Highlights</h2>\n    <ul>{highlights_html}</ul>\n  </section>\n"
+    if proj_html:
+        html += f"\n  <section>\n    <h2>Projects</h2>\n    {proj_html}\n  </section>\n"
+    if skills_html:
+        html += f'\n  <section>\n    <h2>Skills</h2>\n    <div class="skills">{skills_html}</div>\n  </section>\n'
 
     html += """</main>
 
@@ -707,6 +495,8 @@ def build_resume_html(data: Dict[str, Any]) -> str:
 </html>
 """
     return html
+
+
 def build_cover_letter_html(data: Dict[str, Any]) -> str:
     """Builds a matching executive 1-page Cover Letter PDF."""
     name = data.get("name") or os.getenv("OWNER_NAME", "Candidate Name")
@@ -1087,8 +877,8 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
                 f"Master ATS Vector Resume Rebuilt ({size_kb} KB)",
                 [
                     f"Artifact: {master_pdf.name} ({size_kb} KB)",
-                    "Typography: system sans-serif stack, selectable vector text",
-                    "Geometry: single-page Letter layout",
+                    "Typography: Times New Roman serif, selectable vector text",
+                    "Geometry: single-page Letter layout (Harvard style)",
                     f"Portfolio copy ({portfolio_pdf.name}): {PORTFOLIO_SYNC_TEXT.get(portfolio_sync, portfolio_sync)}",
                     f"Archived copy: {archive_pdf.name if archive_pdf else 'Skipped'}"
                 ]

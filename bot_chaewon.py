@@ -83,7 +83,7 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
                 description=(
                     f"**Hans Aaron Laureles — Applied AI Engineer & Full-Stack Builder**\n\n"
                     f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
-                    f"• **Text:** Selectable vector text (system sans-serif stack)\n"
+                    f"• **Text:** Selectable vector text (Times New Roman, Harvard layout)\n"
                     f"• **Geometry:** 1-page Letter layout\n"
                     f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                     f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"
@@ -578,7 +578,7 @@ async def cmd_rebuild_resume(ctx):
             description=(
                 f"**Hans Aaron Laureles — Applied AI Engineer & Full-Stack Builder**\n\n"
                 f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
-                f"• **Text:** Selectable vector text (system sans-serif stack)\n"
+                f"• **Text:** Selectable vector text (Times New Roman, Harvard layout)\n"
                 f"• **Geometry:** 1-page Letter layout\n"
                 f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                 f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"

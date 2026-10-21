@@ -120,7 +120,10 @@ def build(job_dir: Path) -> dict:
             if not pdf_engine.render_html_to_pdf(page, pdf):
                 errors.append(f"render failed: {pdf.name}")
             elif page_count(pdf) != 1:
-                errors.append(f"{pdf.name} is {page_count(pdf)} pages; shorten summary/cover text")
+                # The resume prints no summary, so its length comes from master_resume.md.
+                hint = ("shorten the Resume bullets or skills in master_resume.md" if pdf == resume
+                        else "shorten cover_paragraphs")
+                errors.append(f"{pdf.name} is {page_count(pdf)} pages; {hint}")
                 pdf.unlink()
     result.update(ok=not errors, errors=errors)
     return result

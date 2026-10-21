@@ -8,6 +8,7 @@ Verifies that:
 5. Empty context dict maintains backwards-compatibility for benchmarking.
 """
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -325,8 +326,10 @@ class TestMasterProfileLayout(unittest.TestCase):
         self.assertEqual(ctx["projects"][0]["credit"], "Solo Project")
         self.assertEqual(ctx["projects"][1].get("credit", ""), "")
         html = build_resume_html(ctx)
-        self.assertIn("Tag A · Solo Project", html)
-        self.assertNotIn("Tag B ·", html)
+        alpha, beta = html.split('<span class="org">Alpha</span>', 1)[1].split('<span class="org">Beta</span>', 1)
+        self.assertIn("<span>Solo Project</span>", alpha)  # credit opposite the name, Harvard style
+        self.assertIn('<span class="role">Tag A</span>', alpha)
+        self.assertNotIn("Solo Project", beta)
 
     def test_short_location_and_degree_feed_only_the_header(self):
         text = MASTER_STYLE_RESUME.replace(
@@ -340,7 +343,33 @@ class TestMasterProfileLayout(unittest.TestCase):
         header = html.split("<header", 1)[1].split("</header>", 1)[0]
         self.assertIn("City, Country", header)
         self.assertNotIn("Open to Remote", header)
-        self.assertIn("BS CS (EU)", header)
+        self.assertNotIn("BS CS (EU)", header)  # Education leads the page, so the header skips the degree
+
+    def test_resume_bullets_period_and_cloud_row(self):
+        text = MASTER_STYLE_RESUME.replace(
+            "- **Resume line:** One short line about Alpha.\n",
+            "- **Period:** 2025 – Present\n- **Resume line:** One short line about Alpha.\n"
+            "- **Resume bullets:**\n  - First printed bullet.\n  - Second printed bullet.\n"
+        ) + "- **Cloud & Databases:** AWS (Lambda), SQLite\n"
+        ctx, _ = parse_markdown_resume(text)
+        alpha, beta = ctx["projects"]
+        self.assertEqual(alpha["resume_bullets"], ["First printed bullet.", "Second printed bullet."])
+        self.assertEqual(alpha["date"], "2025 – Present")
+        self.assertEqual(alpha["bullets"], ["A long first bullet about Alpha.", "A long second bullet about Alpha."])
+        self.assertNotIn("resume_bullets", beta)
+        self.assertEqual(ctx["skills_cloud"], "AWS (Lambda), SQLite")
+        html = build_resume_html(ctx)
+        self.assertIn("<li>First printed bullet.</li><li>Second printed bullet.</li>", html)
+        self.assertNotIn("A long first bullet", html)  # Key Contributions stay off the page
+        self.assertIn("<li>Only bullet about Beta.</li>", html)  # no Resume bullets: the description prints
+        self.assertIn("<strong>Cloud & Data:</strong> AWS (Lambda), SQLite", html)
+
+    def test_harvard_order_without_summary_or_title(self):
+        html = build_resume_html(self.ctx)
+        headings = re.findall(r"<h2>([^<]+)</h2>", html)
+        self.assertEqual(headings, ["Education", "Experience", "Highlights", "Projects", "Skills"])
+        self.assertNotIn("Builds agents", html)  # the summary stays in the data for cover letters
+        self.assertNotIn("Applied AI Engineer", html)
 
 
 def _fake_pdf(browser: str, stamp: str, body: str) -> bytes:
