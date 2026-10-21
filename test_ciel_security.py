@@ -7,9 +7,11 @@ Run: python -m unittest test_ciel_security.py
 import asyncio
 import os
 import sys
+import tempfile
 import time
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from aiohttp import FormData, WSServerHandshakeError
@@ -193,6 +195,56 @@ class TestLocalhostGuard(unittest.IsolatedAsyncioTestCase):
         pong = await ws.receive_json(timeout=2)
         self.assertEqual(pong["type"], "pong")
         await ws.close()
+
+
+class TestHudStatic(unittest.IsolatedAsyncioTestCase):
+    """/ opens the HUD; no directory listing; nothing under a dot-path such as .git is served."""
+
+    async def asyncSetUp(self):
+        self.hud = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (self.hud / "index.html").write_text("<title>Ciel HUD</title>")
+        (self.hud / "hud.js").write_text("// hud")
+        (self.hud / "assets").mkdir()
+        (self.hud / "assets" / "logo.svg").write_text("<svg/>")
+        (self.hud / ".git").mkdir()
+        (self.hud / ".git" / "config").write_text("[core]")
+        (self.hud / ".gitignore").write_text("*.log")
+        self.enterContext(mock.patch.object(ciel_server, "HUD_DIR", self.hud))
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_root_serves_the_hud(self):
+        res = await self.client.get("/", headers=GOOD_HOST)
+        self.assertEqual(res.status, 200)
+        self.assertIn("Ciel HUD", await res.text())
+
+    async def test_hud_files_still_served(self):
+        for path in ("/index.html", "/hud.js", "/assets/logo.svg"):
+            res = await self.client.get(path, headers=GOOD_HOST)
+            self.assertEqual(res.status, 200, path)
+
+    async def test_dot_paths_and_listings_are_404(self):
+        for path in ("/.git/config", "/.gitignore", "/%2Egit/config", "/.git/", "/assets/", "/missing.js"):
+            res = await self.client.get(path, headers=GOOD_HOST)
+            self.assertEqual(res.status, 404, path)
+
+    @unittest.skipUnless(sys.platform == "win32", "8.3 short names are a Windows feature")
+    async def test_short_name_alias_of_git_is_404(self):
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.kernel32.GetShortPathNameW(str(self.hud / ".git"), buf, 260)
+        alias = Path(buf.value).name
+        if not alias or alias == ".git":
+            self.skipTest("no 8.3 name on this volume")
+        res = await self.client.get(f"/{alias}/config", headers=GOOD_HOST)
+        self.assertEqual(res.status, 404)
+
+    async def test_foreign_host_still_rejected(self):
+        res = await self.client.get("/", headers={"Host": "evil.example:8000"})
+        self.assertEqual(res.status, 403)
 
 
 class TestServerStaysResponsive(unittest.IsolatedAsyncioTestCase):

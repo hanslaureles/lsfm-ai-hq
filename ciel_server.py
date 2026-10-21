@@ -364,6 +364,22 @@ async def cleanup_background_tasks(app):
                 pass
 
 
+async def handle_hud(request):
+    """
+    Serves the HUD's files, with / as index.html. No directory listing, and nothing
+    under a dot-path (.git, .github, .gitignore). The check runs on the resolved path,
+    so Windows 8.3 aliases (GIT~1 is .git) and traversal are refused too.
+    """
+    try:
+        target = (HUD_DIR / (request.match_info["path"] or "index.html")).resolve(strict=True)
+        rel = target.relative_to(HUD_DIR.resolve())
+    except (OSError, ValueError):
+        raise web.HTTPNotFound()
+    if not target.is_file() or any(part.startswith(".") for part in rel.parts):
+        raise web.HTTPNotFound()
+    return web.FileResponse(target)
+
+
 def create_app():
     # Auto-prune audio cache on server spin-up
     pruned = prune_audio_cache()
@@ -388,8 +404,8 @@ def create_app():
     # Static audio cache serving
     app.router.add_static("/audio", path=str(AUDIO_DIR), name="audio")
 
-    # Static HUD UI serving
-    app.router.add_static("/", path=str(HUD_DIR), name="hud", show_index=True)
+    # Static HUD UI serving (last: the catch-all must not shadow the routes above)
+    app.router.add_get("/{path:.*}", handle_hud, name="hud")
 
     return app
 
