@@ -1,7 +1,5 @@
-import os
 import sys
 import time
-import re
 from pathlib import Path
 from typing import Dict, Any, List
 from collections import defaultdict
@@ -22,8 +20,7 @@ from gmail_engine import (
     get_gmail_service,
     ensure_lsfm_labels,
     classify_email,
-    get_label_id_for_category,
-    extract_body_text
+    get_label_id_for_category
 )
 from googleapiclient.errors import HttpError
 
@@ -160,7 +157,7 @@ def run_mass_cleanse():
         subj_short = summary[:45]
         print(f"[{idx:3d}/{total:3d}] {status_tag} {cat:<24} | {source_short:<20} | {subj_short}")
 
-    print(f"\n🏷️ [3/3] Applying batch updates to Gmail...")
+    print("\n🏷️ [3/3] Applying batch updates to Gmail...")
 
     for (target_label_id, is_noise), msg_ids in action_groups.items():
         if not msg_ids:
@@ -185,7 +182,7 @@ def run_mass_cleanse():
     print("\n" + "=" * 65)
     print("🎉 MASS INBOX CLEANSE COMPLETED SUCCESSFULLY!")
     print("=" * 65)
-    print(f"📊 Summary:")
+    print("📊 Summary:")
     print(f"   • Total Emails Scanned: {total}")
     print(f"   • 🧹 Promotional & Newsletter Noise Archived: {archived_count}")
     print(f"   • 📌 High-Signal Items Neatly Labeled in Primary Inbox: {retained_count}")

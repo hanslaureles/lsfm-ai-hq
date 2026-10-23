@@ -1,6 +1,5 @@
 import os
 import sys
-import asyncio
 import discord
 from dotenv import load_dotenv
 
@@ -43,7 +42,7 @@ async def on_ready():
                 target_cat = await guild.create_category(CATEGORY_NAME, position=0)
                 print(f"✅ Created Category: {CATEGORY_NAME}", flush=True)
             except discord.Forbidden:
-                print(f"❌ Forbidden: Bot lacks 'Manage Channels' permission to create category.", flush=True)
+                print("❌ Forbidden: Bot lacks 'Manage Channels' permission to create category.", flush=True)
                 await client.close()
                 return
             except Exception as e:
@@ -191,7 +190,7 @@ async def on_ready():
             )
             kazuha_embed.add_field(
                 name="🌿 `!git`",
-                value="Checks git status and uncommitted files in your Antigravity workspace.",
+                value="Checks git status and uncommitted files in your workspace.",
                 inline=False
             )
             kazuha_embed.set_footer(text="Kazuha • Lead Frontend Architect • Command Directory")

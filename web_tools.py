@@ -2,7 +2,6 @@ from heavy_jobs import run_heavy
 import re
 import json
 import time
-import asyncio
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -104,7 +103,6 @@ async def scrape_job_url(url: str) -> dict:
         print(f"⚠️ [web_tools.scrape_job_url] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 
     # 2. Secondary fallback via headless Edge
-    loop = asyncio.get_running_loop()
     edge_text = await run_heavy(scrape_with_headless_edge, url)
     if edge_text and len(edge_text) > 150 and not is_bot_challenge_page(edge_text):
         return {

@@ -4,7 +4,6 @@ Guarantees that audit exceptions, missing assets, and unhandled errors are never
 reworded or masked as 'QA PASSED'.
 """
 
-import os
 import tempfile
 import unittest
 from pathlib import Path

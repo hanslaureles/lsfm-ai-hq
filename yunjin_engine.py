@@ -1,7 +1,5 @@
-import os
 import re
 import datetime
-import warnings
 from pathlib import Path
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv

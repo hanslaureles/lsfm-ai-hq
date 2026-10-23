@@ -77,8 +77,8 @@ SWARM_MEMORY_DIR = Path(__file__).parent / "memory"
 LAST_SCOUT_DATE_FILE = SWARM_MEMORY_DIR / "last_research_scout_date.txt"
 
 try:
-    from recall import recall_memories, DEFAULT_STORE  # type: ignore
-    from crystallize import crystallize, DEFAULT_RULES_OUTPUT  # type: ignore
+    from recall import recall_memories  # type: ignore
+    from crystallize import crystallize  # type: ignore
     from reflect import record_reflection  # type: ignore
 except Exception as _exc:
     print(f"⚠️ [bot_kazuha.<module>] suppressed {type(_exc).__name__}: {_exc}", flush=True)
@@ -204,7 +204,7 @@ async def on_message(message):
     if any(k in lower for k in ["git status", "uncommitted", "repo status", "git changes", "check git"]):
         status = get_git_status()
         embed = discord.Embed(
-            title="📁 Antigravity Workspace Git Status",
+            title="📁 Workspace Git Status",
             description=status,
             color=0x00B4D8
         )
@@ -685,7 +685,7 @@ async def rules_command(ctx):
             description=f"Permanent heuristics auto-compiled from real-world post-mortems:\n\n{preview}\n\n*Full rules file: `.agents/rules/learned_rules.md`*",
             color=0x00B4D8
         )
-        embed.set_footer(text="Self-Improving Developer Agent Engine • Antigravity Customizations")
+        embed.set_footer(text="Self-Improving Developer Agent Engine • Workspace Rules")
         await ctx.reply(embed=embed)
     except Exception as e:
         await ctx.reply(f"❌ Error reading rules: `{e}`")

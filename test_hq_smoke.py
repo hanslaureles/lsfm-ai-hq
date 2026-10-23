@@ -3,7 +3,6 @@ Smoke Test Suite for LE SSERAFIM AI HQ
 Tests syntax compilation, configuration integrity, and Obsidian integration.
 """
 
-import os
 import unittest
 import py_compile
 from pathlib import Path

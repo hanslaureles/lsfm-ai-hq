@@ -35,7 +35,7 @@ def print_setup_guide():
     print("   • Application type: 'Desktop app'")
     print("   • Name: 'LE SSERAFIM AI Desktop'")
     print("   • Click Create, then click 'DOWNLOAD JSON'")
-    print(f"\n6. Rename the downloaded file to 'credentials.json' and place it in:")
+    print("\n6. Rename the downloaded file to 'credentials.json' and place it in:")
     print(f"   📁 {CREDENTIALS_PATH.resolve()}")
     print("=" * 65)
 

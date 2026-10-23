@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import job_package
 from job_package import apply, build, check, skill_items
 from pdf_engine import build_cover_letter_html, build_resume_html
 

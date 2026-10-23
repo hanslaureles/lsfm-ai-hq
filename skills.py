@@ -532,7 +532,7 @@ def _sakura_priorities() -> SkillResult:
         content = vault.get_file(path)
     except Exception as e:
         return SkillResult("failed", f"Obsidian daily log could not be read: {e}")
-    open_tasks = [ln.strip().lstrip("- [ ]").strip() for ln in (content or "").splitlines() if "- [ ]" in ln][:3]
+    open_tasks = [ln.strip().removeprefix("- [ ]").strip() for ln in (content or "").splitlines() if "- [ ]" in ln][:3]
     if open_tasks:
         return SkillResult("done", f"Obsidian: today's log '{path}' loaded. Priorities: {'; '.join(open_tasks)}.",
                            {"path": path, "priorities": open_tasks})

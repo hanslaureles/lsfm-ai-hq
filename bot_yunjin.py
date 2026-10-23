@@ -352,8 +352,6 @@ async def critique(ctx, project: str = None):
         await status_msg.edit(content=f"⚠️ {res['error']}")
         return
 
-    critique_text = res["critique"]
-    
     await send_clean_embeds(
         target=ctx,
         title=f"🎨 UX Heuristic Critique: {res['project']}",

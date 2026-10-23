@@ -26,6 +26,10 @@ jobs:
       - name: Compile every module
         run: python -m py_compile *.py scripts/*.py bench/*.py eval/*.py
 
+      # Pyflakes rules only (unused or undefined names, redefinitions); style is not gated.
+      - name: Lint
+        run: pip install ruff==0.14.0 && ruff check --select F --output-format github .
+
       # Hermetic: engines, LLMs, TTS and Obsidian are stubbed, so no secrets are
       # needed. scripts/test_*.py are excluded on purpose: they hit live Gmail
       # and Discord with real credentials. The .env and vault checks in

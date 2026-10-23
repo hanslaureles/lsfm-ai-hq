@@ -12,7 +12,6 @@ import os
 import sys
 import ssl
 import time
-import socket
 import json
 import urllib.request
 import urllib.parse

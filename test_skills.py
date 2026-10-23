@@ -240,7 +240,6 @@ class TestEunchaeSkills(unittest.TestCase):
 
     def workspace(self):
         """A throwaway workspace: ws/HQ (HQ_DIR), ws/portfolio-site, ws/other/x.py, and outside/x.py beside ws."""
-        import tempfile
         from pathlib import Path
         root = Path(self.enterContext_tmp())
         ws, outside = root / "ws", root / "outside"
@@ -440,6 +439,9 @@ class TestChaewonSakuraSkills(unittest.TestCase):
         r = skills.run_skill("sakura.priorities")
         self.assertEqual(r.status, "done")
         self.assertIn("Apply to Spreetail; Re-auth Gmail", r.text)
+        # Only the "- [ ]" prefix goes; a task's own brackets and dashes stay.
+        self.vault(content="- [ ] [P1] Ship X\n- [ ] - [ ] nested\n")
+        self.assertEqual(skills.run_skill("sakura.priorities").data["priorities"], ["[P1] Ship X", "- [ ] nested"])
         self.vault(fail=True)
         r = skills.run_skill("sakura.priorities")
         self.assertEqual(r.status, "failed")

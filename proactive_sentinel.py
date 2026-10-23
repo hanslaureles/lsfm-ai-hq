@@ -5,7 +5,6 @@ Obsidian Second Brain daily priorities, and portfolio integrity.
 Generates ranked, autonomous suggestions for Hans without prompting.
 """
 
-import os
 import sys
 import subprocess
 from datetime import datetime

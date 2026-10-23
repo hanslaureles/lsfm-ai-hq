@@ -1,4 +1,3 @@
-import os
 import re
 import json
 import datetime
@@ -532,7 +531,6 @@ Tone: Calm, commanding, executive, razor-sharp. Avoid robotic clichés.
 def consult_sakura(question: str) -> str:
     """Answers strategic questions regarding interviews, portfolio decisions, or career strategy."""
     goals = load_file(MEMORY_DIR / "sakura_goals.md")
-    resume = load_file(MEMORY_DIR / "master_resume.md")
 
     prompt = f"""
 You are "Sakura", Chief of Staff and Career Strategist for the user.

@@ -58,7 +58,7 @@ def render_html_to_pdf(html_content: str, output_pdf_path: Path) -> bool:
             f"--print-to-pdf={output_pdf_path.resolve()}",
             str(temp_html.resolve())
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         return output_pdf_path.exists() and output_pdf_path.stat().st_size > 1000
     except Exception as e:
         print(f"⚠️ [PDF Engine] Error generating PDF: {e}")
@@ -720,7 +720,6 @@ def generate_tailored_pdf_package(tailored_dict: Dict[str, Any], company: str, r
     out_dir.mkdir(exist_ok=True)
     
     safe_company = re.sub(r'[^a-zA-Z0-9_-]', '_', company).strip('_') or "TargetCompany"
-    safe_role = re.sub(r'[^a-zA-Z0-9_-]', '_', role).strip('_') or "Role"
 
     raw_name = tailored_dict.get("name") or context.get("name") or os.getenv("OWNER_NAME", "Candidate")
     slug_name = re.sub(r'[^A-Za-z0-9]+', '_', raw_name.strip()).strip('_')

@@ -85,7 +85,7 @@ async def run_bot_resilient(bot_instance, token: str, name: str):
         except discord.errors.PrivilegedIntentsRequired:
             print(f"\n⚠️ [{name}] FAILED: 'Privileged Gateway Intents' not enabled in Discord Developer Portal!", flush=True)
             print(f"   👉 Go to: https://discord.com/developers/applications/ -> {name} -> Bot tab", flush=True)
-            print(f"   👉 Turn ON: 'Message Content Intent' & 'Server Members Intent', then click Save Changes.\n", flush=True)
+            print("   👉 Turn ON: 'Message Content Intent' & 'Server Members Intent', then click Save Changes.\n", flush=True)
             await reset_client(bot_instance, name)  # release the session this bot won't use again
             break
         except discord.errors.LoginFailure as e:

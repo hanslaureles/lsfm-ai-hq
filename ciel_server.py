@@ -30,7 +30,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from ciel_orchestrator import CielOrchestrator
-from voice_engine import transcribe_audio, transcribe_audio_groq, prune_audio_cache
+from voice_engine import transcribe_audio, prune_audio_cache
 from eunchae_engine import get_system_vitals
 from llm_client import get_brain_status
 from proactive_sentinel import evaluate_proactive_suggestions

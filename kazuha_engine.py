@@ -1,6 +1,3 @@
-import os
-import subprocess
-import warnings
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -95,15 +92,13 @@ Provide the complete, clean code with a brief explanation.
 
 from git_sentinel import (
     get_git_info,
-    get_git_diff,
     review_code_diff,
     generate_conventional_commit,
-    generate_pr_description,
-    apply_git_commit
+    generate_pr_description
 )
 
 def get_git_status() -> str:
-    """Checks the current Git status of the Antigravity workspace via git_sentinel."""
+    """Checks the current Git status of the workspace via git_sentinel."""
     try:
         info = get_git_info(WORKSPACE_DIR)
         lines = []

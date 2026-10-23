@@ -30,7 +30,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 health_recorder.attach(bot, "chaewon")  # memory/health/chaewon.json (4B-2)
 
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
-from web_tools import find_url_in_text, scrape_job_url, fetch_live_remote_jobs, get_portal_search_links
+from web_tools import find_url_in_text, scrape_job_url, get_portal_search_links
 from discord_utils import send_clean_embeds, confirm_action
 from daily_once import run_daily
 from pdf_engine import describe_portfolio_sync, OWNER_EMAIL
@@ -416,8 +416,8 @@ async def cmd_scout(ctx, *, query: str = "ai"):
 
         embed = discord.Embed(
             title=f"🎯 Live Job Radar // {query.upper()} ({loc})",
-            description=f"Targeting **LinkedIn**, **Indeed**, and **JobStreet** · Scored for **Hans Aaron Laureles**.\n"
-                        f"*Type `!apply <job_url>` in #command-center for the team pipeline, or `!tailor <job_url>` to tailor directly!*",
+            description="Targeting **LinkedIn**, **Indeed**, and **JobStreet** · Scored for **Hans Aaron Laureles**.\n"
+                        "*Type `!apply <job_url>` in #command-center for the team pipeline, or `!tailor <job_url>` to tailor directly!*",
             color=0xF1C40F
         )
 
@@ -471,7 +471,6 @@ async def cmd_tailor(ctx, *, args: str = None):
 @bot.command(name="pdf")
 async def cmd_pdf(ctx, *, target: str = "General"):
     """Instantly generates and uploads an ATS-compliant PDF Resume & Cover Letter."""
-    loop = asyncio.get_running_loop()
     msg = await ctx.reply(f"⭐ **Chaewon is compiling an ATS-compliant PDF Resume...**\n*(Target / Role: `{target}`)*")
     
     try:
@@ -505,7 +504,7 @@ async def cmd_pdf(ctx, *, target: str = "General"):
             files_to_send.append(discord.File(str(res["cover_pdf"]), filename=Path(res["cover_pdf"]).name))
             
         embed = discord.Embed(
-            title=f"📄 ATS-Compliant PDF Package Ready!",
+            title="📄 ATS-Compliant PDF Package Ready!",
             description=f"Compiled by ⭐ Chaewon for **{target}**.\n\n"
                         f"• **Format:** Single-page executive layout (Swiss-inspired typography)\n"
                         f"• **ATS:** Selectable vector text & semantic headings\n"

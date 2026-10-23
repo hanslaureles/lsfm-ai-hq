@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import bench_ciel  # noqa: E402  (also puts the repo root on sys.path and chdirs there)
+import bench_ciel  # noqa: E402, F401  (also puts the repo root on sys.path and chdirs there)
 from bench_ciel import RESULTS_DIR, collect_environment, summarize  # noqa: E402
 
 import llm_client  # noqa: E402

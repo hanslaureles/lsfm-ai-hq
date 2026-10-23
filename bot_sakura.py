@@ -36,7 +36,7 @@ from sakura_engine import (
     get_pending_proposal,
     mark_proposal_status
 )
-from llm_client import get_brain_status, set_brain_mode, get_brain_mode
+from llm_client import get_brain_status, set_brain_mode
 from scout import analyze_and_tailor, extract_job_meta
 from yunjin_engine import select_portfolio_pitch
 import re
@@ -408,9 +408,9 @@ def format_proposal_qa_status(
     if qa_passed:
         qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — Checked against past lessons\n"
         action_instructions = (
-            f"👉 **Next Action for Hans:**\n"
-            f"• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
-            f"• Click **❌** below to **Discard / Shelve** this application"
+            "👉 **Next Action for Hans:**\n"
+            "• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
+            "• Click **❌** below to **Discard / Shelve** this application"
         )
         proposal_color = default_score_color
     else:
@@ -573,7 +573,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     else:
         score, score_color = None, 0xED4245
         chaewon_text = f"**Target:** `{role}` at **{company}**\n\n{failure_line('chaewon')}"
-    chaewon_embed = discord.Embed(title=f"⭐ CHAEWON — Fit Analysis & Application Package",
+    chaewon_embed = discord.Embed(title="⭐ CHAEWON — Fit Analysis & Application Package",
                                   description=chaewon_text, color=0xF1C40F if tailor_res else 0xED4245)
     chaewon_embed.set_footer(text="Chaewon • Career Copilot • Handoff 1/3")
     await handoffs_ch.send(embed=chaewon_embed, files=_apply_files(tailor_res) if tailor_res else [])
@@ -585,7 +585,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     else:
         rec_projects, pitch_text = "none (curation failed)", failure_line("yunjin")
     yunjin_embed = discord.Embed(
-        title=f"🎨 YUNJIN — Portfolio Curation & UX Pitch Strategy",
+        title="🎨 YUNJIN — Portfolio Curation & UX Pitch Strategy",
         description=f"**Lead Flagship Projects:** **{rec_projects}**\n\n"
                     f"{pitch_text[:1400]}",
         color=0xE91E63
@@ -596,7 +596,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     kazuha_res = steps["kazuha"][1]
     tech_pitch = kazuha_res.get("tech_pitch", "") if kazuha_res else failure_line("kazuha")
     kazuha_embed = discord.Embed(
-        title=f"💻 KAZUHA — Frontend Engineering & Technical Rigor",
+        title="💻 KAZUHA — Frontend Engineering & Technical Rigor",
         description=tech_pitch[:1500],
         color=0x00B4D8
     )
@@ -607,10 +607,10 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     if failed:
         qa_skip = ("QA skipped: Chaewon's package is missing" if "chaewon" in failed
                    else f"QA skipped: {' and '.join(n.title() for n in failed)} failed")
-        eunchae_qa_embed = discord.Embed(title=f"🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
+        eunchae_qa_embed = discord.Embed(title="🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
                                          description=f"{qa_skip}. Nothing was audited.", color=0xFEE75C)
     else:
-        await status_msg.edit(content=f"🛡️ **Eunchae is running QA Gatekeeper audit on all deliverables...**")
+        await status_msg.edit(content="🛡️ **Eunchae is running QA Gatekeeper audit on all deliverables...**")
         try:
             from eunchae_engine import audit_application_package
             qa_res = await loop.run_in_executor(
@@ -627,7 +627,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
 
         qa_color = 0x57F287 if qa_res["score"] >= 90 else (0xFEE75C if qa_res["score"] >= 75 else 0xED4245)
         eunchae_qa_embed = discord.Embed(
-            title=f"🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
+            title="🛡️ EUNCHAE — Quality Assurance Gatekeeper Audit",
             description=f"**Verdict:** **{qa_res['verdict']}** | **QA Score:** **{qa_res['score']}%**\n\n"
                         f"{qa_res['review'][:1200]}\n\n"
                         f"🔍 Heuristics Checked: `{qa_res.get('heuristics_checked', 0)} active memory rules`",
@@ -1159,8 +1159,7 @@ async def inbox_command(ctx, scope: str = ""):
     is_all = scope.lower().strip() in ["all", "full", "recent"]
     scan_limit = 30 if is_all else 20
     status_msg = await ctx.reply(f"🌸 **Sakura is connecting to your Gmail and running AI triage on {'recent primary inbox emails' if is_all else 'unread & active primary inbox emails'}...**")
-    
-    loop = asyncio.get_running_loop()
+
     try:
         async with ctx.typing():
             res = await run_heavy(triage_inbox, scan_limit, not is_all)
@@ -1375,7 +1374,6 @@ async def receipts_command(ctx):
         return
 
     status_msg = await ctx.reply("💳 **Sakura is retrieving recent finance, wallet, and order receipts from your Gmail...**")
-    loop = asyncio.get_running_loop()
     try:
         async with ctx.typing():
             res = await run_heavy(get_recent_finance_summary, 15)

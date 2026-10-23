@@ -445,8 +445,7 @@ class SuppressedExceptionLintTest(unittest.TestCase):
         import ast
         repo = Path(__file__).parent
         silent = []
-        for path in sorted({*repo.glob("*.py"), *repo.glob("scripts/*.py"), *repo.glob("bench/*.py"),
-                            *repo.glob("legacy/*.py")}):
+        for path in sorted({*repo.glob("*.py"), *repo.glob("scripts/*.py"), *repo.glob("bench/*.py")}):
             # Unit tests are skipped; scripts/test_*.py are live scripts, so they are linted.
             if path.name.startswith("test_") and path.parent.name != "scripts":
                 continue

@@ -1,7 +1,6 @@
 import os
 import re
 import datetime
-import warnings
 from pathlib import Path
 from dotenv import load_dotenv
 

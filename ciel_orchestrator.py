@@ -24,9 +24,9 @@ WORKSPACE_DIR = BASE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from llm_client import query_llm, query_llm_structured, get_brain_status
+from llm_client import query_llm_structured
 from obsidian_client import ObsidianClient, VAULT_PATHS
-from voice_engine import text_to_speech, text_to_speech_bilingual, speak_clip, concat_clips
+from voice_engine import text_to_speech_bilingual, speak_clip, concat_clips
 from speech_stream import VoiceStream, split_sentences
 from heavy_jobs import run_blocking
 
