@@ -16,7 +16,7 @@ any unknown status and anything that looks like a path, account name or secret.
 
 Usage:
     python -m eunchae_publisher --dry-run              # print the payload
-    python -m eunchae_publisher [--target <path>]      # write it (default: portfolio-site/data/status.json)
+    python -m eunchae_publisher [--target <path>]      # write it (default: portfolio-site/public/data/status.json)
 Writing the file does not commit it; commit it by hand in the portfolio repo (D1: on demand, no background job).
 """
 
@@ -35,7 +35,7 @@ from llm_client import AGENTS
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "bench" / "results"
 APPLICATIONS_LOG = BASE_DIR / "memory" / "applications_log.md"
-DEFAULT_TARGET = BASE_DIR.parent / "portfolio-site" / "data" / "status.json"
+DEFAULT_TARGET = BASE_DIR.parent / "portfolio-site" / "public" / "data" / "status.json"
 
 SCHEMA_VERSION = 1
 STALE_AFTER_S = 900          # 15 heartbeat intervals

@@ -151,6 +151,10 @@ class TestValidation(Fixture):
 
 class TestPublish(Fixture):
 
+    def test_default_target_is_the_next_public_snapshot(self):
+        self.assertEqual(pub.DEFAULT_TARGET,
+                         pub.BASE_DIR.parent / "portfolio-site" / "public" / "data" / "status.json")
+
     def test_publish_writes_valid_json_and_dry_run_writes_nothing(self):
         target = self.memory / "out" / "status.json"
         payload = self.payload()

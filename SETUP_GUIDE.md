@@ -131,7 +131,7 @@ Native background loops (`discord.ext.tasks`) automatically handle team routines
 
 ## 📈 7. Telemetry Pipeline (Heartbeats → `status.json`)
 
-The portfolio's Agent Overview panel reads one file, `portfolio-site/data/status.json`. Every value in it comes from this machine, in three steps:
+The portfolio's Agent Overview panel reads one file, `portfolio-site/public/data/status.json`. Every value in it comes from this machine, in three steps:
 
 1. **Heartbeats (`health_recorder.py`)**: each bot calls `health_recorder.attach(bot, "<name>")`, which rewrites `memory/health/<name>.json` on `on_ready` and then every 60 s (`HEARTBEAT_INTERVAL_S`). This works whether the bots run through `run_all.py` or one bot runs alone. A file that stops changing is how a dead bot shows up.
 2. **LLM latency (`bench/bench_telemetry.py`)**: sends one fixed prompt per agent through the same `llm_client` dispatcher the bots use and records p50 / p95 per agent. Live runs write `bench/results/YYYY-MM-DD-telemetry.{json,md}`; `--mock` needs no keys or network and never writes into `bench/results`.
@@ -142,7 +142,7 @@ The portfolio's Agent Overview panel reads one file, `portfolio-site/data/status
 3. **Publisher (`eunchae_publisher.py`)**: combines the heartbeats, the newest non-mock telemetry result, the application count from `memory/applications_log.md` (last 7 days) and current CPU/RAM/disk into one payload, validates it, and writes it.
    ```bash
    python -m eunchae_publisher --dry-run      # print the payload, write nothing
-   python -m eunchae_publisher                # write ../portfolio-site/data/status.json
+   python -m eunchae_publisher                # write ../portfolio-site/public/data/status.json
    python -m eunchae_publisher --target <path>
    ```
 
