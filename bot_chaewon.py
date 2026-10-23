@@ -85,7 +85,7 @@ async def post_weekly_resume_rebuild_if_due(force: bool = False, target_channel=
                     f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
                     f"• **Text:** Selectable vector text (Times New Roman, Harvard layout)\n"
                     f"• **Geometry:** 1-page Letter layout\n"
-                    f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
+                    f"• **Portfolio Sync:** `portfolio-site/public/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                     f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"
                     f"• **Obsidian Daily Log:** {'Session logged to vault ✅' if res.get('obsidian_synced') else '⚠️ not logged'}"
                 ),
@@ -580,7 +580,7 @@ async def cmd_rebuild_resume(ctx):
                 f"• **Artifact:** `{pdf_path.name}` ({size_kb} KB)\n"
                 f"• **Text:** Selectable vector text (Times New Roman, Harvard layout)\n"
                 f"• **Geometry:** 1-page Letter layout\n"
-                f"• **Portfolio Sync:** `portfolio-site/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
+                f"• **Portfolio Sync:** `portfolio-site/public/Hans_Laureles_Resume.pdf` {describe_portfolio_sync(res)}\n"
                 f"• **Weekly Archive:** {('`' + res['archive_pdf'].name + '` ✅') if res.get('archive_pdf') else '⚠️ not archived'}\n"
                 f"• **Obsidian Vault:** {'Daily session log written ✅' if res.get('obsidian_synced') else '⚠️ not logged'}"
             ),

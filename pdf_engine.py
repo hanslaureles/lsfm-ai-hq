@@ -764,6 +764,7 @@ def pdf_content_key(data: bytes) -> bytes:
 
 
 PORTFOLIO_SOURCE_STAMP = APPLICATIONS_DIR / "portfolio_resume_source.sha256"  # gitignored, like applications/
+PORTFOLIO_PUBLIC_DIR = BASE_DIR.parent / "portfolio-site" / "public"  # Next.js serves the resume from public/
 
 
 def sync_pdf_copy(src: Path, dest: Path, source: str = "", stamp: Path = None) -> str:
@@ -847,13 +848,13 @@ def compile_master_resume(archive: bool = True, sync_portfolio: bool = True, syn
     size_kb = round(master_pdf.stat().st_size / 1024, 1)
 
     # 1. Sync to portfolio-site
-    portfolio_dir = BASE_DIR.parent / "portfolio-site"
+    portfolio_dir = PORTFOLIO_PUBLIC_DIR
     portfolio_target = "Hans_Laureles_Resume.pdf" if (portfolio_dir / "Hans_Laureles_Resume.pdf").exists() else f"{slug_name}_Resume.pdf"
     portfolio_pdf = portfolio_dir / portfolio_target
     portfolio_sync = "skipped"
     if sync_portfolio:
         portfolio_sync = (sync_pdf_copy(master_pdf, portfolio_pdf, html, PORTFOLIO_SOURCE_STAMP)
-                          if portfolio_dir.exists() else "no portfolio-site folder")
+                          if portfolio_dir.exists() else "no portfolio-site/public folder")
 
     # 2. Archive timestamped copy
     archive_pdf = None

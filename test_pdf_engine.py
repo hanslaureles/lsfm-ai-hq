@@ -446,6 +446,26 @@ class TestPortfolioSync(unittest.TestCase):
         self.assertTrue(describe_portfolio_sync({"portfolio_sync": status}).startswith("⚠️"))
         self.assertIn("already current", describe_portfolio_sync({"portfolio_sync": "unchanged"}))
 
+    def test_the_rebuild_updates_the_resume_next_js_serves(self):
+        # 2026-10-23: the Next.js site serves public/Hans_Laureles_Resume.pdf; the old root copy is gone.
+        import pdf_engine
+        self.assertEqual(pdf_engine.PORTFOLIO_PUBLIC_DIR.parts[-2:], ("portfolio-site", "public"))
+        public = self.dir / "portfolio-site" / "public"
+        public.mkdir(parents=True)
+        served = public / "Hans_Laureles_Resume.pdf"
+        served.write_bytes(_fake_pdf("154.0.0.0", "20261008124347", "BT (old) Tj ET"))
+        rebuilt = _fake_pdf("155.0.0.0", "20261023143951", "BT (Next.js) Tj ET")
+        with mock.patch.multiple(pdf_engine, APPLICATIONS_DIR=self.dir, PORTFOLIO_PUBLIC_DIR=public,
+                                 PORTFOLIO_SOURCE_STAMP=self.dir / "source.sha256",
+                                 load_master_resume_context=lambda: {"name": "Hans Laureles"},
+                                 validate_resume_context=lambda ctx: None,
+                                 build_resume_html=lambda ctx: "<html>v2</html>",
+                                 render_html_to_pdf=lambda html, path: path.write_bytes(rebuilt) > 0):
+            res = pdf_engine.compile_master_resume(archive=False, sync_portfolio=True, sync_obsidian=False)
+        self.assertEqual((res["portfolio_sync"], res["portfolio_pdf"]), ("copied", served))
+        self.assertEqual(served.read_bytes(), rebuilt)
+        self.assertEqual(sorted(p.name for p in public.iterdir()), ["Hans_Laureles_Resume.pdf"])
+
 
 if __name__ == "__main__":
     unittest.main()
