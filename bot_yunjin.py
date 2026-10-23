@@ -242,19 +242,19 @@ async def ping(ctx):
 
 # Feature summaries are descriptive only; readiness comes from the file checks in !status.
 STATUS_CASE_STUDIES = [
-    ("🚀 LSFM AI HQ (5-Agent Team)", ["case-lsfm.html"],
+    ("🚀 LSFM AI HQ (5-Agent Team)", ["app/case-lsfm/page.tsx"],
      ["5 Discord agents on asyncio", "Groq + Gemini routing, optional local Ollama", "Headless-Edge ATS resume compiler"]),
-    ("🔮 Manas: Ciel (Voice Copilot & HUD)", ["case-ciel.html"],
+    ("🔮 Manas: Ciel (Voice Copilot & HUD)", ["app/case-ciel/page.tsx"],
      ["Bilingual JA/EN voice pipeline", "Groq Whisper STT + Edge-TTS with FFmpeg filter", "Obsidian vault tools"]),
-    ("🧠 Cognitive Memory Core", ["case-memory.html"],
+    ("🧠 Cognitive Memory Core", ["app/case-memory/page.tsx"],
      ["Pure-stdlib BM25 recall", "Reflection log + rule crystallization", "Interactive web simulator"]),
-    ("📈 Lumina Analytics (AI Observability)", ["case-lumina.html"],
+    ("📈 Lumina Analytics (AI Observability)", ["app/case-lumina/page.tsx"],
      ["Dark-mode design system", "KPI-dense dashboard views"]),
-    ("📱 Vellum OS (Mental Wellness UX)", ["case-vellum.html"],
+    ("📱 Vellum OS (Mental Wellness UX)", ["app/case-vellum/page.tsx"],
      ["Design token architecture", "Reflection cards & micro-interactions"]),
-    ("💳 FinTrack (Personal Finance UX)", ["case-fintrack.html"],
+    ("💳 FinTrack (Personal Finance UX)", ["app/case-fintrack/page.tsx"],
      ["Micro-budgeting flows", "Behavioral nudge cards"]),
-    ("☕ Aura Coffee & Kitchen (Specialty Commerce)", ["case-aura.html", "aura-store/index.html"],
+    ("☕ Aura Coffee & Kitchen (Specialty Commerce)", ["app/case-aura/page.tsx", "public/aura-store/index.html"],
      ["Drink customizer & slide-over bag", "PH payment rails (GCash, Maya, COD)"]),
 ]
 
@@ -338,7 +338,7 @@ async def critique(ctx, project: str = None):
         await ctx.reply(embed=embed)
         return
 
-    status_msg = await ctx.reply(f"🔬 **Yunjin is reading `case-{project.lower()}.html` through a Design Director lens...**")
+    status_msg = await ctx.reply(f"🔬 **Yunjin is reading `app/case-{project.lower()}/page.tsx` through a Design Director lens...**")
 
     loop = asyncio.get_running_loop()
     try:

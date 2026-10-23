@@ -617,31 +617,35 @@ class TestKazuhaYunjinSkills(unittest.TestCase):
                 self.assertEqual(skills.SKILLS[name].agent, agent)
                 self.assertEqual(skills.SKILLS[name].args.keys(), args)
 
-    def test_audit_reads_every_html_page(self):
+    def _next_portfolio(self):
+        """A Next.js portfolio-site/ (2026-10-23 layout) with one legacy root page that must be ignored."""
         import tempfile
         from pathlib import Path
-        ye = _load_real("yunjin_engine")
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
-        portfolio, audits = Path(tmp.name) / "portfolio-site", Path(tmp.name) / "audits"
-        portfolio.mkdir()
-        audits.mkdir()
-        for page in ("index.html", "case-ciel.html", "404.html"):
-            (portfolio / page).write_text("<html></html>", encoding="utf-8")
-        scanned = []
+        portfolio = Path(tmp.name) / "portfolio-site"
+        files = {"app/page.tsx": "export const metadata = {};\n<main><img src=\"images/a.webp\" /></main>",
+                 "app/case-ciel/page.tsx": "<h1>Ciel</h1><img src=\"/images/missing.webp\" />",
+                 "public/aura-store/index.html": "<title>Aura</title>", "public/images/a.webp": "",
+                 "styles/styles.css": ":root{}", ".env.local": "SECRET=1", "case-ciel.html": "<html></html>"}
+        for rel, text in files.items():
+            (portfolio / rel).parent.mkdir(parents=True, exist_ok=True)
+            (portfolio / rel).write_text(text, encoding="utf-8")
+        (Path(tmp.name) / "outside.txt").write_text("outside", encoding="utf-8")
+        return portfolio
 
-        def scan(path):
-            scanned.append(Path(path).name)
-            return {"exists": True, "file": Path(path).name, "title": "t", "has_meta_desc": True,
-                    "total_images": 0, "broken_images": []}
-
+    def test_audit_reads_every_next_page(self):
+        ye = _load_real("yunjin_engine")
+        portfolio = self._next_portfolio()
         self.patch("PORTFOLIO_DIR", portfolio, ye)
-        self.patch("AUDITS_DIR", audits, ye)
-        self.patch("scan_html_assets", scan, ye)
+        self.patch("AUDITS_DIR", portfolio.parent, ye)
         self.patch("query_llm", lambda *a, **k: "PORTFOLIO HEALTH SCORE: 88%", ye)
         res = ye.audit_full_portfolio()
-        self.assertEqual(sorted(scanned), ["404.html", "case-ciel.html", "index.html"])
+        # App Router pages and public/ HTML, by path; the retired root case-*.html is not a page any more.
+        self.assertEqual(res["broken_images"], ["app/case-ciel/page.tsx -> /images/missing.webp"])
         self.assertEqual(res["score"], 88)
+        home = ye.scan_html_assets(portfolio / "app/page.tsx")
+        self.assertEqual((home["total_images"], home["broken_images"], home["has_meta_desc"]), (1, [], True))
         # No score in the critique: no made-up number (it used to default to 94).
         self.patch("query_llm", lambda *a, **k: "A critique with no score.", ye)
         self.assertIsNone(ye.audit_full_portfolio()["score"])
@@ -814,9 +818,43 @@ class TestKazuhaYunjinSkills(unittest.TestCase):
         self.patch("query_llm", lambda *a, **k: asked.append(a) or "95%", ye)
         res = ye.audit_full_portfolio()
         self.assertFalse(res["success"])
-        self.assertIn("no .html pages", res["error"])
+        self.assertIn("no pages", res["error"])
         self.assertEqual(asked, [])
         self.assertEqual(list(Path(tmp.name).iterdir()), [])  # no report written
+
+    def test_case_critique_reads_the_app_route(self):
+        ye = _load_real("yunjin_engine")
+        portfolio = self._next_portfolio()
+        self.patch("PORTFOLIO_DIR", portfolio, ye)
+        prompts = []
+        self.patch("query_llm", lambda p, **k: prompts.append(p) or "A-", ye)
+        self.assertTrue(ye.critique_case_study("case-ciel.html")["success"])
+        self.assertIn("Ciel", prompts[0])
+        for slug in ("lsfm", "../case-ciel", "ciel/../../outside"):
+            with self.subTest(slug=slug):
+                res = ye.critique_case_study(slug)
+                self.assertFalse(res["success"])
+                self.assertIn("Available: ciel", res["error"])
+        self.assertEqual(len(prompts), 1)
+
+    def test_kazuha_inspect_reads_next_files_inside_the_site_only(self):
+        ke = _load_real("kazuha_engine")
+        portfolio = self._next_portfolio()
+        self.patch("PORTFOLIO_DIR", portfolio, ke)
+        self.patch("query_llm", lambda *a, **k: "ok", ke)
+        for name in ("styles/styles.css", "app\\case-ciel\\page.tsx", "/app/page.tsx"):
+            with self.subTest(name=name):
+                self.assertTrue(ke.inspect_code_file(name)["success"])
+        for name in ("../outside.txt", "app/../../outside.txt", ".env.local", "styles", "styles.css"):
+            with self.subTest(name=name):
+                self.assertFalse(ke.inspect_code_file(name)["success"])
+
+    def test_yunjin_status_table_uses_next_paths(self):
+        import bot_yunjin
+        for _, files, _ in bot_yunjin.STATUS_CASE_STUDIES:
+            for rel in files:
+                with self.subTest(rel=rel):
+                    self.assertRegex(rel, r"^(app/case-[a-z]+/page\.tsx|public/.+\.html)$")
 
     def test_keyword_calls_pick_kazuha_and_yunjin_actions(self):
         kc = skills.keyword_calls

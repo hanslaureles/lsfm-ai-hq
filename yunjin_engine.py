@@ -10,7 +10,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 WORKSPACE_DIR = BASE_DIR.parent
-PORTFOLIO_DIR = WORKSPACE_DIR / "portfolio-site"
+PORTFOLIO_DIR = WORKSPACE_DIR / "portfolio-site"  # Next.js since 2026-10-23: pages in app/<route>/page.tsx, assets in public/
 AUDITS_DIR = BASE_DIR / "portfolio_audits"
 AUDITS_DIR.mkdir(exist_ok=True)
 MEMORY_DIR = BASE_DIR / "memory"
@@ -26,11 +26,18 @@ def scan_html_assets(html_file: Path) -> dict:
     content = html_file.read_text(encoding="utf-8")
     soup = BeautifulSoup(content, "html.parser")
 
-    title = soup.title.string.strip() if soup.title and soup.title.string else "Missing Title"
+    # ponytail: a page.tsx that exports `metadata` counts as titled and described; parse lib/cases if that proves too loose
+    next_metadata = re.search(r"export\b[^\n]*\bmetadata\b", content) is not None
+    if next_metadata:  # checked first: a <title> in a .tsx page is usually an inline SVG's
+        title = "Next.js metadata export"
+    else:
+        title = soup.title.string.strip() if soup.title and soup.title.string else "Missing Title"
     meta_desc = ""
     desc_tag = soup.find("meta", attrs={"name": "description"})
     if desc_tag and desc_tag.get("content"):
         meta_desc = desc_tag["content"].strip()
+    elif next_metadata:
+        meta_desc = "metadata export"
 
     h1_tags = [h.get_text().strip() for h in soup.find_all("h1")]
     
@@ -43,8 +50,8 @@ def scan_html_assets(html_file: Path) -> dict:
         if src:
             # Clean URL params if any
             clean_src = src.split("?")[0]
-            # Resolve relative to portfolio-site
-            img_path = PORTFOLIO_DIR / clean_src
+            # Next.js serves static files from public/ (src="images/..." or "/images/...")
+            img_path = PORTFOLIO_DIR / "public" / clean_src.lstrip("/")
             exists = img_path.exists()
             images.append({"src": src, "alt": alt, "exists": exists})
             if not exists:
@@ -72,9 +79,11 @@ def audit_full_portfolio() -> dict:
             "error": f"Portfolio directory not found at: {PORTFOLIO_DIR}"
         }
 
-    target_files = sorted(p.name for p in PORTFOLIO_DIR.glob("*.html"))  # every page, so a new one is never skipped (ADR-001 R2)
+    # every page, so a new one is never skipped (ADR-001 R2): App Router routes plus the static pages in public/
+    target_files = sorted(p.relative_to(PORTFOLIO_DIR).as_posix()
+                          for pattern in ("app/**/page.tsx", "public/**/*.html") for p in PORTFOLIO_DIR.glob(pattern))
     if not target_files:  # nothing to audit: no critique, no report (Codex R2 fix 3)
-        return {"success": False, "error": f"Portfolio audit: no .html pages under {PORTFOLIO_DIR}."}
+        return {"success": False, "error": f"Portfolio audit: no pages (app/**/page.tsx, public/**/*.html) under {PORTFOLIO_DIR}."}
 
     scan_results = []
     total_images_checked = 0
@@ -82,7 +91,7 @@ def audit_full_portfolio() -> dict:
 
     for fname in target_files:
         fpath = PORTFOLIO_DIR / fname
-        res = scan_html_assets(fpath)
+        res = {**scan_html_assets(fpath), "file": fname}  # every route is page.tsx: name it by its path
         scan_results.append(res)
         if res.get("exists"):
             total_images_checked += res.get("total_images", 0)
@@ -175,12 +184,13 @@ Format in clean, engaging Markdown. Tone: Sophisticated, insightful, encouraging
 def critique_case_study(project_slug: str) -> dict:
     """Performs an in-depth heuristic UX critique of a specific case study."""
     slug_clean = project_slug.lower().replace("case-", "").replace(".html", "").strip()
-    target_file = PORTFOLIO_DIR / f"case-{slug_clean}.html"
+    target_file = PORTFOLIO_DIR / "app" / f"case-{slug_clean}" / "page.tsx"
 
-    if not target_file.exists():
+    if not re.fullmatch(r"[a-z0-9-]+", slug_clean) or not target_file.exists():
+        available = ", ".join(sorted(p.parent.name[5:] for p in PORTFOLIO_DIR.glob("app/case-*/page.tsx")))
         return {
             "success": False,
-            "error": f"Case study file not found: `case-{slug_clean}.html` (Available: lsfm, lumina, vellum, fintrack, aura, memory)"
+            "error": f"Case study not found: `app/case-{slug_clean}/page.tsx` (Available: {available or 'none'})"
         }
 
     html_content = target_file.read_text(encoding="utf-8")

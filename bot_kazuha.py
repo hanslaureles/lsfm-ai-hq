@@ -213,8 +213,13 @@ async def on_message(message):
         return
 
     # 2. File inspection trigger
-    for known_file in ["styles.css", "index.html", "script.js", "case-vellum.html", "case-lumina.html", "case-fintrack.html", "case-aura.html"]:
-        if known_file in lower:
+    # Words people say -> Next.js paths in portfolio-site/
+    known_files = {"home.css": "styles/home.css", "styles.css": "styles/styles.css", "layout.tsx": "app/layout.tsx",
+                   "index.html": "app/page.tsx", "case-vellum": "app/case-vellum/page.tsx",
+                   "case-lumina": "app/case-lumina/page.tsx", "case-fintrack": "app/case-fintrack/page.tsx",
+                   "case-aura": "app/case-aura/page.tsx"}
+    for word, known_file in known_files.items():
+        if word in lower:
             status_msg = await message.reply(f"🔍 **Kazuha is performing architectural inspection on `{known_file}`...**")
             try:
                 async with message.channel.typing():
@@ -311,7 +316,7 @@ async def help_command(ctx):
     )
     embed.add_field(
         name="🔍 `!inspect [file]`",
-        value="Performs architectural code review of any file in `portfolio-site/` (e.g. `!inspect styles.css`, `!inspect index.html`).",
+        value="Performs architectural code review of any file in `portfolio-site/` (e.g. `!inspect styles/styles.css`, `!inspect app/case-lsfm/page.tsx`).",
         inline=False
     )
     embed.add_field(
@@ -535,7 +540,7 @@ async def pr_command(ctx):
 @bot.command(name="inspect")
 async def inspect(ctx, filename: str = None):
     if not filename:
-        await ctx.reply("💻 Please specify a file to inspect! Examples: `!inspect styles.css`, `!inspect index.html`, `!inspect app.js`")
+        await ctx.reply("💻 Please specify a file to inspect! Examples: `!inspect styles/styles.css`, `!inspect app/page.tsx`, `!inspect app/case-lsfm/page.tsx`")
         return
 
     status_msg = await ctx.reply(f"🔍 **Kazuha is inspecting `{filename}` in `portfolio-site/`...**")

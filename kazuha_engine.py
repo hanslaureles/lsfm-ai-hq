@@ -22,10 +22,13 @@ def load_design_tokens() -> str:
 
 def inspect_code_file(filename: str) -> dict:
     """Reads a code file from portfolio-site/ and returns an architectural and token critique."""
-    clean_name = filename.strip("/\\ ")
-    file_path = PORTFOLIO_DIR / clean_name
+    clean_name = filename.strip("/\\ ").replace("\\", "/")
+    file_path = (PORTFOLIO_DIR / clean_name).resolve()
 
-    if not file_path.exists():
+    # Confinement: only files inside portfolio-site/, never dot paths (.env*, .git, .next, .vercel).
+    if (not file_path.is_relative_to(PORTFOLIO_DIR.resolve())
+            or any(part.startswith(".") for part in Path(clean_name).parts)
+            or not file_path.is_file()):
         return {
             "success": False,
             "error": f"File not found: `{clean_name}` in `portfolio-site/`."
