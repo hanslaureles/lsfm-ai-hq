@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import discord
 import health_recorder
+import owner_guard
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -23,6 +24,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 health_recorder.attach(bot, "kazuha")  # memory/health/kazuha.json (4B-2)
+owner_guard.install(bot)  # commands, chat and reactions: Hans only
 
 from kazuha_engine import (
     inspect_code_file,
@@ -156,7 +158,7 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
     if message.content.startswith("!"):

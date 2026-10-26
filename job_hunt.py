@@ -36,7 +36,8 @@ SKIP_WORDS = ["onsite", "on-site", "hybrid", "senior", "sr.", "lead", "principal
 # recruiters, technicians and admin roles that the broad search terms let in). Matched as whole words.
 ROLE_WORDS = ["engineer", "developer", "dev", "programmer", "software", "frontend", "front-end", "front end",
               "full stack", "full-stack", "fullstack", "backend", "back-end", "ai", "ml", "machine learning",
-              "llm", "automation", "python", "react", "typescript", "javascript"]
+              "llm", "automation", "python", "react", "typescript", "javascript",
+              "scientist", "data science"]  # Data / Research Scientist titles were dropped as "not a developer role"
 DESCRIPTION_SKIPS = ["loom", "video intro", "video introduction", "must reside", "us only", "eu only"]
 
 # One hunt at a time (the 10:00/20:00 loop and !hunt share it). Every stage checks one budget and CANCEL:
@@ -158,14 +159,34 @@ def _skip_reason(job: dict, rules: Rules, posted: date | None, now: datetime) ->
     return text_skip_reason(job.get("description") or "")
 
 
-def filter_jobs(jobs: list, rules: Rules, seen: set, now: datetime, skills: list) -> tuple:
-    """(keep, skipped): skipped jobs gain 'reason', kept jobs gain 'posted' (ISO date). Keeps rules.max_jobs."""
+def job_pair(company: str, title: str) -> tuple:
+    """Company + title as a repost key: a reposted job comes back under a new URL."""
+    return " ".join((company or "").lower().split()), " ".join((title or "").lower().split())
+
+
+def known_pairs(apps: Path) -> set:
+    """job_pair of every job that already has a folder in applications/ (any status)."""
+    pairs = set()
+    for meta in Path(apps).glob("*/meta.json"):
+        try:
+            m = json.loads(meta.read_text(encoding="utf-8-sig"))
+            pairs.add(job_pair(m.get("company", ""), m.get("role", "")))
+        except (OSError, ValueError, AttributeError):
+            continue
+    return pairs
+
+
+def filter_jobs(jobs: list, rules: Rules, seen: set, now: datetime, skills: list, applied: set = frozenset()) -> tuple:
+    """(keep, skipped): skipped jobs gain 'reason', kept jobs gain 'posted' (ISO date). Keeps rules.max_jobs.
+    applied: job_pairs that already have a folder, so a repost under a new URL is skipped."""
     keep, skipped, urls, pairs = [], [], set(), set()
     for j in jobs:
         url = j.get("url") or ""
-        pair = ((j.get("company") or "").strip().lower(), (j.get("title") or "").strip().lower())
+        pair = job_pair(j.get("company"), j.get("title"))
         if url in seen:
             reason = "already seen"
+        elif pair in applied:
+            reason = "repost of a job already carded"
         elif url in urls or pair in pairs:
             reason = "duplicate of another listing"
         else:
@@ -381,9 +402,9 @@ def _hunt(slot: str, SkillResult):
             # Nothing reachable (e.g. the PC woke before Wi-Fi): failed, so run_daily retries in 30 min and
             # no runs file tells the Claude run that LSFM covered this slot.
             return SkillResult("failed", f"Job hunt failed: every source failed ({'; '.join(failed_sources)})")
-        keep, skipped = filter_jobs(jobs, rules, load_seen(seen_path), now, skill_keywords(ctx))
         apps = JOB_HUNT_DIR / "applications"
         apps.mkdir(parents=True, exist_ok=True)
+        keep, skipped = filter_jobs(jobs, rules, load_seen(seen_path), now, skill_keywords(ctx), known_pairs(apps))
         existing = {p.name for p in apps.iterdir()}
     except Exception as e:
         return SkillResult("failed", f"Job hunt failed: {type(e).__name__}: {e}")

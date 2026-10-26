@@ -21,11 +21,51 @@ EXPECTED = [
 ]
 
 
-def feed_in(pieces):
-    stream, out = VoiceStream(), []
+def feed_in(pieces, fields=None):
+    stream, out = (VoiceStream(fields) if fields else VoiceStream()), []
     for piece in pieces:
         out += stream.feed(piece)
     return out
+
+
+class HeardNothingTest(unittest.TestCase):
+    """Assistant B3: Whisper's words for silence never reach Ciel as a command."""
+
+    def test_silence_phrases_and_prompt_echoes_are_blanked(self):
+        from unittest import mock
+        import voice_engine
+        for heard in ("", "  ", ".", "Thank you.", "Thanks for watching!", "you", "ご視聴ありがとうございました。",
+                      "Hans, Aaron, Laureles, Ciel."):
+            with self.subTest(heard=heard), mock.patch.object(voice_engine, "_transcribe",
+                                                              return_value={"text": heard, "engine": "x"}):
+                self.assertEqual(voice_engine.transcribe_audio(b"x")["text"], "")
+        for said in ("thank you, what's the weather?", "check my vitals", "Ciel, what time is it in Tokyo?",
+                     "Git status.", "vitals", "Ciel"):  # short runs of prompt words are real commands
+            with self.subTest(said=said), mock.patch.object(voice_engine, "_transcribe",
+                                                            return_value={"text": said, "engine": "x"}):
+                self.assertEqual(voice_engine.transcribe_audio(b"x"), {"text": said, "engine": "x"})
+
+
+class FirstClipTest(unittest.TestCase):
+    """Assistant B1: a long first sentence is cut at a clause mark, so the first clip is short."""
+
+    EN = (("english_voice", "en"),)
+
+    def test_a_long_first_sentence_is_cut_at_its_first_clause_mark(self):
+        reply = json.dumps({"english_voice": "Report: A B-tree keeps every leaf at one depth, because a full "
+                                             "node splits and pushes its middle key up. Lookups stay fast, too."})
+        for size in (1, 3, len(reply)):  # token-sized pieces, small chunks, all at once
+            with self.subTest(size=size):
+                out = feed_in([reply[i:i + size] for i in range(0, len(reply), size)], self.EN)
+                self.assertEqual(out, [("en", "Report: A B-tree keeps every leaf at one depth,"),
+                                       ("en", "because a full node splits and pushes its middle key up."),
+                                       ("en", "Lookups stay fast, too.")])  # only the first clip is cut
+
+    def test_a_short_sentence_or_early_mark_is_not_cut(self):
+        reply = json.dumps({"english_voice": "Notice: Done, all clear. Next, a long sentence follows here, yes."})
+        self.assertEqual(feed_in([reply], self.EN)[:1], [("en", "Notice: Done, all clear.")])  # stop before 24
+        self.assertEqual(feed_in([json.dumps({"english_voice": "Version 1,000 of it is live today for everyone."})],
+                                 self.EN), [("en", "Version 1,000 of it is live today for everyone.")])
 
 
 class TestVoiceStream(unittest.TestCase):

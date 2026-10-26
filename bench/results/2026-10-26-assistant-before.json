@@ -1,0 +1,532 @@
+{
+  "date": "2026-10-26",
+  "started_at": "2026-10-26T14:26:16",
+  "duration_s": 509.8,
+  "runs": 10,
+  "inputs": {
+    "spoken_prompt": "Ciel, check our hardware vitals and git status.",
+    "mission_prompt": "Explain the difference between TCP and UDP in two sentences.",
+    "llm_prompt": "Explain the difference between TCP and UDP in about 120 words.",
+    "llm_max_tokens": 256,
+    "search_query": "Raft consensus algorithm"
+  },
+  "environment": {
+    "hardware": {
+      "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+      "cpu_logical_cores": 12,
+      "ram_gb": 15.8,
+      "gpu": "AMD Radeon RX 6600 XT"
+    },
+    "software": {
+      "os": "Microsoft Windows 11 Pro (build 10.0.26200)",
+      "python": "3.11.9",
+      "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev",
+      "edge_tts": "7.3.1",
+      "ddgs": "9.16.0",
+      "ollama": "unreachable (URLError)"
+    },
+    "git": {
+      "sha": "368394a8b41364bcd8c73b91cfe61655211a2466",
+      "dirty": false
+    }
+  },
+  "stages": {
+    "e2e_mission": {
+      "network": true,
+      "notes": "Full execute_mission for a general-knowledge prompt: router LLM, synthesis LLM, bilingual TTS. Sub-stages are timed inside it, including time_to_first_audio (mission start until the first playable audio URL is broadcast).",
+      "n_ok": 10,
+      "n_failed": 0,
+      "pace_s": 45,
+      "errors": [],
+      "ms": {
+        "p50": 4632.8,
+        "p95": 7486.0,
+        "max": 7486.0,
+        "min": 3465.6,
+        "mean": 5200.2
+      },
+      "samples_ms": [
+        4632.8,
+        6065.8,
+        3465.6,
+        5474.7,
+        5645.0,
+        7486.0,
+        4258.9,
+        4101.5,
+        6485.7,
+        4385.5
+      ],
+      "extras": [
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 4631.7,
+            "first_audio_ms": 2235.9,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.4,
+                "end_ms": 559.1
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 559.5,
+                "end_ms": 1543.0
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1066.9,
+                "end_ms": 2235.9
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1069.3,
+                "end_ms": 2476.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1183.2,
+                "end_ms": 4595.7
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 6064.6,
+            "first_audio_ms": 1958.6,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.3,
+                "end_ms": 514.2
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 514.5,
+                "end_ms": 1404.9
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 873.8,
+                "end_ms": 1958.6
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 955.1,
+                "end_ms": 4452.2
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1048.9,
+                "end_ms": 6028.4
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 3464.1,
+            "first_audio_ms": 1889.5,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.3,
+                "end_ms": 670.8
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 671.2,
+                "end_ms": 1642.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1125.7,
+                "end_ms": 1889.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1180.3,
+                "end_ms": 3120.2
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1239.2,
+                "end_ms": 3427.3
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 5473.6,
+            "first_audio_ms": 2107.1,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 1023.0
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 1023.3,
+                "end_ms": 1750.0
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1385.7,
+                "end_ms": 2107.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1432.6,
+                "end_ms": 2884.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1514.9,
+                "end_ms": 5437.9
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 5643.7,
+            "first_audio_ms": 3679.7,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 959.6
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 959.9,
+                "end_ms": 3150.9
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2591.3,
+                "end_ms": 3679.6
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2681.8,
+                "end_ms": 5605.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2699.2,
+                "end_ms": 5214.6
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 7484.9,
+            "first_audio_ms": 3197.4,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 546.0
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 546.3,
+                "end_ms": 2741.5
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2269.8,
+                "end_ms": 3197.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2392.0,
+                "end_ms": 5444.5
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2458.9,
+                "end_ms": 7446.2
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 4257.7,
+            "first_audio_ms": 1628.1,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 563.2
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 563.5,
+                "end_ms": 1338.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 918.3,
+                "end_ms": 1628.0
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 981.5,
+                "end_ms": 4208.0
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1062.4,
+                "end_ms": 3054.3
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 4100.2,
+            "first_audio_ms": 2125.2,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 709.5
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 709.9,
+                "end_ms": 1675.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1199.2,
+                "end_ms": 2125.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1255.6,
+                "end_ms": 3787.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1345.2,
+                "end_ms": 4062.8
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 6484.4,
+            "first_audio_ms": 3505.4,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 1718.5
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 1718.8,
+                "end_ms": 2762.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2265.1,
+                "end_ms": 3505.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2336.0,
+                "end_ms": 4401.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 2442.0,
+                "end_ms": 6443.9
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 4383.6,
+            "first_audio_ms": 1716.1,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.2,
+                "end_ms": 540.0
+              },
+              {
+                "stage": "synthesis_llm",
+                "start_ms": 540.3,
+                "end_ms": 1339.9
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 960.3,
+                "end_ms": 1716.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1020.6,
+                "end_ms": 4337.8
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 1107.8,
+                "end_ms": 3442.3
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "e2e.router_llm": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 563.0,
+        "p95": 1718.3,
+        "max": 1718.3,
+        "min": 513.9,
+        "mean": 780.2
+      },
+      "samples_ms": [
+        558.7,
+        513.9,
+        670.5,
+        1022.8,
+        959.5,
+        545.8,
+        563.0,
+        709.3,
+        1718.3,
+        539.8
+      ],
+      "extras": []
+    },
+    "e2e.synthesis_llm": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 965.4,
+        "p95": 2195.2,
+        "max": 2195.2,
+        "min": 726.6,
+        "mean": 1154.1
+      },
+      "samples_ms": [
+        983.5,
+        890.4,
+        970.9,
+        726.6,
+        2191.0,
+        2195.2,
+        774.9,
+        965.4,
+        1043.3,
+        799.6
+      ],
+      "extras": []
+    },
+    "e2e.tts_clip": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 30,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 2065.3,
+        "p95": 4979.5,
+        "max": 4987.3,
+        "min": 709.7,
+        "mean": 2261.7
+      },
+      "samples_ms": [
+        1169.0,
+        1407.0,
+        3412.5,
+        1084.7,
+        3497.0,
+        4979.5,
+        763.8,
+        1939.9,
+        2188.2,
+        721.4,
+        1451.7,
+        3923.0,
+        1088.4,
+        2515.4,
+        2923.3,
+        927.6,
+        3052.5,
+        4987.3,
+        709.7,
+        1991.9,
+        3226.5,
+        925.9,
+        2531.8,
+        2717.6,
+        1240.2,
+        2065.3,
+        4001.9,
+        755.8,
+        2334.6,
+        3317.2
+      ],
+      "extras": []
+    },
+    "e2e.time_to_first_audio": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 10,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 2107.1,
+        "p95": 3679.7,
+        "max": 3679.7,
+        "min": 1628.1,
+        "mean": 2404.3
+      },
+      "samples_ms": [
+        2235.9,
+        1958.6,
+        1889.5,
+        2107.1,
+        3679.7,
+        3197.4,
+        1628.1,
+        2125.2,
+        3505.4,
+        1716.1
+      ],
+      "extras": []
+    }
+  }
+}

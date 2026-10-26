@@ -5,6 +5,7 @@ Provides ultra-fast, zero-cost Speech-to-Text (Groq Whisper) and Neural Text-to-
 
 import os
 import io
+import re
 import asyncio
 import urllib.request
 import urllib.parse
@@ -29,6 +30,21 @@ DOMAIN_WHISPER_PROMPT = (
     "Hans, Aaron, Laureles, Ciel, Tensura, Raphael, Sakura, Chaewon, Yunjin, Kazuha, Eunchae, "
     "Obsidian, Brain, daily log, Git, status, vitals, hardware, AMD, Ollama, Vercel, portfolio, ATS, resume."
 )
+
+# Whisper writes these on near-silent audio (or echoes its own prompt). As a whole transcript they are
+# not a command, so transcribe_audio returns empty text and the HUD says it did not catch that.
+SILENCE_TEXTS = {"thank you", "thanks", "thanks for watching", "thank you for watching",
+                 "thank you so much for watching", "you", "bye", "subtitles by the amara org community",
+                 "ご視聴ありがとうございました", "ありがとうございました"}
+
+
+def heard_nothing(text: str) -> bool:
+    """True for an empty transcript, a known silence phrase, or a run of 3+ words copied from
+    DOMAIN_WHISPER_PROMPT (shorter runs such as "git status" are real commands)."""
+    t = re.sub(r"[\W_]+", " ", text or "").strip().lower()
+    echo = len(t.split()) >= 3 and t in re.sub(r"[\W_]+", " ", DOMAIN_WHISPER_PROMPT).lower()
+    return len(t) < 2 or t in SILENCE_TEXTS or echo
+
 
 CIEL_JA_VOICE = os.getenv("CIEL_JA_VOICE", "ja-JP-NanamiNeural")
 CIEL_JA_PITCH = os.getenv("CIEL_JA_PITCH", "-3Hz")
@@ -393,7 +409,15 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "input.wav", prompt: st
     1. Converts the audio with FFmpeg to 16 kHz mono WAV (fixed gain, 80 Hz-7.5 kHz band-pass; no loudness normalisation).
     2. Primary tier: Groq Whisper Large v3 Turbo (cloud LPU transcription).
     3. Fallback tier: OpenAI Whisper-1 (enterprise reliability fallback).
+    A transcript that heard_nothing() comes back as "" with "ignored": the words Whisper gave.
     """
+    result = _transcribe(audio_bytes, filename, prompt)
+    if heard_nothing(result["text"]):
+        result.update(ignored=result["text"], text="")
+    return result
+
+
+def _transcribe(audio_bytes: bytes, filename: str, prompt: str) -> dict:
     import time
     t0 = time.time()
 

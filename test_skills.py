@@ -447,29 +447,58 @@ class TestChaewonSakuraSkills(unittest.TestCase):
         self.assertEqual(r.status, "failed")
         self.assertIn("unreachable", r.text)
 
-    def test_vault_search(self):
-        self.vault(matches=[{"filename": "a.md"}, {"filename": "b.md"}])
-        r = skills.run_skill("sakura.vault_search", {"query": "gmail oauth"})
-        self.assertEqual(r.status, "done")
-        self.assertEqual(r.data["matches"], [{"filename": "a.md"}, {"filename": "b.md"}])
-        self.vault(fail=True)
-        self.assertEqual(skills.run_skill("sakura.vault_search", {"query": "x"}).status, "failed")
-
-    # --- Codex QA R3 (ADR-001-R3-CODEX-QA.md) ---
-    def test_search_with_no_vault_access_is_failed_not_empty(self):  # F1, real client contract
+    def test_vault_search_returns_the_passages(self):  # assistant B5: local BM25, read from disk
+        import os
         import tempfile
         from pathlib import Path
-        import obsidian_client
+        d = Path(tempfile.mkdtemp())
+        (d / "Gmail.md").write_text("# OAuth\n\nGmail OAuth stays in Testing and lapses weekly.\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CIEL_FILE_ROOTS": str(d)}):
+            r = skills.run_skill("sakura.vault_search", {"query": "gmail oauth"})
+        self.assertEqual(r.status, "done")
+        self.assertEqual(r.data["matches"][0]["file"], f"{d.name}/Gmail.md")
+        self.assertIn(f"{d.name}/Gmail.md > OAuth", r.text)
+        self.assertIn("lapses weekly", r.text)
+        self.assertEqual(skills.run_skill("sakura.vault_search", {"query": " "}).status, "failed")
+
+    def test_reminder_skills(self):  # assistant B6
+        import tempfile
+        from pathlib import Path
+        import reminders
+        self.enterContext(mock.patch.object(reminders, "STORE", Path(tempfile.mkdtemp()) / "reminders.json"))
+        r = skills.run_skill("sakura.remind", {"text": "call the bank", "when": "2099-01-01T09:00"})
+        self.assertEqual(r.status, "failed")  # more than a year ahead
+        r = skills.run_skill("sakura.remind", {"text": "Ciel, remind me to stretch in 20 minutes"})  # keyword path
+        self.assertEqual(r.status, "done")
+        self.assertEqual(r.data["reminder"]["text"], "stretch in 20 minutes")
+        self.assertIn("Sakura will message Hans on Discord", r.text)
+        self.assertEqual(skills.run_skill("sakura.remind", {"text": "remind me to stretch sometime"}).status, "failed")
+        for when in ("in 400 days", "in 999999999 days"):  # Codex QA F2: refused, not stored and not a crash
+            with self.subTest(when=when):
+                r = skills.run_skill("sakura.remind", {"text": "stretch", "when": when})
+                self.assertEqual(r.status, "failed")
+                self.assertIn("could not tell when", r.text)
+        self.assertIn("stretch in 20 minutes", skills.run_skill("sakura.reminders").text)
+        r = skills.run_skill("sakura.cancel_reminder", {"match": "cancel my reminder about stretching"})
+        self.assertEqual(r.data["cancelled"], [])  # "stretching" is not in "stretch in 20 minutes"
+        r = skills.run_skill("sakura.cancel_reminder", {"match": "Ciel, cancel my reminder to stretch"})
+        self.assertEqual(len(r.data["cancelled"]), 1)
+        self.assertEqual(skills.run_skill("sakura.reminders").text, "No reminders pending.")
+        self.assertEqual(skills.keyword_calls("remind me at 5pm to call mom")[0][0], "sakura.remind")
+
+    # --- Codex QA R3 (ADR-001-R3-CODEX-QA.md) ---
+    def test_search_with_no_vault_access_is_failed_not_empty(self):  # F1, now with local folders (B5)
+        import os
+        import tempfile
+        from pathlib import Path
         missing = Path(tempfile.mkdtemp()) / "no-such-vault"
-        client = obsidian_client.ObsidianClient(vault_path=str(missing))
-        self.enterContext(mock.patch.object(client, "is_rest_api_online", return_value=False))
-        self.patch("_vault", lambda: client)
-        r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
-        self.assertEqual(r.status, "failed")
-        self.assertIn("unavailable", r.text)
-        missing.mkdir()  # the disk fallback is back: a genuine empty search is done
-        (missing / "note.md").write_text("nothing relevant", encoding="utf-8")
-        r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
+        with mock.patch.dict(os.environ, {"CIEL_FILE_ROOTS": str(missing)}):
+            r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
+            self.assertEqual(r.status, "failed")
+            self.assertIn("unavailable", r.text)
+            missing.mkdir()  # the folder is back: a genuine empty search is done
+            (missing / "note.md").write_text("nothing relevant", encoding="utf-8")
+            r = skills.run_skill("sakura.vault_search", {"query": "oauth"})
         self.assertEqual((r.status, r.data["matches"]), ("done", []))
 
     def test_scout_cards_must_be_complete(self):  # F2

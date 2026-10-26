@@ -14,6 +14,11 @@ _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r"
 _FULL_STOPS = "。！？"      # end a sentence by themselves
 _ASCII_STOPS = ".!?"       # end one only before whitespace, so "2.5" and "v1.2" stay whole
 _CLOSERS = "」』）)\"'”’"   # stay with the sentence they close
+# The first clip is voiced while the listener waits, and a clip's TTS time grows with its length. So until
+# the first clip is out, a clause mark (", ", "; ", ": ") at least FIRST_CLIP_MIN characters in also ends it.
+# Measured 2026-10-26: an English-only reply's whole first sentence took 2.5-3.3 s of TTS before any sound.
+FIRST_CLIP_MIN = 24
+_CLAUSE = re.compile(r"[,;:](?=\s)")
 
 
 def decode_partial(s: str, i: int) -> tuple:
@@ -84,15 +89,17 @@ def split_sentences(text: str, final: bool) -> tuple:
 class VoiceStream:
     """Feed it the reply as it streams; it hands back (lang, sentence) pairs in speaking order."""
 
-    def __init__(self):
+    def __init__(self, fields=FIELDS):
+        self.fields = fields  # the voice fields to speak, in order (Ciel's English-only voice drops Japanese)
         self.buf = ""
         self.used = {}       # lang -> chars of that field already handed out
         self.closed = set()  # langs whose field has ended
+        self.voiced = False  # set once the first clip has been handed out
 
     def feed(self, piece: str) -> list:
         self.buf += piece
         out = []
-        for field, lang in FIELDS:
+        for field, lang in self.fields:
             if lang in self.closed:
                 continue
             m = re.search(r'"%s"\s*:\s*"' % field, self.buf)
@@ -100,10 +107,16 @@ class VoiceStream:
                 break  # fields are spoken in order: no English before the Japanese is done
             text, closed = decode_partial(self.buf, m.end())
             pos = self.used.get(lang, 0)
+            if not self.voiced and not out:  # nothing voiced yet: a short first clip starts the voice sooner
+                c = _CLAUSE.search(text, pos + FIRST_CLIP_MIN)
+                if c and not split_sentences(text[pos:c.end()], final=False)[0]:  # no full stop before it
+                    out.append((lang, _whole(text[pos:c.end()].strip())))
+                    pos = c.end()
             sentences, used = split_sentences(text[pos:], final=closed)
             self.used[lang] = pos + used
             out += [(lang, s) for s in sentences]
             if not closed:
                 break
             self.closed.add(lang)
+        self.voiced = self.voiced or bool(out)
         return out

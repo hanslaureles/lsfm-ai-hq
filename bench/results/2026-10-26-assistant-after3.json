@@ -1,0 +1,322 @@
+{
+  "date": "2026-10-26",
+  "started_at": "2026-10-26T19:48:11",
+  "duration_s": 490.8,
+  "runs": 10,
+  "inputs": {
+    "spoken_prompt": "Ciel, check our hardware vitals and git status.",
+    "mission_prompt": "Explain the difference between TCP and UDP in two sentences.",
+    "llm_prompt": "Explain the difference between TCP and UDP in about 120 words.",
+    "llm_max_tokens": 256,
+    "search_query": "Raft consensus algorithm"
+  },
+  "environment": {
+    "hardware": {
+      "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+      "cpu_logical_cores": 12,
+      "ram_gb": 15.8,
+      "gpu": "AMD Radeon RX 6600 XT"
+    },
+    "software": {
+      "os": "Microsoft Windows 11 Pro (build 10.0.26200)",
+      "python": "3.11.9",
+      "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev",
+      "edge_tts": "7.3.1",
+      "ddgs": "9.16.0",
+      "ollama": "unreachable (URLError)"
+    },
+    "git": {
+      "sha": "89bd25ec8156cd69f4a5b73eb4d7bee832e7360e",
+      "dirty": false
+    }
+  },
+  "stages": {
+    "e2e_mission": {
+      "network": true,
+      "notes": "Full execute_mission for a general-knowledge prompt: router LLM (which writes a direct answer itself since 2026-10-26; synthesis LLM only after a tool), TTS in the voice languages set. Sub-stages are timed inside it, including time_to_first_audio (mission start until the first playable audio URL is broadcast).",
+      "n_ok": 7,
+      "n_failed": 3,
+      "pace_s": 45,
+      "errors": [
+        "RuntimeError: excluded, Groq retry/fallback during run: [Groq 429] qwen/qwen3.8-27b rate limited, switching to next Groq model..."
+      ],
+      "ms": {
+        "p50": 3078.0,
+        "p95": 3294.9,
+        "max": 3294.9,
+        "min": 2331.5,
+        "mean": 2909.6
+      },
+      "samples_ms": [
+        2331.5,
+        3125.7,
+        3099.0,
+        3078.0,
+        2457.6,
+        3294.9,
+        2980.4
+      ],
+      "extras": [
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 2330.2,
+            "first_audio_ms": 1516.1,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 1.1,
+                "end_ms": 1130.8
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 871.4,
+                "end_ms": 1516.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 873.7,
+                "end_ms": 2291.8
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 3124.6,
+            "first_audio_ms": 3089.4,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.5,
+                "end_ms": 1282.8
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 820.8,
+                "end_ms": 3089.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 845.6,
+                "end_ms": 2594.7
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 896.6,
+                "end_ms": 2366.2
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 3097.6,
+            "first_audio_ms": 1519.9,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.4,
+                "end_ms": 1008.7
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 665.7,
+                "end_ms": 1519.8
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 695.5,
+                "end_ms": 2048.0
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 746.3,
+                "end_ms": 3063.7
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 3077.0,
+            "first_audio_ms": 1815.3,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.4,
+                "end_ms": 1135.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 971.8,
+                "end_ms": 1815.3
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 994.6,
+                "end_ms": 3044.7
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 2456.6,
+            "first_audio_ms": 1417.6,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.4,
+                "end_ms": 874.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 681.5,
+                "end_ms": 1417.5
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 732.0,
+                "end_ms": 2424.1
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 3293.9,
+            "first_audio_ms": 2456.0,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.5,
+                "end_ms": 902.1
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 625.9,
+                "end_ms": 2455.9
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 688.2,
+                "end_ms": 3260.8
+              }
+            ]
+          }
+        },
+        {
+          "intent": "general_knowledge",
+          "trace": {
+            "mission_ms": 2979.4,
+            "first_audio_ms": 1486.4,
+            "spans": [
+              {
+                "stage": "router_llm",
+                "start_ms": 0.5,
+                "end_ms": 930.5
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 665.5,
+                "end_ms": 1486.4
+              },
+              {
+                "stage": "tts_clip",
+                "start_ms": 709.5,
+                "end_ms": 2946.9
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "e2e.router_llm": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 7,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 1008.3,
+        "p95": 1282.3,
+        "max": 1282.3,
+        "min": 874.0,
+        "mean": 1037.3
+      },
+      "samples_ms": [
+        1129.7,
+        1282.3,
+        1008.3,
+        1135.0,
+        874.0,
+        901.7,
+        930.0
+      ],
+      "extras": []
+    },
+    "e2e.tts_clip": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 16,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 1469.5,
+        "p95": 2572.6,
+        "max": 2572.6,
+        "min": 644.6,
+        "mean": 1553.5
+      },
+      "samples_ms": [
+        644.6,
+        1418.1,
+        1469.5,
+        1749.0,
+        2268.5,
+        854.2,
+        1352.5,
+        2317.4,
+        843.4,
+        2050.1,
+        736.1,
+        1692.1,
+        1830.0,
+        2572.6,
+        820.9,
+        2237.4
+      ],
+      "extras": []
+    },
+    "e2e.time_to_first_audio": {
+      "network": true,
+      "notes": "Measured inside e2e_mission runs.",
+      "n_ok": 7,
+      "n_failed": 0,
+      "errors": [],
+      "ms": {
+        "p50": 1519.9,
+        "p95": 3089.4,
+        "max": 3089.4,
+        "min": 1417.6,
+        "mean": 1900.1
+      },
+      "samples_ms": [
+        1516.1,
+        3089.4,
+        1519.9,
+        1815.3,
+        1417.6,
+        2456.0,
+        1486.4
+      ],
+      "extras": []
+    }
+  }
+}

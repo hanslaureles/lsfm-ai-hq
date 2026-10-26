@@ -482,8 +482,9 @@ STAGES = [
     ("llm_stream_ollama", False, "Same prompt on local Ollama. The cold model load is reported separately; the "
                                  "prompt repeats every run, so first-token time reflects Ollama's prompt cache "
                                  "(uncached prompt eval is in the server breakdown)."),
-    ("e2e_mission", True, "Full execute_mission for a general-knowledge prompt: router LLM, synthesis LLM, "
-                          "bilingual TTS. Sub-stages are timed inside it, including time_to_first_audio "
+    ("e2e_mission", True, "Full execute_mission for a general-knowledge prompt: router LLM (which writes a "
+                          "direct answer itself since 2026-10-26; synthesis LLM only after a tool), TTS in the "
+                          "voice languages set. Sub-stages are timed inside it, including time_to_first_audio "
                           "(mission start until the first playable audio URL is broadcast)."),
 ]
 LOCAL_STAGES = [name for name, network, _ in STAGES if not network]

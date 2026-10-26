@@ -38,3 +38,19 @@
 {"prompt": "今日やることは何？", "lang": "ja", "expect": ["sakura.priorities"]}
 {"prompt": "リモートのAIエンジニア求人を探して", "lang": "ja", "expect": ["chaewon.scout"]}
 {"prompt": "もう一度確認して", "lang": "ja", "expect": ["sakura.inbox"], "history": [{"user_prompt": "受信トレイに新しいメールある？", "agents_called": ["sakura"], "agent_results": {"sakura": "Gmail Inbox Triage: 3 unread message(s) in Primary (1 recruiter inquiry)."}, "ciel_reply": "解。未読メールが3件あります。"}]}
+{"prompt": "What's Next.js 16 changing?", "lang": "en", "expect": ["ciel.web_search"]}
+{"prompt": "How do I clear context in a React reducer?", "lang": "en", "expect": ["ciel.direct"]}
+{"prompt": "How does temperature work in LLM sampling?", "lang": "en", "expect": ["ciel.direct"]}
+{"prompt": "Search my inbox for recruiter emails", "lang": "en", "expect": ["sakura.inbox"]}
+{"prompt": "Weather in Silang, Cavite", "lang": "en", "expect": ["ciel.weather"]}
+{"prompt": "Any suggestions for naming this variable?", "lang": "en", "expect": ["ciel.direct"]}
+{"prompt": "any suggestions for my workspace right now?", "lang": "en", "expect": ["ciel.appraisal"]}
+{"prompt": "what's the news on AI regulation?", "lang": "en", "expect": ["ciel.news"]}
+{"prompt": "any headlines about the Philippine peso today?", "lang": "en", "expect": ["ciel.news"]}
+{"prompt": "is it going to rain in my area this afternoon?", "lang": "en", "expect": ["ciel.weather"]}
+{"prompt": "what did I decide about keeping Gmail OAuth in testing?", "lang": "en", "expect": ["sakura.vault_search"]}
+{"prompt": "when did we release the portfolio's Next.js version, according to my reports?", "lang": "en", "expect": ["sakura.vault_search"]}
+{"prompt": "set a timer for 8 minutes for the pasta", "lang": "en", "expect": ["ciel.timer"]}
+{"prompt": "remind me at 5pm to call the bank", "lang": "en", "expect": ["sakura.remind"]}
+{"prompt": "what reminders do I have?", "lang": "en", "expect": ["sakura.reminders"]}
+{"prompt": "cancel my reminder about the bank", "lang": "en", "expect": ["sakura.cancel_reminder"]}

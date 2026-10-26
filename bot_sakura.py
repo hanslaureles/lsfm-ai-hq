@@ -6,6 +6,7 @@ import datetime
 from pathlib import Path
 import discord
 import health_recorder
+import owner_guard
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -26,6 +27,7 @@ intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 health_recorder.attach(bot, "sakura")  # memory/health/sakura.json (4B-2)
+owner_guard.install(bot)  # commands, chat and reactions: Hans only
 
 from sakura_engine import (
     generate_morning_briefing,
@@ -156,7 +158,18 @@ def _read_meta(folder: Path) -> dict:
     return json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))
 
 
-def build_job_card(meta: dict) -> discord.Embed:
+def _read_letter(folder: Path) -> list:
+    """The cover letter paragraphs from tailoring.json, or [] when there is none yet (needs_claude)."""
+    import json
+    try:
+        paragraphs = json.loads((Path(folder) / "tailoring.json").read_text(encoding="utf-8-sig")).get("cover_paragraphs")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [p for p in paragraphs if isinstance(p, str)] if isinstance(paragraphs, list) else []
+
+
+def build_job_card(meta: dict, letter: list = ()) -> discord.Embed:
+    """The #approvals card. The letter is shown in full (when it fits), so ✅ is given after reading it."""
     lines = []
     if meta.get("status") == "needs_claude":
         lines.append("Claude will tailor this one (Chaewon could not).")
@@ -164,6 +177,10 @@ def build_job_card(meta: dict) -> discord.Embed:
         lines.append("⚠️ Thin posting: Claude will re-tailor from the full page.")
     if meta.get("why"):
         lines.append(meta["why"])
+    if letter:
+        text = "\n\n".join(letter)
+        room = 4000 - len("\n".join(lines))  # Discord allows 4096 characters in a description
+        lines.append("\n**Cover letter**\n" + (text if len(text) <= room else text[:room - 40] + "… (full text in the PDF)"))
     embed = discord.Embed(title=f"⭐ {meta.get('role', '')} · {meta.get('company', '')}"[:256],
                           description="\n".join(lines) or None, url=meta.get("url") or None, color=0xF472B6)
     embed.add_field(name="Site", value=meta.get("site") or "?", inline=True)
@@ -225,7 +242,7 @@ async def send_job_card(channel, folder: Path):
                     files.append(discord.File(str(p), filename=p.name))
                 except OSError as e:  # locked or unreadable: the card goes out without it
                     print(f"⚠️ [Sakura] could not attach {p.name}: {type(e).__name__}: {e}", flush=True)
-        msg = await channel.send(embed=build_job_card(meta), files=files)
+        msg = await channel.send(embed=build_job_card(meta, _read_letter(folder)), files=files)
     finally:
         for f in files:  # a failed send would otherwise keep the PDFs locked on Windows
             f.close()
@@ -293,6 +310,55 @@ async def post_job_hunt_if_due():
 async def scheduled_job_hunt_loop():
     await bot.wait_until_ready()
     await post_job_hunt_if_due()
+
+
+# Reminders (assistant B6): Ciel or a bot stores them in memory/reminders.json; Sakura runs all day and delivers.
+async def reminder_owner():
+    """Who reminders go to: DISCORD_OWNER_ID from .env, else the owner of Sakura's Discord application."""
+    owner = (os.getenv("DISCORD_OWNER_ID") or "").strip()
+    if owner.isdigit():
+        return await bot.fetch_user(int(owner))
+    app = await bot.application_info()
+    return app.team.owner if app.team else app.owner
+
+
+async def deliver_due_reminders(now=None):
+    """Each due reminder as a DM to Hans (Discord pushes it to his phone); #command-center if the DM is refused.
+    reminders.claim_due marks them sent first, so a failure here loses one but never repeats it (6B)."""
+    import reminders
+    now = now or datetime.datetime.now()
+    due = await asyncio.to_thread(reminders.claim_due, now)
+    if not due:
+        return
+    try:
+        user = await reminder_owner()
+    except Exception as e:  # quiet: the channel fallback below names the problem
+        print(f"⚠️ [Sakura] reminder owner lookup failed: {type(e).__name__}: {e}", flush=True)
+        user = None
+    for item in due:
+        when = datetime.datetime.fromisoformat(item["due"])
+        text = f"⏰ **Reminder:** {item['text']}"
+        if now - when > datetime.timedelta(minutes=5):
+            text += f"\n(due {when:%a %d %b %H:%M}; sent late because the bots were not running)"
+        try:
+            if user is None:
+                raise RuntimeError("owner unknown")
+            await user.send(text)
+        except Exception as dm_error:
+            channel = first_channel("command-center", "daily-briefing")
+            try:
+                if channel is None:
+                    raise RuntimeError(f"DM failed ({dm_error}) and no #command-center channel")
+                await channel.send(f"{user.mention + ' ' if user else ''}{text}")
+            except Exception as e:
+                print(f"⚠️ [Sakura] reminder {item['id']} not delivered: {type(e).__name__}: {e}", flush=True)
+                await asyncio.to_thread(reminders.mark_failed, item["id"], f"{type(e).__name__}: {e}")
+
+
+@tasks.loop(minutes=1)
+async def reminder_loop():
+    await bot.wait_until_ready()
+    await deliver_due_reminders()
 
 
 def build_brain_embed(status: dict) -> discord.Embed:
@@ -370,6 +436,9 @@ async def on_ready():
 
     if not scheduled_job_hunt_loop.is_running():
         scheduled_job_hunt_loop.start()
+
+    if not reminder_loop.is_running():
+        reminder_loop.start()
 
 
 def handle_qa_audit_failure(exc: Exception) -> dict:
@@ -730,6 +799,8 @@ async def on_raw_reaction_add(payload):
     emoji_str = str(payload.emoji)
     if emoji_str not in ["✅", "❌"]:
         return
+    if not await owner_guard.allowed(bot, payload.user_id):  # only Hans approves or skips a card
+        return
 
     data = get_pending_proposal(payload.message_id)
     if not data:
@@ -847,7 +918,7 @@ async def on_raw_reaction_add(payload):
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
     if message.content.startswith("!"):

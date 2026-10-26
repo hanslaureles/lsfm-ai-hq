@@ -21,6 +21,14 @@ import pdf_engine
 ALLOWED = {"company", "role", "title", "summary", "skills_ai", "skills_sys", "skills_ui",
            "project_order", "cover_paragraphs"}
 SKILL_KEYS = ("skills_ai", "skills_sys", "skills_ui")
+# Written text that cannot come from master_resume.md: a link or address planted in the posting, an
+# instruction the posting slipped into the tailoring prompt, or years of experience Hans does not have.
+# ponytail: a pattern list, not a judge; it catches the planted-text shapes seen in prompt-injection demos.
+PLANTED = re.compile(
+    r"https?://|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}"
+    r"|\bignore (?:all |any |the )?(?:previous|prior|above|earlier)\b|\bsystem prompt\b|\bas an ai\b"
+    r"|\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\+?\s+years?(?:\s+of)?\s+(?:professional\s+)?experience\b",
+    re.IGNORECASE)
 
 
 def skill_items(line: str) -> list[str]:
@@ -78,6 +86,13 @@ def check(t: dict, ctx: dict) -> list[str]:
             errors.append(f"project_order must reorder exactly {on_page}")
     if len(t.get("summary", "")) > 400:
         errors.append("summary over 400 characters")
+    written = [("title", t.get("title", "")), ("summary", t.get("summary", ""))]
+    written += [(f"cover_paragraphs[{i}]", p) for i, p in enumerate(t.get("cover_paragraphs") or [])]
+    for k, text in written:
+        m = PLANTED.search(text)
+        if m:
+            errors.append(f"{k} contains {m.group(0)!r}: no links, email addresses, instructions or years of "
+                          "experience; write only what master_resume.md supports")
     return errors
 
 

@@ -36,3 +36,8 @@ aiohttp==3.14.3
 # Manas: Ciel voice + web intelligence (voice_engine.py, ciel_orchestrator.py)
 edge-tts==7.3.1
 ddgs==9.16.0
+
+# Ciel's wake word (wake_word.py, assistant B7). Runs on ONNX (openWakeWord's tflite runtime has no
+# Windows build); brings numpy, onnxruntime, scipy, scikit-learn. Its models are a separate download:
+#   python -c "import openwakeword.utils as u; u.download_models(['hey_jarvis'])"
+openwakeword==0.6.0

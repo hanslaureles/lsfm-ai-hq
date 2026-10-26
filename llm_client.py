@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "mode": "cloud",  # Blueprint C default: 100% High-Craft Cloud Intelligence
     "local_model": "qwen2.5-coder:7b",
     "cloud_model": "qwen/qwen3.8-27b",
+    "ciel_voice": "en",  # "ja+en" brings back Ciel's Japanese line before the English one
     "agent_cloud_models": {
         "sakura": "qwen/qwen3.8-27b",
         "chaewon": "openai/gpt-oss-120b",
@@ -187,6 +188,11 @@ GROQ_FALLBACK_MODELS = [
     "openai/gpt-oss-20b"
 ]
 
+# Socket timeout for a streamed Groq reply (only Ciel streams): a stalled model is left after 10 s
+# instead of 30, so Ciel's 45 s budget still reaches Gemini. Unstreamed bot calls keep 30 s,
+# because a long unstreamed reply sends nothing until it is done.
+GROQ_STREAM_TIMEOUT_S = 10
+
 GEMINI_FALLBACK_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash",
@@ -283,7 +289,7 @@ def call_groq(prompt: str, system_instruction: str = "", model: str = None, temp
                 data=json.dumps(body).encode("utf-8")
             )
             try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=GROQ_STREAM_TIMEOUT_S if on_delta else 30) as resp:
                     if on_delta:
                         text = _read_groq_stream(resp, forward)
                     else:

@@ -27,7 +27,7 @@ class TestCases(unittest.TestCase):
 
     def test_cases_file_is_valid(self):
         cases = load_cases()
-        self.assertEqual(len(cases), 40)
+        self.assertEqual(len(cases), 56)  # 40 + 7 lookalikes (B1) + 3 news/weather (B4) + 2 files (B5) + 4 timers (B6)
         self.assertGreaterEqual(sum(c["lang"] == "ja" for c in cases), 10)
         self.assertGreaterEqual(sum(bool(c.get("history")) for c in cases), 4)
         used = set()
@@ -69,6 +69,7 @@ class TestLabels(unittest.TestCase):
              {"ciel.direct"}),
             ({"intent_type": "reset_memory", "agents_needed": [], "tool_targets": ["reset_memory"]},
              {"ciel.reset"}),
+            ({"intent_type": "news", "agents_needed": [], "tool_targets": ["news_search"]}, {"ciel.news"}),
             ({"intent_type": "agent_delegation", "calls": [["yunjin.audit", {}]], "agents_needed": ["yunjin"]},
              {"yunjin.audit"}),
         ]

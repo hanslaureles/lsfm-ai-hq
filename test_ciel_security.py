@@ -73,6 +73,19 @@ sys.modules.pop("ciel_server", None)
 import ciel_server  # noqa: E402
 _restore(_saved)
 
+_env = mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": ""})
+
+
+def setUpModule():
+    # Hermetic: another module may load the real .env (with Hans's token) earlier in the run. Remote access
+    # is off here unless a test turns it on (TestPhoneAccess).
+    _env.start()
+
+
+def tearDownModule():
+    _env.stop()
+
+
 GOOD_HOST = {"Host": "localhost:8000"}
 GOOD_ORIGIN = {**GOOD_HOST, "Origin": "http://localhost:8000"}
 EVIL_ORIGIN = {**GOOD_HOST, "Origin": "https://evil.example"}
@@ -100,8 +113,12 @@ class TestLocalhostGuard(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res.status, 200)
 
     async def test_rebound_host_rejected(self):
-        res = await self.client.get("/api/memory", headers={"Host": "evil.example:8000"})
-        self.assertEqual(res.status, 403)
+        with mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": ""}):  # remote access off
+            res = await self.client.get("/api/memory", headers={"Host": "evil.example:8000"})
+            self.assertEqual(res.status, 403)
+        with mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": "t0k3n"}):  # on: still no way in without it
+            res = await self.client.get("/api/memory", headers={"Host": "evil.example:8000"})
+            self.assertEqual(res.status, 401)
 
     # --- CSRF on POST routes ---
 
@@ -195,6 +212,138 @@ class TestLocalhostGuard(unittest.IsolatedAsyncioTestCase):
         pong = await ws.receive_json(timeout=2)
         self.assertEqual(pong["type"], "pong")
         await ws.close()
+
+
+class TestPhoneAccess(unittest.IsolatedAsyncioTestCase):
+    """Assistant B8: through tailscale serve the phone needs the access token (cookie after one link)."""
+
+    PHONE = {"Host": "ciel-pc.tail1234.ts.net", "X-Forwarded-For": "100.101.102.103"}
+    PHONE_ORIGIN = {**PHONE, "Origin": "https://ciel-pc.tail1234.ts.net"}
+    COOKIE = {"Cookie": "ciel_access=t0k3n"}
+
+    async def asyncSetUp(self):
+        self.enterContext(mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": "t0k3n"}))
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+        ciel_server.ciel.missions.clear()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_without_the_token_nothing_works(self):
+        res = await self.client.get("/api/memory", headers=self.PHONE)
+        self.assertEqual(res.status, 401)
+        page = await self.client.get("/", headers=self.PHONE)
+        self.assertEqual(page.status, 401)
+        self.assertIn("access link", await page.text())
+        # A proxied request is remote even when the proxy keeps Host as localhost.
+        res = await self.client.get("/api/memory", headers={**GOOD_HOST, "X-Forwarded-For": "100.64.0.9"})
+        self.assertEqual(res.status, 401)
+
+    async def test_the_link_sets_a_safe_cookie_and_leaves_the_address(self):
+        res = await self.client.get("/?token=wrong", headers=self.PHONE, allow_redirects=False)
+        self.assertEqual(res.status, 401)
+        res = await self.client.get("/?view=a&token=t0k3n", headers=self.PHONE, allow_redirects=False)
+        self.assertEqual((res.status, res.headers["Location"]), (302, "/?view=a"))
+        cookie = res.headers["Set-Cookie"]
+        for flag in ("ciel_access=t0k3n", "HttpOnly", "Secure", "SameSite=Lax", "Path=/"):
+            self.assertIn(flag, cookie)
+
+    async def test_with_the_cookie_or_bearer_the_phone_works_same_origin_only(self):
+        res = await self.client.get("/api/memory", headers={**self.PHONE, **self.COOKIE})
+        self.assertEqual(res.status, 200)
+        res = await self.client.get("/api/memory", headers={**self.PHONE, "Authorization": "Bearer t0k3n"})
+        self.assertEqual(res.status, 200)
+        res = await self.client.post("/api/chat", json={"prompt": "status"}, headers={**self.PHONE_ORIGIN, **self.COOKIE})
+        self.assertEqual(res.status, 200)
+        evil = {**self.PHONE, **self.COOKIE, "Origin": "https://evil.example"}
+        res = await self.client.post("/api/chat", json={"prompt": "x"}, headers=evil)
+        self.assertEqual(res.status, 403)
+        self.assertEqual(ciel_server.ciel.missions, ["status"])
+        ws = await self.client.ws_connect("/ws", headers={**self.PHONE_ORIGIN, **self.COOKIE})
+        self.assertEqual((await ws.receive_json())["type"], "ciel_connected")
+        await ws.close()
+        with self.assertRaises(WSServerHandshakeError):
+            await self.client.ws_connect("/ws", headers=self.PHONE_ORIGIN)
+
+    async def test_install_files_need_no_token_and_the_pc_needs_none(self):
+        res = await self.client.get("/manifest.webmanifest", headers=self.PHONE)
+        self.assertNotIn(res.status, (401, 403))  # browsers fetch the manifest without cookies
+        res = await self.client.get("/api/memory", headers=GOOD_HOST)
+        self.assertEqual(res.status, 200)
+
+    def test_phone_link_uses_the_tailnet_name(self):
+        import subprocess
+        status = types.SimpleNamespace(stdout='{"Self": {"DNSName": "ciel-pc.tail1234.ts.net."}}')
+        with mock.patch.object(subprocess, "run", return_value=status):
+            self.assertEqual(ciel_server.phone_link(), "https://ciel-pc.tail1234.ts.net/?token=t0k3n")
+        with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError("tailscale")):
+            self.assertIn("is Tailscale installed", ciel_server.phone_link())
+        with mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": ""}):
+            self.assertIn("remote access is off", ciel_server.phone_link())
+
+    async def test_no_token_set_means_remote_access_is_off(self):
+        with mock.patch.dict(os.environ, {"CIEL_ACCESS_TOKEN": ""}):
+            res = await self.client.get("/?token=", headers=self.PHONE, allow_redirects=False)
+            self.assertEqual(res.status, 403)
+            res = await self.client.get("/api/memory", headers={**self.PHONE, "Cookie": "ciel_access="})
+            self.assertEqual(res.status, 403)
+
+
+class TestWakeSocket(unittest.IsolatedAsyncioTestCase):
+    """Assistant B7: /ws/wake runs a detector per socket and answers "wake"; same origin guard as /ws."""
+
+    class FakeDetector:
+        made = 0
+
+        def __init__(self):
+            type(self).made += 1
+            self.fed = []
+
+        def feed(self, pcm):
+            self.fed.append(len(pcm))
+            return 0.9 if pcm == b"HEY!" else None
+
+    async def asyncSetUp(self):
+        self.client = TestClient(TestServer(ciel_server.create_app()))
+        await self.client.start_server()
+        self.patcher = mock.patch.object(ciel_server.wake_word, "WakeDetector", self.FakeDetector)
+        self.patcher.start()
+
+    async def asyncTearDown(self):
+        self.patcher.stop()
+        await self.client.close()
+
+    async def test_audio_in_wake_out(self):
+        ws = await self.client.ws_connect("/ws/wake", headers=GOOD_ORIGIN)
+        self.assertEqual((await ws.receive_json())["type"], "wake_ready")
+        await ws.send_bytes(b"\x00\x00" * 640)
+        await ws.send_bytes(b"HEY!")
+        self.assertEqual(await ws.receive_json(), {"type": "wake", "score": 0.9})
+        await ws.close()
+        self.assertEqual(ciel_server.wake_sockets, set())
+
+    async def test_cross_origin_wake_socket_rejected(self):
+        with self.assertRaises(WSServerHandshakeError):
+            await self.client.ws_connect("/ws/wake", headers=EVIL_ORIGIN)
+
+    async def test_no_model_says_unavailable(self):
+        def broken():
+            raise FileNotFoundError("hey_jarvis_v0.1.onnx")
+        with mock.patch.object(ciel_server.wake_word, "WakeDetector", broken):
+            ws = await self.client.ws_connect("/ws/wake", headers=GOOD_ORIGIN)
+            msg = await ws.receive_json()
+        self.assertEqual(msg["type"], "wake_unavailable")
+        self.assertIn("hey_jarvis", msg["error"])
+
+    async def test_listening_tabs_are_capped(self):
+        socks = [await self.client.ws_connect("/ws/wake", headers=GOOD_ORIGIN) for _ in range(ciel_server.MAX_WAKE_SOCKETS)]
+        for s in socks:
+            await s.receive_json()
+        extra = await self.client.ws_connect("/ws/wake", headers=GOOD_ORIGIN)
+        self.assertEqual((await extra.receive_json())["type"], "wake_unavailable")
+        for s in socks:
+            await s.close()
 
 
 class TestHudStatic(unittest.IsolatedAsyncioTestCase):

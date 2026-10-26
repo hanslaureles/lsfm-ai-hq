@@ -541,25 +541,24 @@ def _sakura_priorities() -> SkillResult:
 
 
 def _sakura_vault_search(query: str = "") -> SkillResult:
+    """Local BM25 over archive/reports and the vault (assistant B5): read from disk, nothing uploaded,
+    works with Obsidian closed. The passages themselves come back, so Ciel can answer from them."""
     if not query.strip():
-        return SkillResult("failed", "Obsidian Search: no search words given.")
+        return SkillResult("failed", "Notes search: no search words given.")
     try:
-        vault = _vault()
-        # The client returns [] when REST is offline and the vault folder is missing: that is no search,
-        # not "0 matches" (Codex R3 F1). Either access path working means [] is a real empty result.
-        vault_dir = getattr(vault, "vault_path", None)
-        if not vault.is_rest_api_online() and not (vault_dir is not None and Path(vault_dir).is_dir()):
-            return SkillResult("failed", "Obsidian Search unavailable: the REST API is offline and the vault folder "
-                                         f"was not found ({vault_dir}).")
-        matches = vault.search_simple(query)
+        import file_search
+        roots = file_search.default_roots()
+        if not file_search.available(roots):  # no folder to search is no search, not "0 matches" (Codex R3 F1)
+            return SkillResult("failed", "Notes search unavailable: none of these folders was found: "
+                                         + ", ".join(str(r) for r in roots))
+        hits = file_search.search(query, k=5, roots=roots)
     except Exception as e:
-        return SkillResult("failed", f"Obsidian Search failed: {e}")
-    if not isinstance(matches, list):
-        return _incomplete("Obsidian Search", ["matches"])
-    if matches:
-        names = ", ".join(str(m.get("filename", "")) if isinstance(m, dict) else str(m) for m in matches[:3])
-        return SkillResult("done", f"Obsidian Search: {len(matches)} matching note(s): {names}.", {"matches": matches})
-    return SkillResult("done", "Obsidian Search: 0 matching notes found.", {"matches": []})
+        return SkillResult("failed", f"Notes search failed: {type(e).__name__}: {e}")
+    if not hits:
+        return SkillResult("done", f"Notes search: nothing in the notes or reports matches '{query}'.", {"matches": []})
+    lines = [f"- {h['file']} > {h['heading'] or '(top)'} ({h['modified']}): {h['snippet']}" for h in hits]
+    return SkillResult("done", f"Notes search: {len(hits)} passage(s) for '{query}':\n" + "\n".join(lines),
+                       {"matches": hits})
 
 
 SWEEP_FIELDS = {"total_scanned": int, "promos_swept": int, "newsletters_swept": int, "total_swept": int,
@@ -624,12 +623,66 @@ register(Skill(name="sakura.clean", agent="sakura", desc="Archive promo and news
                confirm_text="Archive up to 50 promo and newsletter emails from Primary?"))
 register(Skill(name="sakura.inbox", agent="sakura", desc="Count unread Primary Gmail and flag recruiter mail (read only)",
                run=_sakura_inbox, keywords=("inbox", "email", "gmail", "unread", "mail"), heavy=True))
+# Reminders (assistant B6): stored by whichever process is asked, delivered by Sakura's loop as a Discord DM.
+# Registered before sakura.priorities so the keyword fallback picks them for "remind me ... today".
+def _sakura_remind(text: str = "", when: str = "") -> SkillResult:
+    import datetime as _dt
+    import reminders
+    now = _dt.datetime.now()
+    due = reminders.parse_when(when or text, now)
+    what = re.sub(r"^(?:ciel,?\s*)?(?:please\s*)?remind me(?:\s+to)?\s*", "", text.strip(), flags=re.IGNORECASE)
+    if not what:
+        return SkillResult("failed", "Reminder not set: nothing to remind about was given.")
+    if due is None:
+        return SkillResult("failed", f"Reminder not set: could not tell when ({when or text!r}). "
+                                     "Say a time such as 'at 5pm', 'in 20 minutes' or 'tomorrow at 9'.")
+    item = reminders.add(what, due)
+    return SkillResult("done", f"Reminder set for {due:%A %d %B, %H:%M}: {what}. Sakura will message Hans on "
+                               "Discord then.", {"reminder": item})
+
+
+def _sakura_reminders() -> SkillResult:
+    import reminders
+    items = reminders.pending()
+    if not items:
+        return SkillResult("done", "No reminders pending.", {"reminders": []})
+    lines = [f"- {i['due'].replace('T', ' ')}: {i['text']}" for i in items]
+    return SkillResult("done", f"{len(items)} reminder(s) pending:\n" + "\n".join(lines), {"reminders": items})
+
+
+def _sakura_cancel_reminder(match: str = "") -> SkillResult:
+    import reminders
+    # The keyword fallback passes the whole request: keep only what follows "cancel ... reminder(s) about".
+    match = re.sub(r"^.*?\b(?:cancel|delete|remove)\b(?:\s+(?:all|my|the))*\s+reminders?\b\s*(?:about|to|for)?\s*",
+                   lambda m: "all " if re.search(r"\ball\b", m.group(0), re.I) else "", match.strip(),
+                   flags=re.IGNORECASE).strip(" .?!") or match
+    hit = reminders.cancel(match)
+    if not hit:
+        return SkillResult("done", f"No pending reminder matches {match!r}; nothing cancelled.", {"cancelled": []})
+    return SkillResult("done", "Cancelled: " + "; ".join(f"{i['text']} ({i['due'].replace('T', ' ')})" for i in hit),
+                       {"cancelled": hit})
+
+
+register(Skill(name="sakura.remind", agent="sakura",
+               desc="Set a reminder: Sakura messages Hans on Discord at that time (reaches his phone)",
+               run=_sakura_remind,
+               args={"text": "what to remind him about", "when": "local date and time as YYYY-MM-DDTHH:MM (see Now)"},
+               keywords=("remind me",)))
+register(Skill(name="sakura.reminders", agent="sakura", desc="List Hans's pending reminders (read only)",
+               run=_sakura_reminders, keywords=("my reminders", "reminders pending", "what reminders")))
+register(Skill(name="sakura.cancel_reminder", agent="sakura",
+               desc="Cancel pending reminders whose text contains the given words, or 'all'",
+               run=_sakura_cancel_reminder, args={"match": "words from the reminder, or all"},
+               keywords=("cancel my reminder", "cancel the reminder", "cancel reminder", "delete reminder")))
 register(Skill(name="sakura.priorities", agent="sakura", desc="Today's open tasks from the Obsidian daily log",
                run=_sakura_priorities, keywords=("priority", "priorities", "today", "schedule", "briefing")))
-register(Skill(name="sakura.vault_search", agent="sakura", desc="Search the Obsidian vault for matching notes",
-               run=_sakura_vault_search, args={"query": "words to search for"},
+register(Skill(name="sakura.vault_search", agent="sakura",
+               desc="Search Hans's own notes and reports (Obsidian vault, daily logs, archive/reports) and return the "
+                    "matching passages: what he decided, planned, released or wrote down about something",
+               run=_sakura_vault_search, args={"query": "the key words to look for (names, topics), not a sentence"},
                keywords=("search my notes", "search notes", "search vault", "search the vault", "search my brain",
-                         "find in notes", "my notes", "notes about")))  # not bare "search" / "find": code and jobs
+                         "find in notes", "my notes", "notes about", "my files", "my reports", "in my reports",
+                         "what did i decide")))  # not bare "search" / "find": code and jobs
 
 
 # ==============================================================================
@@ -659,7 +712,8 @@ register(Skill(name="chaewon.hunt", agent="chaewon",
 
 # The arg that takes the whole request when a plan leaves it out. Not chaewon.scout's query: that is
 # a role name, and a whole sentence would search for the sentence.
-PROMPT_ARGS = {"sakura.vault_search": "query", "kazuha.ask": "question"}
+PROMPT_ARGS = {"sakura.vault_search": "query", "kazuha.ask": "question", "sakura.remind": "text",
+               "sakura.cancel_reminder": "match"}
 
 
 def planner_skills() -> list:

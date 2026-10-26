@@ -33,12 +33,14 @@ CASES = HQ / "eval" / "routing_cases.jsonl"
 RESULTS = HQ / "eval" / "results"
 DEFAULT_PAUSE_S = 12.0  # between live cases: slows requests under Groq's per-minute limit (no guarantee)
 
-CIEL_LABELS = {"ciel.direct", "ciel.weather", "ciel.web_search", "ciel.reset", "ciel.appraisal",
+CIEL_LABELS = {"ciel.direct", "ciel.weather", "ciel.web_search", "ciel.news", "ciel.timer", "ciel.reset",
+               "ciel.appraisal",
                "ciel.read_rules", "ciel.read_profile", "ciel.read_preferences", "ciel.save_to_daily"}
 SKILL_LABELS = {"eunchae.vitals", "eunchae.compile_all", "eunchae.test",
                 "kazuha.git_status", "kazuha.review", "kazuha.ask",
                 "yunjin.audit",
                 "sakura.inbox", "sakura.priorities", "sakura.vault_search", "sakura.clean", "sakura.cleanse",
+                "sakura.remind", "sakura.reminders", "sakura.cancel_reminder",
                 "chaewon.rebuild_resume", "chaewon.scout"}
 KNOWN_LABELS = frozenset(CIEL_LABELS | SKILL_LABELS)
 
@@ -79,6 +81,10 @@ def labels_from_plan(plan) -> set:
         labels.add("ciel.weather")
     if intent == "web_search" or "web_search" in targets:
         labels.add("ciel.web_search")
+    if intent == "news" or "news_search" in targets:  # assistant B4
+        labels.add("ciel.news")
+    if intent == "timer" or {"set_timer", "cancel_timers"} & set(targets):  # assistant B6
+        labels.add("ciel.timer")
     if "calls" in plan:
         if not isinstance(plan["calls"], (list, type(None))):
             raise ValueError(f"calls must be a list: {plan['calls']!r:.80}")

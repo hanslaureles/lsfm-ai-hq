@@ -126,6 +126,20 @@ class TestGroqStreaming(unittest.TestCase):
         self.assertEqual(reply, '{"japanese_voice": "「告。」"}')
         self.assertIs(bodies[0]["stream"], True)
 
+    def test_a_stalled_stream_is_left_after_10_s_and_unstreamed_calls_keep_30(self):
+        # Assistant B1: Ciel's 45 s budget must still reach Gemini after three stalled Groq models.
+        timeouts = []
+
+        def fake_urlopen(req, timeout=None):
+            timeouts.append(timeout)
+            return SSE(["ok"]) if json.loads(req.data).get("stream") else _Json("ok")
+
+        with mock.patch.dict(os.environ, {"GROQ_API_KEY": "test"}), \
+                mock.patch.object(llm_client.urllib.request, "urlopen", fake_urlopen):
+            llm_client.call_groq("hi", model="m1", on_delta=lambda piece: None)
+            llm_client.call_groq("hi", model="m1")
+        self.assertEqual(timeouts, [10, 30])
+
     def test_failure_before_any_piece_falls_back_to_the_next_model(self):
         reply, pieces, bodies = self.call([SSE(["x"], fail_after=0), SSE(["ok"])])
         self.assertEqual(reply, "ok")

@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 import discord
 import health_recorder
+import owner_guard
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -28,6 +29,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 health_recorder.attach(bot, "chaewon")  # memory/health/chaewon.json (4B-2)
+owner_guard.install(bot)  # commands, chat and reactions: Hans only
 
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
 from web_tools import find_url_in_text, scrape_job_url, get_portal_search_links
@@ -236,7 +238,7 @@ async def handle_tailoring(target_message, job_text: str = "", attachments = Non
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
     if message.content.startswith("!"):

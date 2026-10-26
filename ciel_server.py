@@ -8,8 +8,11 @@ import os
 import sys
 import json
 import re
+import hmac
 import uuid
 import asyncio
+import mimetypes
+import urllib.parse
 from pathlib import Path
 from aiohttp import web
 
@@ -34,6 +37,7 @@ from voice_engine import transcribe_audio, prune_audio_cache
 from eunchae_engine import get_system_vitals
 from llm_client import get_brain_status
 from proactive_sentinel import evaluate_proactive_suggestions
+import wake_word  # light: openWakeWord and numpy load only when a HUD turns the wake word on
 
 ciel = CielOrchestrator(store=BASE_DIR / "memory" / "ciel_conversations.json")  # tabs keep their turns over a restart
 active_websockets = {}  # socket -> its HUD tab's session key (6C)
@@ -43,6 +47,20 @@ CIEL_PORT = int(os.getenv("CIEL_PORT", 8000))
 ALLOWED_HOSTS = {f"localhost:{CIEL_PORT}", f"127.0.0.1:{CIEL_PORT}"}
 ALLOWED_ORIGINS = {f"http://{h}" for h in ALLOWED_HOSTS}
 JSON_POST_ROUTES = {"/api/chat", "/api/memory/clear"}
+
+# Phone access (assistant B8): `tailscale serve` gives this PC an HTTPS name on Hans's tailnet and forwards to
+# 127.0.0.1:CIEL_PORT. Such a request is "remote": a host other than localhost, or any proxy header. Remote
+# requests need CIEL_ACCESS_TOKEN (none set: remote access is off). The phone opens /?token=<token> once; the
+# server answers with an HttpOnly, Secure cookie and drops the token from the address.
+ACCESS_COOKIE = "ciel_access"
+ACCESS_COOKIE_DAYS = 180
+PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "Forwarded", "Tailscale-User-Login")
+# What a browser fetches without cookies to install the web app; nothing in them is private.
+PUBLIC_PATHS = {"/manifest.webmanifest", "/sw.js", "/icons/ciel-192.png", "/icons/ciel-512.png",
+                "/icons/apple-touch-icon.png"}
+# The Windows registry can map .js to text/plain, and a service worker served that way never registers.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 # Each mission can hold several worker threads (agents run in parallel), so cap
 # how many run at once. A few more wait their turn; past that, refuse with 503.
@@ -97,6 +115,52 @@ class MissionGate:
 MISSION_GATE = web.AppKey("mission_gate", MissionGate)
 
 
+def access_token() -> str:
+    return (os.getenv("CIEL_ACCESS_TOKEN") or "").strip()
+
+
+def is_remote(request) -> bool:
+    """Not this PC's own browser: another host name, or forwarded by a proxy such as tailscale serve."""
+    return request.host not in ALLOWED_HOSTS or any(h in request.headers for h in PROXY_HEADERS)
+
+
+def _same(given: str, token: str) -> bool:
+    return bool(given) and hmac.compare_digest(given.encode(), token.encode())
+
+
+LOGIN_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ciel</title><body style="background:#06110f;color:#e8f6f3;font:16px system-ui;padding:24px;line-height:1.5">
+<h1 style="font-weight:600">Ciel needs its access link</h1>
+<p>Open the link from <code>python ciel_server.py --phone-link</code> (run on the PC) once on this device.</p></body>"""
+
+
+def remote_refusal(request):
+    """None when a remote request may go on; else the response that ends it (login, refusal, or the
+    redirect that turns a valid ?token= into the cookie)."""
+    token = access_token()
+    if not token:
+        return web.json_response({"error": "Remote access is off: CIEL_ACCESS_TOKEN is not set"}, status=403)
+    if request.path in PUBLIC_PATHS:
+        return None
+    given = request.query.get("token")
+    if given is not None and request.method == "GET":
+        if not _same(given, token):
+            return web.Response(text=LOGIN_PAGE, content_type="text/html", status=401)
+        rest = [(k, v) for k, v in request.query.items() if k != "token"]
+        location = request.path + ("?" + urllib.parse.urlencode(rest) if rest else "")
+        resp = web.Response(status=302, headers={"Location": location})
+        resp.set_cookie(ACCESS_COOKIE, token, max_age=ACCESS_COOKIE_DAYS * 86400, path="/", secure=True,
+                        httponly=True, samesite="Lax")
+        return resp
+    auth = request.headers.get("Authorization", "")
+    if _same(request.cookies.get(ACCESS_COOKIE, ""), token) or (
+            auth.startswith("Bearer ") and _same(auth[7:].strip(), token)):
+        return None
+    if request.method == "GET" and not request.path.startswith(("/api/", "/ws", "/audio/")):
+        return web.Response(text=LOGIN_PAGE, content_type="text/html", status=401)
+    return web.json_response({"error": "Access token required"}, status=401)
+
+
 @web.middleware
 async def localhost_guard(request, handler):
     """
@@ -106,14 +170,21 @@ async def localhost_guard(request, handler):
       send Origin on WebSocket upgrades and cross-origin POSTs, so a missing Origin
       means a non-browser client (curl, local scripts) and is allowed.
     - JSON Content-Type on command routes rules out CORS "simple" requests.
+    - Remote (phone) requests need the access token, then pass the same Origin and JSON checks
+      against their own https origin (assistant B8).
     """
-    if request.host not in ALLOWED_HOSTS:
-        return web.json_response({"error": "Forbidden host"}, status=403)
-
     origin = request.headers.get("Origin")
     is_ws = request.headers.get("Upgrade", "").lower() == "websocket"
+    if is_remote(request):
+        refused = remote_refusal(request)
+        if refused is not None:
+            return refused
+        host = request.headers.get("X-Forwarded-Host") or request.host
+        allowed_origins = {f"https://{host}"}
+    else:
+        allowed_origins = ALLOWED_ORIGINS
     if (is_ws or request.method not in ("GET", "HEAD", "OPTIONS")) and origin is not None:
-        if origin not in ALLOWED_ORIGINS:
+        if origin not in allowed_origins:
             return web.json_response({"error": "Forbidden origin"}, status=403)
 
     if request.method == "POST" and request.path in JSON_POST_ROUTES:
@@ -298,6 +369,41 @@ async def websocket_handler(request):
     return ws
 
 
+MAX_WAKE_SOCKETS = 4  # one per HUD tab with the wake word on; each holds an openWakeWord model
+wake_sockets = set()
+
+
+async def wake_handler(request):
+    """
+    Assistant B7: while "wake word" is on, the HUD streams its microphone here as binary frames of 16 kHz
+    mono 16-bit PCM. One detector per socket (openWakeWord keeps per-stream state); "wake" goes back on
+    this socket when the phrase is heard. Same Host/Origin guard as /ws. Audio stays on this machine.
+    """
+    ws = web.WebSocketResponse(max_msg_size=64 * 1024)
+    await ws.prepare(request)
+    if len(wake_sockets) >= MAX_WAKE_SOCKETS:
+        await ws.send_str(json.dumps({"type": "wake_unavailable", "error": "too many listening tabs"}))
+        await ws.close()
+        return ws
+    wake_sockets.add(ws)
+    try:
+        try:
+            detector = await asyncio.to_thread(wake_word.WakeDetector)  # loading the model takes ~2 s
+        except Exception as e:  # not installed or the model was never downloaded
+            await ws.send_str(json.dumps({"type": "wake_unavailable", "error": f"{type(e).__name__}: {e}"}))
+            await ws.close()
+            return ws
+        await ws.send_str(json.dumps({"type": "wake_ready", "model": wake_word.model_name()}))
+        async for msg in ws:
+            if msg.type == web.WSMsgType.BINARY:
+                score = await asyncio.to_thread(detector.feed, msg.data)
+                if score:
+                    await ws.send_str(json.dumps({"type": "wake", "score": score}))
+    finally:
+        wake_sockets.discard(ws)
+    return ws
+
+
 async def background_sentinel_worker(app):
     """Runs the background checks every 45 s and broadcasts suggestions to the HUD."""
     print("👁️ [CielServer] Background checks loop started.")
@@ -398,6 +504,7 @@ def create_app():
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/transcribe", handle_transcribe)
     app.router.add_get("/ws", websocket_handler)
+    app.router.add_get("/ws/wake", wake_handler)
     app.router.add_post("/api/memory/clear", handle_clear_memory)
     app.router.add_get("/api/memory", handle_get_memory)
 
@@ -410,7 +517,26 @@ def create_app():
     return app
 
 
+def phone_link() -> str:
+    """The one-time link for the phone: this PC's tailnet name (from `tailscale status --json`) plus the token.
+    Prints only to the terminal of whoever runs it; nothing is logged."""
+    import subprocess
+    token = access_token()
+    if not token:
+        return "CIEL_ACCESS_TOKEN is not set in .env: remote access is off."
+    try:
+        status = json.loads(subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True,
+                                           timeout=10, check=True).stdout)
+        name = status["Self"]["DNSName"].rstrip(".")
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        return f"Could not read this PC's Tailscale name ({type(e).__name__}); is Tailscale installed and signed in?"
+    return f"https://{name}/?token={urllib.parse.quote(token)}"
+
+
 if __name__ == "__main__":
+    if "--phone-link" in sys.argv:
+        print(phone_link())
+        sys.exit(0)
     print(f"✨ Starting Ciel Server on http://localhost:{CIEL_PORT}")
     print(f"🗂️ [Vault] {ciel.obsidian.check_vault_consistency()}", flush=True)
     app = create_app()

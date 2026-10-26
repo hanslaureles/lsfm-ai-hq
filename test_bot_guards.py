@@ -192,6 +192,55 @@ class EveryJobUsesRunDailyTest(unittest.TestCase):
                     self.assertNotIn("write_text", names)
 
 
+def _owner_is(owner_id):
+    """A Bot.is_owner stand-in: async, compares the user's id."""
+    async def is_owner(user):
+        return user.id == owner_id
+    return is_owner
+
+
+class OwnerGuardTest(unittest.TestCase):
+    """LSFM B2: anyone in the server could run !commit, !pr, !clean, !mode, !hunt and approve cards."""
+
+    BOTS = ("sakura", "chaewon", "kazuha", "yunjin", "eunchae")
+
+    def test_every_bot_installs_the_guard_on_commands_and_chat(self):
+        for name in self.BOTS:
+            with self.subTest(bot=name):
+                src = (Path(__file__).parent / f"bot_{name}.py").read_text(encoding="utf-8")
+                self.assertIn("owner_guard.install(bot)", src)
+                self.assertIn("if message.author.bot or not await owner_guard.allowed(bot, message.author):", src)
+
+    def test_install_adds_an_owner_check_and_reads_the_override(self):
+        import owner_guard
+        checks = []
+        fake = types.SimpleNamespace(owner_id=None, add_check=checks.append, is_owner=_owner_is(42))
+        with mock.patch.dict(os.environ, {"DISCORD_OWNER_ID": "42"}):
+            owner_guard.install(fake)
+        self.assertEqual(fake.owner_id, 42)
+        ctx = lambda uid: types.SimpleNamespace(author=types.SimpleNamespace(id=uid))
+        self.assertEqual((asyncio.run(checks[0](ctx(42))), asyncio.run(checks[0](ctx(5)))), (True, False))
+        self.assertEqual((asyncio.run(owner_guard.allowed(fake, 42)), asyncio.run(owner_guard.allowed(fake, 5))),
+                         (True, False))
+        with mock.patch.dict(os.environ, {"DISCORD_OWNER_ID": ""}):
+            other = types.SimpleNamespace(owner_id=None, add_check=checks.append)
+            owner_guard.install(other)
+        self.assertIsNone(other.owner_id)  # no override: discord.py asks Discord for the app owner
+
+    def test_a_stranger_in_chat_is_ignored(self):
+        processed = []
+
+        async def process_commands(message):
+            processed.append(message.content)
+        fake_bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1), is_owner=_owner_is(7),
+                                         process_commands=process_commands)
+        for author_id, expected in ((99, []), (7, ["!clean"])):
+            message = types.SimpleNamespace(author=types.SimpleNamespace(id=author_id, bot=False), content="!clean")
+            with mock.patch.object(bot_sakura, "bot", fake_bot):
+                asyncio.run(bot_sakura.on_message(message))
+            self.assertEqual(processed, expected)
+
+
 class FakeCardMessage:
     _next = 100
 
@@ -377,7 +426,8 @@ class JobHuntBotTest(unittest.TestCase):
             channel = FakeCardChannel()
             card = asyncio.run(channel.send(embed=bot_sakura.build_job_card(self.meta(d))))
             payload = types.SimpleNamespace(user_id=7, emoji="❌", message_id=card.id, channel_id=1)
-            fake_bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1), get_channel=lambda _id: channel)
+            fake_bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1), get_channel=lambda _id: channel,
+                                             is_owner=_owner_is(7))
             with mock.patch.object(bot_sakura, "bot", fake_bot), \
                     mock.patch.object(bot_sakura, "get_pending_proposal", return_value={"type": "job_hunt", "folder": str(d)}), \
                     mock.patch.object(bot_sakura, "mark_proposal_status") as mark, \
@@ -388,6 +438,33 @@ class JobHuntBotTest(unittest.TestCase):
             self.assertEqual(self.meta(d)["status"], "rejected")
             self.assertIn("Rejected", card.edits[0].footer.text)
             self.assertIn("· a", card.edits[0].footer.text)  # the job id survives the footer edit
+
+    def test_only_the_owner_can_approve_or_skip_a_card(self):  # LSFM B2
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.folder(tmp, "a")
+            channel = FakeCardChannel()
+            card = asyncio.run(channel.send(embed=bot_sakura.build_job_card(self.meta(d))))
+            fake_bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1), get_channel=lambda _id: channel,
+                                             is_owner=_owner_is(7))
+            with mock.patch.object(bot_sakura, "bot", fake_bot), \
+                    mock.patch.object(bot_sakura, "get_pending_proposal", return_value={"type": "job_hunt", "folder": str(d)}):
+                asyncio.run(bot_sakura.on_raw_reaction_add(
+                    types.SimpleNamespace(user_id=99, emoji="✅", message_id=card.id, channel_id=1)))
+            self.assertEqual(self.meta(d)["status"], "queued")
+            self.assertEqual(card.edits, [])
+
+    def test_the_card_shows_the_cover_letter(self):  # LSFM B2: ✅ after reading the letter, not blind
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.folder(tmp, "a")
+            (d / "tailoring.json").write_text(json.dumps({"cover_paragraphs": ["Dear Acme,", "I build agents."]}),
+                                              encoding="utf-8-sig")
+            embed = bot_sakura.build_job_card(self.meta(d), bot_sakura._read_letter(d))
+            self.assertIn("**Cover letter**\nDear Acme,\n\nI build agents.", embed.description)
+            long = bot_sakura.build_job_card(self.meta(d), ["word " * 2000])
+            self.assertLessEqual(len(long.description), 4096)
+            self.assertTrue(long.description.endswith("(full text in the PDF)"))
+            self.assertEqual(bot_sakura._read_letter(Path(tmp) / "missing"), [])
 
     def test_reaction_on_a_deleted_job_folder_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -961,6 +1038,57 @@ class EunchaeCommandsTest(unittest.TestCase):
         asyncio.run(self.bot.test_command.callback(ctx, filepath="C:/Windows/System32/x.py"))
         self.assertEqual(calls, [])
         self.assertTrue(any("relative" in (r["content"] or "") for r in ctx.replies), ctx.replies)
+
+
+class ReminderDeliveryTest(unittest.TestCase):
+    """Assistant B6: Sakura sends each due reminder once, as a DM, with a channel fallback."""
+
+    def setUp(self):
+        import reminders
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.enterContext(mock.patch.object(reminders, "STORE", Path(tmp.name) / "reminders.json"))
+        self.reminders = reminders
+        self.now = real_datetime.datetime(2026, 10, 26, 17, 0)
+
+    def deliver(self, user, channel=None):
+        async def owner():
+            if isinstance(user, Exception):
+                raise user
+            return user
+        with mock.patch.object(bot_sakura, "reminder_owner", owner), \
+                mock.patch.object(bot_sakura, "first_channel", return_value=channel):
+            asyncio.run(bot_sakura.deliver_due_reminders(self.now))
+
+    def test_a_due_reminder_is_one_dm(self):
+        self.reminders.add("call the bank", real_datetime.datetime(2026, 10, 26, 16, 58))
+        self.reminders.add("later", real_datetime.datetime(2026, 10, 26, 18, 0))
+        user = mock.MagicMock(mention="<@7>")
+        user.send = mock.AsyncMock()
+        self.deliver(user)
+        self.deliver(user)  # the next minute's tick
+        user.send.assert_awaited_once_with("⏰ **Reminder:** call the bank")
+
+    def test_a_late_reminder_says_so(self):
+        self.reminders.add("stretch", real_datetime.datetime(2026, 10, 26, 9, 0))
+        user = mock.MagicMock()
+        user.send = mock.AsyncMock()
+        self.deliver(user)
+        self.assertIn("sent late because the bots were not running", user.send.await_args.args[0])
+
+    def test_a_refused_dm_goes_to_the_channel_and_a_total_failure_is_recorded(self):
+        self.reminders.add("call the bank", real_datetime.datetime(2026, 10, 26, 16, 58))
+        user = mock.MagicMock(mention="<@7>")
+        user.send = mock.AsyncMock(side_effect=RuntimeError("Cannot send messages to this user"))
+        channel = FakeChannel()
+        self.deliver(user, channel)
+        self.assertEqual(channel.sent, ["<@7> ⏰ **Reminder:** call the bank"])
+        self.reminders.add("stretch", real_datetime.datetime(2026, 10, 26, 16, 59))
+        self.deliver(RuntimeError("no app info"), None)
+        import json
+        saved = {i["text"]: i for i in json.loads(self.reminders.STORE.read_text(encoding="utf-8"))}
+        self.assertEqual((saved["call the bank"]["status"], saved["stretch"]["status"]), ("sent", "failed"))
+        self.assertIn("command-center", saved["stretch"]["reason"])
 
 
 if __name__ == "__main__":

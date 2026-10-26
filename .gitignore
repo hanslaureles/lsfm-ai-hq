@@ -52,3 +52,7 @@ memory/pending_proposals.json
 # Ciel's per-tab conversation turns, kept across server restarts
 memory/ciel_conversations.json
 memory/ciel_conversations.json.tmp
+# Hans's reminders (assistant B6), written by Ciel and the bots, delivered by Sakura
+memory/reminders.json
+memory/reminders.json.tmp
+memory/reminders.json.lock
