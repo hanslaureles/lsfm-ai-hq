@@ -346,7 +346,17 @@ class JobHuntBotTest(unittest.TestCase):
             self.assertEqual(save.call_args_list[0].args[1], {"type": "job_hunt", "folder": str(a)})
             self.assertEqual(self.meta(a)["card_msg_id"], channel.messages[1].id)
             self.assertEqual(len(channel.messages[1].files), 1)
-            self.assertIn("Claude will tailor", channel.messages[2].embeds[0].description)
+            self.assertIn("tries again on the next hunt", channel.messages[2].embeds[0].description)
+            self.assertNotIn("Claude", channel.messages[0].content + channel.messages[2].embeds[0].description)
+
+    def test_card_shows_gaps_warnings_and_the_last_retry(self):
+        meta = {"status": "queued", "why": "Python agents match.", "gaps": ["3 years of SQL"],
+                "warnings": ["'data pipelines' - not in the facts"], "id": "x"}
+        text = bot_sakura.build_job_card(meta).description
+        self.assertIn("**Gaps:** 3 years of SQL", text)
+        self.assertIn("Check before sending:** 'data pipelines'", text)
+        spent = bot_sakura.build_job_card({"status": "needs_claude", "retries": bot_sakura.job_hunt.MAX_RETRIES})
+        self.assertIn("paste the posting in #job-tailoring", spent.description)
 
     def test_busy_hunt_leaves_the_slot_unclaimed(self):  # Codex F1, through the real run_skill and hunt
         with tempfile.TemporaryDirectory() as tmp:

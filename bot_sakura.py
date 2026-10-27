@@ -141,7 +141,7 @@ async def scheduled_rollup_loop():
 
 # ------------------------------------------------------------------------------
 # Job hunt (JOB-HUNT-LSFM-PLAN Task 5): Chaewon's chaewon.hunt at 10:00 and 20:00,
-# one #approvals card per job; ✅/❌ set meta.json for the Claude form-filling run.
+# one #approvals card per job; ✅/❌ record Hans's choice in meta.json.
 # ------------------------------------------------------------------------------
 
 def job_hunt_slot(now: datetime.datetime):
@@ -159,7 +159,7 @@ def _read_meta(folder: Path) -> dict:
 
 
 def _read_letter(folder: Path) -> list:
-    """The cover letter paragraphs from tailoring.json, or [] when there is none yet (needs_claude)."""
+    """The cover letter paragraphs from tailoring.json, or [] when there is none yet (needs_claude: not tailored)."""
     import json
     try:
         paragraphs = json.loads((Path(folder) / "tailoring.json").read_text(encoding="utf-8-sig")).get("cover_paragraphs")
@@ -172,11 +172,17 @@ def build_job_card(meta: dict, letter: list = ()) -> discord.Embed:
     """The #approvals card. The letter is shown in full (when it fits), so ✅ is given after reading it."""
     lines = []
     if meta.get("status") == "needs_claude":
-        lines.append("Claude will tailor this one (Chaewon could not).")
+        lines.append("Chaewon could not tailor this one yet: " +
+                     ("she tries again on the next hunt." if meta.get("retries", 0) < job_hunt.MAX_RETRIES
+                      else "paste the posting in #job-tailoring to try once more."))
     elif meta.get("thin"):
-        lines.append("⚠️ Thin posting: Claude will re-tailor from the full page.")
+        lines.append("⚠️ Thin posting: tailored from the listing teaser; read the full page before sending.")
     if meta.get("why"):
         lines.append(meta["why"])
+    if meta.get("gaps"):
+        lines.append("**Gaps:** " + "; ".join(meta["gaps"])[:400])
+    if meta.get("warnings"):
+        lines.append("⚠️ **Check before sending:** " + "; ".join(meta["warnings"])[:600])
     if letter:
         text = "\n\n".join(letter)
         room = 4000 - len("\n".join(lines))  # Discord allows 4096 characters in a description
@@ -188,7 +194,7 @@ def build_job_card(meta: dict, letter: list = ()) -> discord.Embed:
     embed.add_field(name="Fit", value=str(meta["fit"]) if meta.get("fit") else "not tailored", inline=True)
     if meta.get("salary"):
         embed.add_field(name="Salary", value=meta["salary"][:100], inline=True)
-    embed.set_footer(text=f"✅ fill it · ❌ skip it · {meta.get('id', '')}"[:2048])
+    embed.set_footer(text=f"✅ I'll apply · ❌ skip it · {meta.get('id', '')}"[:2048])
     return embed
 
 
@@ -200,14 +206,15 @@ JOB_REACTIONS = {("✅", "queued"): "approved", ("✅", "needs_claude"): "approv
 def apply_job_reaction(folder: Path, emoji: str):
     """The new meta.json status for a reaction, written; None when the reaction changes nothing (e.g. applied)
     or the job folder is gone (deleted by hand)."""
-    try:
-        meta = _read_meta(folder)
-    except (OSError, ValueError):
-        return None
-    new = JOB_REACTIONS.get((emoji, meta.get("status")))
-    if new:
-        meta.update(status=new, updated=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"))
-        job_hunt.write_meta(Path(folder), meta)
+    with job_hunt.META_LOCK:  # the hunt's retry pass re-reads under the same lock, so it never undoes this
+        try:
+            meta = _read_meta(folder)
+        except (OSError, ValueError):
+            return None
+        new = JOB_REACTIONS.get((emoji, meta.get("status")))
+        if new:
+            meta.update(status=new, updated=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"))
+            job_hunt.write_meta(Path(folder), meta)
     return new
 
 
@@ -264,7 +271,7 @@ async def deliver_job_hunt(channel, result):
     header = f"🌸 Job hunt {data.get('slot', '')}: {len(folders)} ready for review, {len(skipped)} skipped"
     if failed:
         header += f"\nSources that failed: {', '.join(failed)}"
-    header += "\nNo reaction = the next Claude run fills it. ❌ = skip."
+    header += "\n✅ = you apply with the attached files · ❌ = skip."
     if JOB_HUNT_DASHBOARD:
         header += f" Dashboard: {JOB_HUNT_DASHBOARD}"
     await channel.send(content=header)
@@ -820,7 +827,7 @@ async def on_raw_reaction_add(payload):
         new = apply_job_reaction(Path(data["folder"]), emoji_str)
         if new and target_msg and target_msg.embeds:
             embed = target_msg.embeds[0]
-            label = {"approved": "Approved", "rejected": "Rejected: the next Claude run skips it",
+            label = {"approved": "Approved", "rejected": "Rejected",
                      "withdrawn": "Withdrawn"}[new]
             embed.set_footer(text=f"{label} · {Path(data['folder']).name}"[:2048])
             await target_msg.edit(embed=embed)

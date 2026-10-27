@@ -1,9 +1,9 @@
 """
 Chaewon's job hunt (JOB-HUNT-LSFM-SPEC): scout -> filter -> describe -> tailor -> job_package.build.
 
-Each job gets a folder under JOB_HUNT_DIR/applications with a meta.json; the Claude desktop
-routine reads those folders and fills the application forms. Rules, profile and seen list
-live in JOB_HUNT_DIR (outside the repo) so Hans can edit them.
+Each job gets a folder under JOB_HUNT_DIR/applications with a meta.json and, once tailored, the PDFs
+Hans applies with. Pasted jobs (!apply, #job-tailoring) go through the same tailor_into. Rules, profile
+and seen list live in JOB_HUNT_DIR (outside the repo) so Hans can edit them.
 """
 
 import json
@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import job_package
-from llm_client import query_llm_structured
+from llm_client import query_llm, query_llm_structured
 from pdf_engine import load_master_resume_context
 from web_tools import fetch_jobstreet, fetch_linkedin_description, fetch_linkedin_remote
 
@@ -39,15 +39,22 @@ ROLE_WORDS = ["engineer", "developer", "dev", "programmer", "software", "fronten
               "llm", "automation", "python", "react", "typescript", "javascript",
               "scientist", "data science"]  # Data / Research Scientist titles were dropped as "not a developer role"
 DESCRIPTION_SKIPS = ["loom", "video intro", "video introduction", "must reside", "us only", "eu only"]
+# Seniority is filtered on the title only. A senior role named in the teaser or posting text (hunt 2026-10-27:
+# "Software Developer" whose teaser was "Senior AWS Cloud Engineer ...") is left to the tailoring model, which
+# lists it as a gap and scores fit low (live: 28). A teaser regex was tried and dropped after three Codex QA
+# rounds (F1, F1-R1, F1-R2): prose mentions of mentors ("senior engineers will mentor you") cannot be told from
+# the vacancy by pattern, and skipping a junior job is the worse error.
 
 # One hunt at a time (the 10:00/20:00 loop and !hunt share it). Every stage checks one budget and CANCEL:
 # Sakura sets CANCEL when its 660 s wait gives up, so an abandoned worker stops at its next checkpoint
 # instead of writing a run summary nobody will card. A single slow call can still run past the budget;
 # it is the checkpoint after it that keeps its result from being written.
 HUNT_LOCK = threading.Lock()
+# One meta.json read-modify-write at a time: Sakura's ✅/❌ (event loop) against the hunt's retry pass (worker thread).
+META_LOCK = threading.Lock()
 HUNT_DEADLINE_S = 480
 CANCEL = threading.Event()
-_RUN = {"started": None}
+_RUN = {"started": None, "thread": None}
 
 
 class _Stop(Exception):
@@ -55,7 +62,8 @@ class _Stop(Exception):
 
 
 def _checkpoint() -> None:
-    if _RUN["started"] is None:  # not inside a hunt (direct calls)
+    # Not inside a hunt, or another thread (a pasted job tailored while a hunt runs) is not bound by its budget.
+    if _RUN["started"] is None or _RUN["thread"] != threading.get_ident():
         return
     if CANCEL.is_set():
         raise _Stop("cancelled after Sakura's timeout")
@@ -284,59 +292,139 @@ def describe(job: dict) -> tuple:
 
 TAILOR_SYSTEM = (
     "You tailor Hans Aaron Laureles's one-page resume and cover letter to one job posting. "
-    "Reply with JSON only: {\"fit\": <0-100 int>, \"why\": \"<one sentence>\", \"tailoring\": {...}}. "
-    "tailoring may only have these keys: company, role, title, summary, skills_ai, skills_sys, skills_ui, "
-    "project_order, cover_paragraphs. Rules: skill lines may only reorder (or leave out) the exact items given, "
-    "never add one and never put an item on two lines; project_order is exactly the 4 given project names, most "
-    "relevant first; summary is at most 400 characters; cover_paragraphs is 3-4 short paragraphs, the first names "
-    "the company and role. Claim nothing that is not in the resume facts given. Hans has a 3-month internship and "
-    "no full-time experience: never state years of experience. title is the role family, e.g. Junior AI Engineer."
+    "Reply with JSON only: {\"fit\": <0-100 int>, \"why\": \"<one sentence>\", \"gaps\": [\"<requirement he lacks>\"], "
+    "\"tailoring\": {...}}. tailoring may only have these keys: company, role, title, skills_ai, skills_sys, "
+    "skills_ui, project_order, cover_paragraphs. Rules: skill lines may only reorder (or leave out) the exact items "
+    "given, never add one and never put an item on two lines; project_order is exactly the 4 given project names, "
+    "most relevant first; cover_paragraphs is 3-4 short paragraphs, the first names the company and role. "
+    "Every statement about Hans must restate a resume fact given (name the project or the internship it comes "
+    "from); never describe work the facts do not show (for example data pipelines, analytics, statistics, SQL, "
+    "training ML models, cloud engineering) even when the posting asks for it, and never call a team project solo. "
+    "Say nothing about the company beyond what the posting says. Hans has a 3-month internship and no full-time "
+    "experience: never state years of experience. title is the role family closest to the job that his facts "
+    "support (Junior Software Engineer, Junior AI Engineer, Junior Full-Stack Developer, Junior Frontend Developer), "
+    "never a role he has not done such as Cloud, Data or ML Engineer. gaps lists the posting's requirements the "
+    "facts do not meet (years, degrees, tools); fit drops for each one, and below 40 when a hard requirement "
+    "(years of experience, a skill central to the role) is missing."
 )
+
+CLAIM_SYSTEM = (
+    "You fact-check a cover letter against the only facts that are true about Hans. Reply with JSON only: "
+    "{\"unsupported\": [\"<short quote from the letter> - <why>\"]}. List each statement about Hans (skills, "
+    "experience, what a project does or shows, solo or team work, years, tools) that the facts do not support, "
+    "and each statement about the company that the posting does not make. The role and company named in JOB are "
+    "correct, so naming them is fine. Do not judge fit, seniority or whether he should apply: a weak match is not "
+    "a false statement. The title is fine when it is Junior Software "
+    "Engineer, Junior AI Engineer, Junior Full-Stack Developer or Junior Frontend Developer. General enthusiasm "
+    "is fine. An empty list means every statement is supported."
+)
+TAILOR_ATTEMPTS = 3  # live refusals 10-19..10-27 were mostly one-off bad JSON; a third try rescues most
+
+
+def resume_facts(ctx: dict) -> dict:
+    """The facts tailoring may use: summary, internship, skills, and the 4 resume projects with their credit."""
+    exp = (ctx.get("experience") or [{}])[0]
+    return {
+        "summary": ctx.get("summary", ""),
+        "internship": {"title": exp.get("title", ""), "company": exp.get("company", ""), "date": exp.get("date", ""),
+                       "did": exp.get("bullets", [])},
+        "skills_ai": ctx.get("skills_ai", ""), "skills_sys": ctx.get("skills_sys", ""), "skills_ui": ctx.get("skills_ui", ""),
+        "projects": [{"name": p.get("name"), "credit": p.get("credit", ""), "about": p.get("desc", ""),
+                      "did": p.get("resume_bullets") or []} for p in (ctx.get("projects") or [])[:4]],
+    }
 
 
 def _tailor_prompt(job: dict, text: str, ctx: dict, errors: list) -> str:
-    exp = (ctx.get("experience") or [{}])[0]
-    facts = {
-        "summary": ctx.get("summary", ""),
-        "internship": f"{exp.get('title', '')}, {exp.get('company', '')}, {exp.get('date', '')}",
-        "skills_ai": ctx.get("skills_ai", ""), "skills_sys": ctx.get("skills_sys", ""), "skills_ui": ctx.get("skills_ui", ""),
-        "projects": [{"name": p.get("name"), "about": p.get("desc", "")} for p in (ctx.get("projects") or [])[:4]],
-    }
-    prompt = (f"RESUME FACTS (the only facts you may use):\n{json.dumps(facts, ensure_ascii=False, indent=1)}\n\n"
+    prompt = (f"RESUME FACTS (the only facts you may use):\n{json.dumps(resume_facts(ctx), ensure_ascii=False, indent=1)}\n\n"
               f"JOB: {job.get('title')} at {job.get('company')} ({job.get('site')})\n{text[:6000]}")
     if errors:
         prompt += "\n\nYour last answer was refused for these reasons; fix them:\n- " + "\n- ".join(errors)
     return prompt
 
 
-def tailor(job: dict, text: str, ctx: dict) -> tuple:
-    """(tailoring, fit, why, errors): one LLM call plus one retry carrying the refusal reasons."""
-    errors = []
-    for _ in range(2):
+def _json_object(reply: str) -> dict:
+    start, end = reply.find("{"), reply.rfind("}")
+    return json.loads(reply[start:end + 1])
+
+
+def check_claims(tailoring: dict, job: dict, text: str, ctx: dict):
+    """Statements in the cover letter the resume facts do not support, from a second model: Kazuha's qwen, another
+    family than Chaewon's gpt-oss (Yunjin's Gemini answered in 115 s through 503s on 2026-10-27, qwen in under
+    1 s); None when it could not run."""
+    letter = "\n\n".join(tailoring.get("cover_paragraphs") or [])
+    prompt = (f"FACTS:\n{json.dumps(resume_facts(ctx), ensure_ascii=False, indent=1)}\n\n"
+              f"JOB: {job.get('title')} at {job.get('company')}\nPOSTING:\n{text[:3000]}\n\n"
+              f"TITLE: {tailoring.get('title', '')}\n\nCOVER LETTER:\n{letter}")
+    try:
+        found = _json_object(query_llm(prompt, CLAIM_SYSTEM, 0.0, agent="kazuha"))["unsupported"]
+    except Exception as e:  # quiet: the caller says on the card that the check did not run
+        print(f"⚠️ [job_hunt.check_claims] {type(e).__name__}: {e}", flush=True)
+        return None
+    return [str(c)[:200] for c in found if str(c).strip()] if isinstance(found, list) else None
+
+
+def tailor(job: dict, text: str, ctx: dict) -> dict:
+    """{"tailoring", "fit", "why", "gaps", "warnings", "errors"}: up to TAILOR_ATTEMPTS calls, each retry carrying
+    the reasons the last answer was refused (job_package.check, then check_claims). Flagged claims get one
+    rewrite; claims still flagged after it become warnings on the card, not a refusal: Hans reads the letter
+    before sending it. ponytail: one claim rewrite caps a job at 5 calls, as Groq's per-minute limit answered
+    429s on the 10-27 live test while the bots shared the key."""
+    refused = {"tailoring": None, "fit": 0, "why": "", "gaps": [], "warnings": []}
+    errors, rewrote = [], False
+    for attempt in range(TAILOR_ATTEMPTS):
         _checkpoint()
         try:
             reply = query_llm_structured(_tailor_prompt(job, text, ctx, errors), TAILOR_SYSTEM, 0.3, agent="chaewon").text
         except Exception as e:
             # llm_client already fell back across Groq and Gemini, so an error here means both are down: no retry.
-            return None, 0, "", [f"{type(e).__name__}: {e}"[:200]]
+            return {**refused, "errors": [f"{type(e).__name__}: {e}"[:200]]}
         _checkpoint()  # the call may have outlived the budget or Sakura's wait
         try:
-            start, end = reply.find("{"), reply.rfind("}")
-            answer = json.loads(reply[start:end + 1])
+            answer = _json_object(reply)
             tailoring = answer["tailoring"]
             if isinstance(tailoring, dict):
-                for k in job_package.SKILL_KEYS:  # models often send a skill line as a list
+                # The resume prints no summary, and over-long tailored ones were the top refusal (10-19..10-21).
+                tailoring.pop("summary", None)
+                for k in job_package.SKILL_KEYS:  # models often send a skill line as a list, or one item per line
                     if isinstance(tailoring.get(k), list):
                         tailoring[k] = ", ".join(str(s) for s in tailoring[k])
+                    elif isinstance(tailoring.get(k), str):
+                        tailoring[k] = ", ".join(s.strip() for s in tailoring[k].splitlines() if s.strip())
             errors = job_package.check(tailoring, ctx) if isinstance(tailoring, dict) else ["tailoring is not an object"]
         except (ValueError, KeyError, TypeError) as e:
             errors = [f"reply was not the JSON asked for ({type(e).__name__}: {e})"[:200]]
             continue
-        if not errors:
-            m = re.search(r"\d+", str(answer.get("fit") or "0"))  # tolerant: 85, "85", "85%"
-            fit = max(0, min(100, int(m.group()) if m else 0))
-            return tailoring, fit, str(answer.get("why") or "")[:200], []
-    return None, 0, "", errors
+        if errors:
+            continue
+        claims = check_claims(tailoring, job, text, ctx)
+        _checkpoint()
+        if claims and not rewrote and attempt < TAILOR_ATTEMPTS - 1:
+            errors, rewrote = [f"unsupported claim: {c}" for c in claims], True
+            continue
+        m = re.search(r"\d+", str(answer.get("fit") or "0"))  # tolerant: 85, "85", "85%"
+        gaps = answer.get("gaps") if isinstance(answer.get("gaps"), list) else []
+        return {"tailoring": tailoring, "fit": max(0, min(100, int(m.group()) if m else 0)),
+                "why": str(answer.get("why") or "")[:200], "gaps": [str(g)[:120] for g in gaps][:6],
+                "warnings": ["the claim check could not run: read the letter closely"] if claims is None else claims,
+                "errors": []}
+    return {**refused, "errors": errors}
+
+
+def tailor_into(d: Path, job: dict, text: str, ctx: dict) -> dict:
+    """tailor() for the job folder d: tailoring.json and the PDFs written there, a failed build added to errors."""
+    res = tailor(job, text, ctx)
+    if res["tailoring"]:
+        (d / "tailoring.json").write_text(json.dumps(res["tailoring"], indent=1, ensure_ascii=False), encoding="utf-8")
+        _checkpoint()
+        built = job_package.build(d)
+        res.update(errors=[] if built["ok"] else built["errors"], resume=built.get("resume"),
+                   cover_letter=built.get("cover_letter"))
+    return res
+
+
+def tailored_fields(res: dict) -> dict:
+    """The meta.json fields a tailoring sets (a failed build still records them, as before)."""
+    return {k: res[k] for k in ("fit", "why", "gaps", "warnings")}
 
 
 def write_meta(job_dir: Path, meta: dict) -> None:
@@ -361,7 +449,8 @@ def uncarded_folders(today: date, days: int = 7) -> list:
             found = date.fromisoformat(meta.get("found", ""))
         except (OSError, ValueError):
             continue
-        if meta.get("status") in ("queued", "needs_claude") and not meta.get("card_msg_id") \
+        # approved with no card: approved while untailored, then tailored on retry (the fresh card has the PDFs)
+        if meta.get("status") in ("queued", "needs_claude", "approved") and not meta.get("card_msg_id") \
                 and (today - found).days <= days:
             folders.append(str(meta_path.parent))
     return folders
@@ -375,11 +464,11 @@ def hunt(slot: str = ""):
         # failed, not attention: run_daily must leave the slot unclaimed and retry on the next tick.
         return SkillResult("failed", "Job hunt already running; try again when it finishes.")
     CANCEL.clear()
-    _RUN["started"] = time.monotonic()
+    _RUN.update(started=time.monotonic(), thread=threading.get_ident())
     try:
         return _hunt(slot, SkillResult)
     finally:
-        _RUN["started"] = None
+        _RUN.update(started=None, thread=None)
         CANCEL.clear()
         HUNT_LOCK.release()
 
@@ -432,17 +521,14 @@ def _hunt(slot: str, SkillResult):
                 d.mkdir()
                 (d / "posting.txt").write_text(f"{job.get('title')} at {job.get('company')}\n{job.get('url')}\n\n{text}",
                                                encoding="utf-8")
-                tailoring, fit, why, errors = tailor(job, text, ctx)
-                if tailoring:
-                    (d / "tailoring.json").write_text(json.dumps(tailoring, indent=1, ensure_ascii=False), encoding="utf-8")
-                    _checkpoint()
-                    res = job_package.build(d)
-                    errors = [] if res["ok"] else res["errors"]
-                    meta.update(fit=fit, why=why)
+                res = tailor_into(d, job, text, ctx)
+                errors = res["errors"]
+                if res["tailoring"]:
+                    meta.update(tailored_fields(res))
             except _Stop:
                 raise
             except Exception as e:
-                # One bad job never stops the run: it goes to Claude with the reason.
+                # One bad job never stops the run: it stays needs_claude with the reason, retried by the next hunt.
                 errors = [f"{type(e).__name__}: {e}"]
             _checkpoint()  # nothing is recorded for a job that finished after the budget or a cancel
         except _Stop as stop:
@@ -462,6 +548,13 @@ def _hunt(slot: str, SkillResult):
             continue
         folders.append(str(d))
         _append(seen_path, [f"{job.get('url')} | {today.isoformat()} | {meta['status']}"])  # per job: a crash later loses none
+
+    retried = []
+    if not stopped:
+        try:
+            retried = retry_and_expire(ctx, now, skip=set(folders))
+        except _Stop:
+            pass  # retries are extra: a deadline here keeps this run's new jobs; a cancel is caught just below
 
     if CANCEL.is_set() and not stopped:
         # Cancelled after the last checkpoint (e.g. during the final search query, with no job left to tailor).
@@ -483,11 +576,83 @@ def _hunt(slot: str, SkillResult):
     runs.mkdir(exist_ok=True)
     (runs / f"{slot}.json").write_text(json.dumps({"slot": slot, "built": folders, "skipped": skip_rows,
                                                    "failed_sources": failed_sources}, indent=1), encoding="utf-8")
-    data = {"jobs": folders, "skipped": skip_rows, "failed_sources": failed_sources, "slot": slot}
+    data = {"jobs": folders + retried, "skipped": skip_rows, "failed_sources": failed_sources, "slot": slot}
     queued = sum(1 for f in folders if json.loads((Path(f) / "meta.json").read_text(encoding="utf-8"))["status"] == "queued")
-    text = f"Job hunt {slot}: {queued} queued, {len(folders) - queued} for Claude, {len(skipped)} skipped"
+    text = f"Job hunt {slot}: {queued} queued, {len(folders) - queued} not tailored, {len(skipped)} skipped"
+    if retried:
+        text += f", {len(retried)} earlier job(s) tailored on retry"
     if failed_sources:
         text += f"; failed: {', '.join(failed_sources)}"
     if stopped:
         text += f"; {stopped}"
-    return SkillResult("done" if folders else "attention", text, data)
+    return SkillResult("done" if folders or retried else "attention", text, data)
+
+
+MAX_RETRIES = 2  # extra tailoring tries per needs_claude job, one per hunt
+EXPIRE_DAYS = 7
+
+
+def retry_and_expire(ctx: dict, now: datetime, limit: int = 3, skip=()) -> list:
+    """The upkeep the Claude routine used to do. Queued and needs_claude jobs found more than EXPIRE_DAYS ago
+    become expired; up to `limit` needs_claude jobs (not those in skip: this run's own) get another tailoring
+    try (MAX_RETRIES each). Returns the folders now queued, with card_msg_id reset so Sakura sends a fresh card
+    carrying the PDFs."""
+    queued = []
+    for meta_path in sorted((JOB_HUNT_DIR / "applications").glob("*/meta.json")):
+        d = meta_path.parent
+        if str(d) in skip:
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
+            found = date.fromisoformat(meta.get("found", ""))
+        except (OSError, ValueError, AttributeError):
+            continue
+        status, stamp = meta.get("status"), now.strftime("%Y-%m-%dT%H:%M")
+        if status in ("queued", "needs_claude") and (now.date() - found).days > EXPIRE_DAYS:
+            with META_LOCK:
+                meta = _read_meta_file(meta_path)
+                if meta and meta.get("status") in ("queued", "needs_claude"):
+                    meta.update(status="expired", updated=stamp)
+                    write_meta(d, meta)
+            continue
+        if status != "needs_claude" or meta.get("retries", 0) >= MAX_RETRIES or limit <= 0:
+            continue
+        try:
+            text = (d / "posting.txt").read_text(encoding="utf-8").split("\n\n", 1)[1]
+        except (OSError, IndexError):
+            continue
+        limit -= 1
+        job = {"title": meta.get("role", ""), "company": meta.get("company", ""), "site": meta.get("site", "")}
+        try:
+            res = tailor_into(d, job, text, ctx)
+        except _Stop:
+            raise
+        except Exception as e:
+            res = {"tailoring": None, "errors": [f"{type(e).__name__}: {e}"]}
+        _checkpoint()  # a retry that finished after the budget or a cancel records nothing
+        with META_LOCK:  # Hans may have reacted during the call: re-read, and never undo his choice (Codex QA F2)
+            meta = _read_meta_file(meta_path)
+            if not meta:
+                continue
+            meta.update(retries=meta.get("retries", 0) + 1, updated=stamp)
+            if res["tailoring"]:
+                meta.update(tailored_fields(res))
+            if res["errors"]:
+                meta["reason"] = "; ".join(res["errors"])[:300]
+            elif meta.get("status") in ("needs_claude", "approved"):
+                # Untailored becomes queued; an approval stays approved. Either way a fresh card carries the PDFs.
+                meta.update(status="queued" if meta["status"] == "needs_claude" else "approved", card_msg_id=0,
+                            reason="", built_by="lsfm-retry")
+                queued.append(str(d))
+            else:  # rejected (or another choice) meanwhile: the files are kept, the status is his
+                meta["reason"] = ""
+            write_meta(d, meta)
+    return queued
+
+
+def _read_meta_file(meta_path: Path) -> dict | None:
+    try:
+        meta = json.loads(Path(meta_path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None

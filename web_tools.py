@@ -74,6 +74,15 @@ async def scrape_job_url(url: str) -> dict:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    # LinkedIn's job page is login-walled, but its guest posting endpoint (the job hunt's source) is not.
+    if "linkedin.com" in url and linkedin_job_id(url):
+        try:
+            text = await run_heavy(fetch_linkedin_posting, url)
+            if len(text) > 150:
+                return {"url": url, "content": text[:15000], "success": True, "error": None}
+        except Exception as _exc:
+            print(f"⚠️ [web_tools.scrape_job_url] LinkedIn guest fetch failed: {type(_exc).__name__}: {_exc}", flush=True)
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -408,8 +417,9 @@ def fetch_linkedin_remote(query: str) -> list[dict]:
 
 
 def linkedin_job_id(url: str) -> str | None:
-    m = re.search(r"/jobs/view/(?:[^/?]*-)?(\d{6,})", url or "")
-    return m.group(1) if m else None
+    """The job id from /jobs/view/<id> or a search/collections link's currentJobId=<id>."""
+    m = re.search(r"/jobs/view/(?:[^/?]*-)?(\d{6,})|[?&]currentJobId=(\d{6,})", url or "")
+    return (m.group(1) or m.group(2)) if m else None
 
 
 def linkedin_description(html: str) -> str:
@@ -424,5 +434,22 @@ def fetch_linkedin_description(url: str) -> str:
     if not job_id:
         raise ValueError(f"not a LinkedIn job URL: {url}")
     return linkedin_description(get_with_backoff(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"))
+
+
+def linkedin_posting(html: str) -> str:
+    """'<title> at <company>' (when the guest page has them), a blank line, then the description."""
+    soup = BeautifulSoup(html, "html.parser")
+    title, org = soup.find(class_="top-card-layout__title"), soup.find(class_="topcard__org-name-link")
+    head = " at ".join(t.get_text(" ", strip=True) for t in (title, org) if t)
+    body = linkedin_description(html)
+    return f"{head}\n\n{body}" if head and body else body
+
+
+def fetch_linkedin_posting(url: str) -> str:
+    """A pasted LinkedIn link's posting through the guest endpoint, with its title and company."""
+    job_id = linkedin_job_id(url)
+    if not job_id:
+        raise ValueError(f"not a LinkedIn job URL: {url}")
+    return linkedin_posting(get_with_backoff(f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"))
 
 

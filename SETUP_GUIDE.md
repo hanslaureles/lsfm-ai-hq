@@ -15,7 +15,7 @@ The system distributes specialized cognitive domains across 5 distinct AI agents
 |---|---|---|
 | 📖 **00 · COMMAND DIRECTORY** | `#all-commands`<br>`#commands-chat` | Universal command reference cheatsheets & shared playground where any agent can be commanded |
 | 🌸 **01 · SAKURA — COMMAND** | `#command-center`<br>`#daily-briefing` | Master roadmap alignment, daily morning briefings, cross-agent pipeline dispatch (`!apply`), brain mode control (`!mode`), and 1-click reaction approvals |
-| ⭐ **03 · CHAEWON — CAREER & JOBS** | `#job-tailoring`<br>`#application-docs` | URL scraping, ATS keyword alignment, fit scoring (1–100%), tailored resume bullets, and human cover letters (`!tailor`) |
+| ⭐ **03 · CHAEWON — CAREER & JOBS** | `#job-tailoring`<br>`#application-docs` | URL scraping (LinkedIn links read directly), fit scoring with requirement gaps, skills and projects reordered (never rewritten), and a fact-checked cover letter (`!tailor`) |
 | 🎨 **04 · YUNJIN — PORTFOLIO & UX** | `#portfolio-audits`<br>`#project-status` | Automated portfolio health audits (`!audit`), case study critiques (`!critique`), and strategic portfolio project curation |
 | 💻 **05 · KAZUHA — CODE & BUILD** | `#frontend-lab`<br>`#git-log` | Code health & token adherence inspection (`!inspect`), accessible UI component generation (`!component`), git monitoring |
 | 🛡️ **06 · EUNCHAE — GUARDIAN** | `#pc-vitals`<br>`#system-alerts` | Real-time PC vitals (`!vitals`: CPU, RAM, Disk, Uptime), high-load alerts, bot gateway watchdog |
@@ -67,7 +67,7 @@ When you discover an exciting job posting, run:
 
 ### Collaboration Workflow:
 1. **Sakura (Dispatch):** Scrapes the URL (or parses text), identifies the role and company, and posts the mission dispatch card into **`#agent-handoffs`**.
-2. **Chaewon (Career):** Evaluates ATS fit score (**%**), crafts tailored resume bullets matching your CS degree and ROC internship, generates a tailored cover letter, saves the package to `applications/`, and posts to **`#agent-handoffs`**.
+2. **Chaewon (Career):** Scores fit and lists requirement gaps, reorders resume skills and projects from `memory/master_resume.md` (never adding or rewriting one), writes a cover letter that Kazuha's model fact-checks against the resume, saves the folder under `job-hunt/applications/`, and posts to **`#agent-handoffs`**.
 3. **Yunjin (Portfolio):** Selects the top 2 case studies from your portfolio (e.g. Vellum OS, Lumina Analytics, FinTrack, Aura) and provides interview walkthrough heuristics in **`#agent-handoffs`**.
 4. **Kazuha (Frontend):** Builds the frontend engineering talking points, highlighting your CS degree and design-token component systems in **`#agent-handoffs`**.
 5. **Sakura (Master Proposal):** Compiles the full package and posts the Master Proposal Card into **`#approvals`** with the markdown file attached and interactive **`✅`** / **`❌`** reaction buttons.
@@ -108,7 +108,7 @@ Native background loops (`discord.ext.tasks`) automatically handle team routines
 - `!ask [question]` — Strategic executive coaching and interview guidance.
 
 ### ⭐ Chaewon (Career Agent) — `#job-tailoring`
-- `!tailor [URL or text]` — Tailors resume bullets, cover letter, ATS fit score, and compiles PDF resume.
+- `!tailor [URL or text]` — Same guarded tailoring as the job hunt: fit, gaps, fact-checked cover letter, and both PDFs. LinkedIn links work; paste Jobstreet/Indeed text (start with `Role at Company :::` to skip the name guess).
 - `!pdf [target/company]` — Instantly compiles & uploads an ATS-compliant 1-page PDF Resume & Cover Letter for Hans.
 - `!profile` — Displays active candidate profile and skills memory.
 - `!history` — Lists recent tailored applications and match percentages.
