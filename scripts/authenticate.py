@@ -56,6 +56,10 @@ def main():
 
     TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
     print("\n🎉 SUCCESS! token.json has been created!", flush=True)
+    sys.path.insert(0, str(BASE_DIR))
+    import gmail_engine
+    if gmail_engine._after_sign_in():  # Sakura DMs a re-sign reminder 6 days from now
+        print("⏰ Sakura will remind you to re-sign in 6 days.", flush=True)
     print("=" * 65, flush=True)
 
     if AUTH_FILE.exists():

@@ -56,7 +56,7 @@ BRIEFING_DATE_FILE = MEMORY_DIR / "last_briefing_date.txt"
 ROLLUP_DATE_FILE = MEMORY_DIR / "last_rollup_date.txt"
 JOB_HUNT_SLOT_FILE = MEMORY_DIR / "last_job_hunt_slot.txt"
 JOB_HUNT_TIMEOUT_S = 660  # Sakura's wait; the hunt's own budget is job_hunt.HUNT_DEADLINE_S (480 s)
-JOB_HUNT_DASHBOARD = os.getenv("JOB_HUNT_DASHBOARD", "")  # the private claude.ai dashboard link, kept out of the repo
+JOB_HUNT_DASHBOARD = os.getenv("JOB_HUNT_DASHBOARD", "")  # optional link shown in the hunt header (unset since 2026-10-27)
 
 def find_channel_by_name(guild: discord.Guild, name: str):
     """Locates a text channel in the guild matching name case-insensitively."""
@@ -288,8 +288,8 @@ async def deliver_job_hunt(channel, result):
                                    + ", ".join(not_sent)[:1800])
     try:
         ObsidianClient().log_session("Sakura", f"Job hunt {data.get('slot', '')}: {len(folders)} queued",
-                                     [f"Skipped: {len(skipped)}", f"Failed sources: {', '.join(failed) or 'none'}",
-                                      f"Dashboard: {JOB_HUNT_DASHBOARD or 'not set (JOB_HUNT_DASHBOARD in .env)'}"])
+                                     [f"Skipped: {len(skipped)}", f"Failed sources: {', '.join(failed) or 'none'}"]
+                                     + ([f"Dashboard: {JOB_HUNT_DASHBOARD}"] if JOB_HUNT_DASHBOARD else []))
     except Exception as _exc:
         print(f"⚠️ [bot_sakura.deliver_job_hunt] suppressed {type(_exc).__name__}: {_exc}", flush=True)
 

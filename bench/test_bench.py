@@ -119,5 +119,38 @@ class TestMissionTrace(unittest.TestCase):
         json.dumps(extra["trace"])  # lands in the JSON report as-is
 
 
+class TestBakeoffSummary(unittest.TestCase):
+    """bakeoff_models.summarize: refusals and fallbacks are counted, not hidden."""
+
+    def test_counts_per_writer(self):
+        import bakeoff_models
+        row = dict(gaps=[], errors=[], answered_by=[], letter=[], title="")
+        rows = [dict(row, model="a", ok=True, fit=40, warnings=[], writer_calls=1, fell_back=False, seconds=10),
+                dict(row, model="a", ok=True, fit=20, warnings=["x"], writer_calls=2, fell_back=True, seconds=30),
+                dict(row, model="b", ok=False, fit=0, warnings=[], writer_calls=3, fell_back=False, seconds=12)]
+        s = bakeoff_models.summarize(rows)
+        self.assertEqual(s["a"], {"runs": 2, "ok": 2, "mean_writer_calls": 1.5, "claim_warning_runs": 1,
+                                  "fallback_runs": 1, "p50_s": 20.0, "mean_fit": 30.0})
+        self.assertEqual((s["b"]["ok"], s["b"]["mean_fit"]), (0, None))
+    def test_output_stays_in_bench_results(self):  # Codex QA U3
+        import bakeoff_models
+        inside = bakeoff_models.RESULTS / "2026-10-27-model-bakeoff"
+        self.assertEqual(bakeoff_models.results_stem(str(inside)), inside.resolve())
+        for raw in ("C:/outside/x", str(bakeoff_models.RESULTS / ".." / "x"), str(bakeoff_models.RESULTS / "sub" / "x"),
+                    str(bakeoff_models.HQ / "x")):
+            self.assertIsNone(bakeoff_models.results_stem(raw), raw)
+
+    def test_pacing_is_left_out_of_the_seconds(self):  # Codex QA U4
+        import bakeoff_models
+        from unittest import mock
+        clock = {"t": 0.0}
+        with mock.patch.object(bakeoff_models.time, "perf_counter", side_effect=lambda: clock["t"]), \
+                mock.patch.object(bakeoff_models.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            def work():
+                bakeoff_models.pace()           # 30 s on purpose
+                clock["t"] += 2.5               # the real call
+                return "ok"
+            self.assertEqual(bakeoff_models.timed(work), ("ok", 2.5))
+
 if __name__ == "__main__":
     unittest.main()

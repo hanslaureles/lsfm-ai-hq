@@ -995,6 +995,13 @@ class TestGmailNeverSignsInFromABot(unittest.TestCase):
         patcher = mock.patch.object(gmail_engine.Credentials, "from_authorized_user_file", return_value=dead)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A sign-in schedules the expiry reminder: keep it out of the live memory/reminders.json
+        # (Codex QA 2026-10-27: this suite had replaced Hans's real reminder with a test one).
+        import reminders
+        self.reminders = Path(tmp.name) / "reminders.json"
+        patcher = mock.patch.object(reminders, "STORE", self.reminders)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_dead_token_returns_none_and_says_how_to_sign_in(self):
         import gmail_engine
@@ -1019,6 +1026,9 @@ class TestGmailNeverSignsInFromABot(unittest.TestCase):
         with mock.patch("builtins.print"):
             self.assertEqual(gmail_engine.get_gmail_service(interactive=True), "service")
         self.flow.from_client_secrets_file.assert_called_once()
+        import reminders
+        pending = reminders.pending(self.reminders)  # the sign-in's re-sign reminder, in the test's own file
+        self.assertEqual([gmail_engine.EXPIRY_REMINDER in r["text"] for r in pending], [True])
 
 
 class TestBriefingChecksEmailsAgainstLiveCI(unittest.TestCase):

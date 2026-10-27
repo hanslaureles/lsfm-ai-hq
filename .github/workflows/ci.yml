@@ -45,3 +45,4 @@ jobs:
           test_routing_eval.py test_skills.py
           test_job_package.py test_apply_pipeline.py test_file_search.py test_reminders.py
           test_wake_word.py
+          test_bridge.py

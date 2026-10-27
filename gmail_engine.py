@@ -2,6 +2,7 @@ import sys
 import re
 import base64
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows consoles
@@ -40,7 +41,31 @@ LSFM_LABEL_DEFINITIONS = [
 ]
 
 AUTH_HELP = ("Gmail sign-in is missing or expired: run `python scripts/authenticate.py` "
-             "from the repo root, then restart the bots.")
+             "from the repo root (no bot restart needed: token.json is read on every call).")
+
+# Hans keeps the Google app in Testing, where a sign-in ends 7 days after consent. The reminder comes a day early.
+EXPIRY_REMINDER = "Gmail sign-in expires"
+REMIND_AFTER = timedelta(days=6)
+
+
+def remind_before_expiry(signed_in: Optional[datetime] = None, store: Optional[Path] = None) -> dict:
+    """After a sign-in: replaces any pending Gmail expiry reminder with one 6 days later, which Sakura's
+    reminder loop DMs to Hans like any other reminder."""
+    import reminders
+    signed_in = signed_in or datetime.now()
+    reminders.cancel(EXPIRY_REMINDER, store)
+    return reminders.add(f"{EXPIRY_REMINDER} in about a day (signed in {signed_in:%a %d %b %H:%M}). "
+                         "Re-sign in the HQ folder: python scripts/authenticate.py",
+                         signed_in + REMIND_AFTER, store)
+
+
+def _after_sign_in() -> bool:
+    try:
+        remind_before_expiry()
+        return True
+    except Exception as e:  # quiet: the sign-in itself worked; only the reminder is missing
+        print(f"⚠️ [Gmail Engine] could not schedule the expiry reminder: {type(e).__name__}: {e}", flush=True)
+        return False
 
 def is_configured() -> bool:
     """Checks if either a valid token or credentials.json exists."""
@@ -82,6 +107,7 @@ def get_gmail_service(interactive: bool = False):
                 flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
                 creds = flow.run_local_server(port=0)
                 TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+                _after_sign_in()
             except Exception as e:
                 print(f"⚠️ [Gmail Engine] OAuth authentication flow failed: {e}")
                 return None

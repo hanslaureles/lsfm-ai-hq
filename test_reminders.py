@@ -84,5 +84,23 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(reminders.pending(self.store), [])
 
 
+class GmailExpiryReminderTest(unittest.TestCase):
+    """A Gmail sign-in schedules one re-sign reminder 6 days later; signing in again replaces it."""
+
+    def test_one_reminder_six_days_after_the_latest_sign_in(self):
+        import gmail_engine
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "reminders.json"
+            reminders.add("Call the dentist", datetime(2026, 10, 30, 9, 0), store)
+            gmail_engine.remind_before_expiry(datetime(2026, 10, 19, 21, 0), store)
+            gmail_engine.remind_before_expiry(NOW, store)  # re-signed early: the old reminder goes
+            items = reminders.pending(store)
+        gmail = [i for i in items if gmail_engine.EXPIRY_REMINDER in i["text"]]
+        self.assertEqual(len(gmail), 1)
+        self.assertEqual(gmail[0]["due"], "2026-11-01T15:04")
+        self.assertIn("python scripts/authenticate.py", gmail[0]["text"])
+        self.assertIn("Call the dentist", [i["text"] for i in items])  # other reminders untouched
+
+
 if __name__ == "__main__":
     unittest.main()

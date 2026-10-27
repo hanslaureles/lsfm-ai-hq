@@ -156,7 +156,17 @@ async def main():
         print("❌ No tokens configured in .env!", flush=True)
         return
 
-    await asyncio.gather(*tasks)
+    bridge_runner = None
+    try:
+        import bridge  # Ciel's way in (split plan C1); off without LSFM_BRIDGE_TOKEN, and never needed by the bots
+        bridge_runner = await bridge.start()
+    except Exception as e:  # bridge.start already catches its own failures; this keeps the bots up regardless
+        print(f"⚠️ [Bridge] not started: {type(e).__name__}: {e}", flush=True)
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        if bridge_runner:
+            await bridge_runner.cleanup()
 
 def entry(log_path: Path = BOTS_LOG, marker: Path = STOP_MARKER):
     prepare_start(marker)
