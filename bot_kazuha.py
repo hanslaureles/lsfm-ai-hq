@@ -5,6 +5,7 @@ from pathlib import Path
 import discord
 import health_recorder
 import owner_guard
+import discord_routing
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -36,7 +37,7 @@ from kazuha_engine import (
     execute_research_scout
 )
 from rag_engine import query_rag, build_index, get_rag_stats
-from discord_utils import send_clean_embeds, clip, EMBED_TITLE_MAX
+from discord_utils import send_clean_embeds, clip, EMBED_TITLE_MAX, start_task_thread
 from llm_client import get_brain_status
 import skills  # !ask and code review run the same skills Ciel uses (ADR-001 R2)
 
@@ -47,6 +48,7 @@ REVIEW_MAX = 3600
 
 async def reply_with_review(target, status_msg, staged_only: bool):
     """Runs the kazuha.review skill and replies with its embed, or with the honest failure text."""
+    target = await start_task_thread(target, "Code and security review")
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, skills.run_skill, "kazuha.review",
                                         {"scope": "staged" if staged_only else "all"})
@@ -143,6 +145,7 @@ async def scheduled_scout_loop():
 
 @bot.event
 async def on_ready():
+    discord_routing.register("kazuha", bot.user)
     print("=" * 60, flush=True)
     print(f"💻 KAZUHA is ONLINE! Logged in as {bot.user.name} (ID: {bot.user.id})", flush=True)
     print(f"🌐 Connected to {len(bot.guilds)} server(s):", flush=True)
@@ -161,17 +164,12 @@ async def on_message(message):
     if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
-    if message.content.startswith("!"):
-        await bot.process_commands(message)
+    clean_content = discord_routing.content_for(message, "kazuha", bot)
+    if clean_content is None:
         return
-
-    channel_name = getattr(message.channel, "name", "").lower()
-    is_mentioned = bot.user in message.mentions
-    is_home_channel = any(k in channel_name for k in ["frontend-lab", "git-log", "commands-chat"])
-    if not (is_home_channel or is_mentioned):
+    if clean_content.startswith("!"):
+        await discord_routing.process_commands(bot, message, clean_content)
         return
-
-    clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
     if not clean_content:
         await message.reply("💻 Yes, Hans? Ask me to inspect code, generate a component, check git, or answer frontend engineering questions!")
         return
@@ -545,6 +543,7 @@ async def inspect(ctx, filename: str = None):
         await ctx.reply("💻 Please specify a file to inspect! Examples: `!inspect styles/styles.css`, `!inspect app/page.tsx`, `!inspect app/case-lsfm/page.tsx`")
         return
 
+    ctx = await start_task_thread(ctx, f"Code review · {filename}")
     status_msg = await ctx.reply(f"🔍 **Kazuha is inspecting `{filename}` in `portfolio-site/`...**")
 
     loop = asyncio.get_running_loop()
@@ -574,6 +573,7 @@ async def component(ctx, *, description: str = None):
         await ctx.reply("🛠️ Please describe the component you want to build! Example: `!component A responsive pricing card with dark mode HSL tokens and hover micro-interaction`")
         return
 
+    ctx = await start_task_thread(ctx, "Frontend component")
     status_msg = await ctx.reply(f"✨ **Kazuha is architecting component:** *\"{description[:60]}...\"*")
 
     loop = asyncio.get_running_loop()

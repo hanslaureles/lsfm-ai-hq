@@ -7,6 +7,18 @@
 
 ---
 
+## Everyday Discord use
+
+Start with the pinned task menu in `#all-commands`, then use the matching agent's home channel. Shared conversation in `#commands-chat` goes to Sakura. An explicit bot mention selects that agent; `@Kazuha !ask your question` also works as a command. Unique commands go to their owner. Duplicate names use the home agent when it owns the command; otherwise `!audit` selects Yunjin, `!qa` selects Eunchae, and shared `!help`/`!ping` selects Sakura. Unknown bot mentions never select an LSFM agent by display name.
+
+Application tailoring, team application packages, portfolio audits/critiques, code reviews/inspection, component drafting and code verification start task threads when Discord permits. Follow-ups inherit the parent channel's agent, and mentions can select another. If threads cannot be created, results stay in the original channels. Daily briefings show needs-attention items first with full details in a thread; routine vitals update one saved card across days, while actionable alerts remain visible.
+
+Job-hunt and team-proposal cards have owner-only **Approve package**, **Skip** and **View documents** buttons that survive restarts. A package with QA warnings labels its approval as an override. Legacy reaction approvals, including Chaewon's tailoring cards, remain supported. Approval records a decision and may copy documents within the same server; it never submits an application. Review the facts and files before submitting manually.
+
+To refresh the pinned menu/reference cards, run `python scripts/update_server_guide.py --guild-id <your server ID>` from HQ to preview. Add `--apply` to publish. The updater edits only its own marked cards and preserves history and other pins; without bot pin permission, pin the starter from your Discord account. Keep `memory/discord_vitals_messages.json` local; it stores the routine status-card IDs.
+
+---
+
 ## 🌸 1. Team Architecture & Agent Pillars
 
 The system distributes specialized cognitive domains across 5 distinct AI agents, each with dedicated Discord bot tokens, custom avatars, and channel boundaries:

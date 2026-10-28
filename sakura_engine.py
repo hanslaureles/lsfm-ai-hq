@@ -178,28 +178,22 @@ The user is an Applied AI Engineer & Full-Stack Builder with dual-competency in 
 ---
 
 ### INSTRUCTIONS:
-Compose a structured, authoritative, and inspiring Daily Morning Briefing with these exact markdown sections:
+Write a concise Daily Morning Briefing, at most 300 words, with these exact headings in this order:
 
-1. 🌸 **GOOD MORNING & SPRINT FOCUS**:
-   - 2-sentence warm, commanding greeting from Sakura.
-   - Today's core sprint theme (e.g. "High-Leverage AI Agent Outreach" or "Demonstrating Heuristic Intelligence").
+**Needs your attention**
+- At most three specific actions or decisions, most urgent first. If none are evidenced, say so.
+- Identify time-sensitive recruiter replies or application reminders with their dates.
+- Emails are notifications from the day they were sent, not live status. Call a CI failure current only if the live CI status above shows that workflow failing; if it now succeeds, say the emailed failure is old and was fixed. If the CI status is unavailable, give the email's date and say the current state was not checked.
 
-2. 📬 **INBOUND & RECRUITER PULSE**:
-   - Crisp summary of the inbox state.
-   - Note any action items on job leads or application reminders.
-   - Emails are notifications from the day they were sent, not live status. Call a CI failure current only if the live CI status above shows that workflow failing; if it now succeeds, say the emailed failure is old and was fixed. If the CI status is unavailable, give the email's date and say the current state was not checked.
+**Current state**
+- Briefly summarize the inbox, {app_count} archived applications and observed hardware state.
+- Do not state scores, pass rates, asset counts or health results unless they appear in the status data above.
 
-3. 📊 **TEAM READINESS**:
-   - ⭐ **Chaewon (Career):** {app_count} applications logged; ready to tailor new roles (`!tailor`).
-   - 🎨 **Yunjin (Portfolio):** ready for portfolio audits and case-study critiques (`!audit`, `!critique`).
-   - 💻 **Kazuha (Code & Knowledge):** ready for code review and knowledge-base questions (`!git review`, `!ask`).
-   - Do not state scores, pass rates, asset counts or health results unless they appear in the status data above.
-   - 🛡️ **Eunchae (Guardian):** {vitals_summary}.
+**Details**
+- Supporting context and next steps only. Use the existing home channels for follow-up.
+- Keep the 5-agent team roles accurate: Sakura planning, Chaewon career, Yunjin portfolio, Kazuha code and research, Eunchae health and QA.
 
-4. 🎯 **TOP 3 PRIORITIES FOR HANS TODAY**:
-   - Concrete, high-leverage actions to move the needle toward securing an Applied AI Engineer role.
-
-Tone: Calm, commanding, warm, razor-sharp leadership. Avoid robotic clichés.
+Tone: Warm, direct and practical. No long greeting, repeated role introductions or motivational closing.
 """
     briefing_text = query_llm(prompt, temperature=0.4, agent="sakura")
 
@@ -464,24 +458,21 @@ Deliver the formal **Evening Standup & Daily Rollup** to close out the day for H
 ---
 
 ### INSTRUCTIONS:
-Compose a structured, authoritative, and empowering Evening Standup report with these exact markdown sections:
+Write a concise Evening Standup report, at most 300 words, with these exact headings in this order:
 
-1. 🌆 **DAY IN REVIEW & KEY ACHIEVEMENTS**:
-   - 2-3 sentence executive recap of what the team and Hans accomplished today.
-   - Highlight the primary engineering, architectural, or career wins.
+**Needs your attention**
+- At most three unresolved decisions, blockers or next actions for tomorrow, most urgent first.
+- If no action is evidenced, say so. Separate proposed work from approved or completed work.
 
-2. 📊 **TEAM PULSE & GIT HYGIENE**:
-   - One line each for Chaewon, Yunjin, Kazuha, and Eunchae, from their dispatches above; an agent with no dispatch today had nothing logged, so say that instead of describing its work.
-   - Note commits and uncommitted files per repo from the data above. Do not claim test results, portfolio health or resource figures that are not in the data above.
-   - Call the agents "the 5-agent team" or "the team", never a swarm, squad or daemons.
+**Completed today**
+- Summarize only observed accomplishments from the dispatches above.
+- An agent with no dispatch today had nothing logged; do not describe invented work.
 
-3. 🔮 **STRATEGIC CARRYOVER & QUEUE FOR TOMORROW**:
-   - 2-3 concrete tasks prioritized for tomorrow morning's launchpad (e.g., following up on inbound signals, next engineering sprint).
+**Details**
+- Note commits and uncommitted files per repo from the data above. Do not claim test results, portfolio health or resource figures that are not in the data above.
+- Call the agents "the 5-agent team" or "the team", never a swarm, squad or daemons.
 
-4. 🌸 **CHIEF OF STAFF CLOSING WORDS**:
-   - Concise, warm, inspiring closing note from Sakura reminding Hans of his competitive differentiation as a builder who ships.
-
-Tone: Calm, commanding, executive, razor-sharp. Avoid robotic clichés.
+Tone: Warm, direct and practical. No repeated role introductions or motivational closing.
 """
     rollup_text = query_llm(prompt, temperature=0.4, agent="sakura")
 

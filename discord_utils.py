@@ -2,6 +2,8 @@ import asyncio
 import discord
 from discord.ext import commands
 import re
+import json
+from pathlib import Path
 from typing import List, Optional, Union, Any
 
 # Discord rejects the whole message (HTTP 400) if any embed exceeds these.
@@ -41,6 +43,98 @@ async def confirm_action(bot, ctx, text: str, timeout: float = 60.0) -> bool:
 
 def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+class ThreadTarget:
+    """Keep existing command/message handlers while sending their replies into the task thread."""
+
+    def __init__(self, original, thread):
+        self.original, self.channel = original, thread
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    async def reply(self, *args, **kwargs):
+        return await self.channel.send(*args, **kwargs)
+
+    async def send(self, *args, **kwargs):
+        return await self.channel.send(*args, **kwargs)
+
+    def typing(self):
+        return self.channel.typing()
+
+
+async def _details_thread(message, name):
+    create = getattr(message, "create_thread", None)
+    if create is None:
+        return None
+    try:
+        return await create(name=clip(name, 100), auto_archive_duration=1440,
+                            reason="Keep one LSFM task together")
+    except discord.HTTPException as error:
+        print(f"[Discord] Thread unavailable: {type(error).__name__}; keeping results in channel", flush=True)
+        return None
+
+
+async def start_task_thread(target, name):
+    if not getattr(target, "guild", None) or isinstance(target.channel, discord.Thread):
+        return target
+    message = getattr(target, "message", target)
+    thread = getattr(message, "thread", None) or await _details_thread(message, name)
+    return ThreadTarget(target, thread) if thread is not None else target
+
+
+async def send_summary(channel, title, content, color=0xF472B6, footer_text="LSFM AI HQ",
+                       status_msg_to_delete=None):
+    """A short overview; the complete result stays available even if threads are unavailable."""
+    if status_msg_to_delete is not None:
+        try:
+            await status_msg_to_delete.delete()
+        except Exception:  # quiet: transient cleanup must never discard the completed report
+            pass
+    if len(content) <= 1000 or isinstance(channel, discord.Thread):
+        await send_clean_embeds(channel, title, content, color=color, footer_text=footer_text)
+        return
+    overview = content.split("\n\n**Details**", 1)[0]
+    embed = discord.Embed(title=clip(title, 256), description=clip(overview, 900), color=color)
+    embed.set_footer(text=footer_text + " · Full report in the thread")
+    message = await channel.send(embed=embed)
+    thread = await _details_thread(message, title + " · details")
+    if thread is None:
+        embed.set_footer(text=footer_text + " · Full report follows below")
+        if hasattr(message, "edit"):
+            await message.edit(embed=embed)
+    await send_clean_embeds(thread or channel, title + " · full report", content,
+                            color=color, footer_text=footer_text)
+
+
+async def update_status_card(channel, embed, state_file):
+    """Reuse the bot's saved routine status message, including after process restart."""
+    state_file = Path(state_file)
+    try:
+        saved = json.loads(state_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        saved = {}
+    if not isinstance(saved, dict):
+        raise ValueError("Status message state must be an object")
+    message_id = saved.get(str(channel.id))
+    if message_id is not None:
+        try:
+            message = await channel.fetch_message(int(message_id))
+        except discord.NotFound:
+            message = None
+        if message is not None:
+            if message.author.id != channel.guild.me.id:
+                raise ValueError("Saved status message belongs to another author")
+            await message.edit(embed=embed)
+            return message
+    message = await channel.send(embed=embed)
+    saved[str(channel.id)] = message.id
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = state_file.with_suffix(".tmp")
+    temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    temporary.replace(state_file)
+    return message
 
 def split_smart_chunks(text: str, max_chars: int = 3800) -> List[str]:
     """

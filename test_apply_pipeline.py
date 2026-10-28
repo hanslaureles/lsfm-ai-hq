@@ -31,8 +31,9 @@ class FakeChannel:
     def __init__(self):
         self.id, self.sent = next(IDS), []
 
-    async def send(self, content=None, embed=None, files=None):
+    async def send(self, content=None, embed=None, files=None, view=None):
         msg = FakeMessage(content, embed, files)
+        msg.view = view
         self.sent.append(msg)
         return msg
 

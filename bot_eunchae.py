@@ -6,6 +6,7 @@ from pathlib import Path
 import discord
 import health_recorder
 import owner_guard
+import discord_routing
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -38,11 +39,12 @@ from eunchae_engine import (
     ALERT_LIMITS,
 )
 import skills  # !vitals and !test run the same skills Ciel uses (ADR-001 R1)
-from discord_utils import send_clean_embeds
+from discord_utils import send_clean_embeds, update_status_card, start_task_thread
 from daily_once import run_daily
 
 MEMORY_DIR = Path(__file__).parent / "memory"
 VITALS_DATE_FILE = MEMORY_DIR / "last_vitals_post_date.txt"
+VITALS_MESSAGE_FILE = MEMORY_DIR / "discord_vitals_messages.json"
 LAST_ALERT_TIME = 0
 LAST_OBSIDIAN_STATE = None
 
@@ -109,7 +111,7 @@ async def watchdog_loop():
         embed.add_field(name="💽 C: Drive Free", value=f"**{v['disk_free_gb']} GB** Free", inline=True)
         embed.add_field(name="⏱️ System Uptime", value=f"**{v['uptime_str']}**", inline=True)
         embed.set_footer(text="Eunchae • Routine System Pulse • LE SSERAFIM AI HQ")
-        await channel.send(embed=embed)
+        await update_status_card(channel, embed, VITALS_MESSAGE_FILE)
         print(f"🛡️ [Eunchae] Daily vitals pulse delivered to #{channel.name}", flush=True)
 
     await run_daily(VITALS_DATE_FILE, now.strftime("%Y-%m-%d"), "vitals card (!vitals)",
@@ -150,6 +152,7 @@ async def obsidian_heartbeat_loop():
 
 @bot.event
 async def on_ready():
+    discord_routing.register("eunchae", bot.user)
     print("=" * 60, flush=True)
     print(f"🛡️ EUNCHAE is ONLINE! Logged in as {bot.user.name} (ID: {bot.user.id})", flush=True)
     print(f"🌐 Connected to {len(bot.guilds)} server(s):", flush=True)
@@ -171,17 +174,12 @@ async def on_message(message):
     if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
-    if message.content.startswith("!"):
-        await bot.process_commands(message)
+    clean_content = discord_routing.content_for(message, "eunchae", bot)
+    if clean_content is None:
         return
-
-    channel_name = getattr(message.channel, "name", "").lower()
-    is_mentioned = bot.user in message.mentions
-    is_home_channel = any(k in channel_name for k in ["pc-vitals", "system-alerts", "commands-chat"])
-    if not (is_home_channel or is_mentioned):
+    if clean_content.startswith("!"):
+        await discord_routing.process_commands(bot, message, clean_content)
         return
-
-    clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
     if not clean_content:
         await message.reply("🛡️ Yes, Hans! Eunchae is on watch! Ask me for vitals, hardware checkup, or just chat!")
         return
@@ -497,6 +495,7 @@ async def test_command(ctx, *, filepath: str = None):
         return
 
     clean_fp = filepath.strip("`'\" ")
+    ctx = await start_task_thread(ctx, f"Code verification · {clean_fp}")
     status_msg = await ctx.reply(f"🧪 **Eunchae is testing `{clean_fp}`...**")
 
     loop = asyncio.get_running_loop()

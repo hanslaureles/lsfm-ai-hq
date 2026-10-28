@@ -60,7 +60,7 @@ class SakuraBriefingTest(unittest.TestCase):
     def test_a_briefing_cut_off_at_part_2_is_not_sent_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "last_briefing_date.txt"
-            channel = FakeChannel(fail_on=2)
+            channel = FakeChannel(fail_on=3)  # overview, then full report parts one and two
             now = real_datetime.datetime(2026, 1, 5, 9, 0)
             self.run_check(channel, state, now)
             self.run_check(channel, state, now + real_datetime.timedelta(minutes=30))  # the next loop tick
@@ -78,7 +78,8 @@ class SakuraBriefingTest(unittest.TestCase):
             self.run_check(channel, state, now)
             self.run_check(channel, state, now + real_datetime.timedelta(minutes=30))
             self.assertEqual(state.read_text(encoding="utf-8"), "2026-01-05")
-        self.assertEqual([t[-10:] for t in channel.sent], ["(Part 1/3)", "(Part 2/3)", "(Part 3/3)"])
+        self.assertEqual([t[-10:] for t in channel.sent[1:]], ["(Part 1/3)", "(Part 2/3)", "(Part 3/3)"])
+        self.assertEqual(len(channel.sent), 4)  # compact overview plus complete fallback report
 
     def test_nothing_before_8(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -247,6 +248,7 @@ class FakeCardMessage:
     def __init__(self, content=None, embed=None, files=None):
         FakeCardMessage._next += 1
         self.id, self.content, self.embeds, self.files = FakeCardMessage._next, content, [embed] if embed else [], files or []
+        self.author = types.SimpleNamespace(id=1)
         self.reactions, self.edits = [], []
 
     async def add_reaction(self, emoji):
@@ -258,6 +260,7 @@ class FakeCardMessage:
 
 class FakeCardChannel:
     name = "approvals"
+    id = 1
 
     def __init__(self):
         self.messages = []
@@ -343,7 +346,7 @@ class JobHuntBotTest(unittest.TestCase):
             self.assertIn("2 ready for review, 1 skipped", channel.messages[0].content)
             for msg in channel.messages[1:]:
                 self.assertEqual(msg.reactions, ["✅", "❌"])
-            self.assertEqual(save.call_args_list[0].args[1], {"type": "job_hunt", "folder": str(a)})
+            self.assertEqual(save.call_args_list[0].args[1], {"type": "job_hunt", "folder": str(a), "channel_id": channel.id})
             self.assertEqual(self.meta(a)["card_msg_id"], channel.messages[1].id)
             self.assertEqual(len(channel.messages[1].files), 1)
             self.assertIn("tries again on the next hunt", channel.messages[2].embeds[0].description)
@@ -463,17 +466,18 @@ class JobHuntBotTest(unittest.TestCase):
             self.assertEqual(self.meta(d)["status"], "queued")
             self.assertEqual(card.edits, [])
 
-    def test_the_card_shows_the_cover_letter(self):  # LSFM B2: ✅ after reading the letter, not blind
+    def test_the_card_points_to_the_cover_letter(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
             d = self.folder(tmp, "a")
             (d / "tailoring.json").write_text(json.dumps({"cover_paragraphs": ["Dear Acme,", "I build agents."]}),
                                               encoding="utf-8-sig")
             embed = bot_sakura.build_job_card(self.meta(d), bot_sakura._read_letter(d))
-            self.assertIn("**Cover letter**\nDear Acme,\n\nI build agents.", embed.description)
+            self.assertIn("Read the full text in the attached PDF", embed.description)
+            self.assertNotIn("Dear Acme", embed.description)
             long = bot_sakura.build_job_card(self.meta(d), ["word " * 2000])
             self.assertLessEqual(len(long.description), 4096)
-            self.assertTrue(long.description.endswith("(full text in the PDF)"))
+            self.assertIn("Neither submits an application", long.description)
             self.assertEqual(bot_sakura._read_letter(Path(tmp) / "missing"), [])
 
     def test_reaction_on_a_deleted_job_folder_changes_nothing(self):

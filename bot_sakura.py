@@ -7,6 +7,7 @@ from pathlib import Path
 import discord
 import health_recorder
 import owner_guard
+import discord_routing
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -44,7 +45,8 @@ from yunjin_engine import select_portfolio_pitch
 import re
 from kazuha_engine import generate_tech_pitch
 from web_tools import find_url_in_text, scrape_job_url
-from discord_utils import send_clean_embeds, confirm_action
+from discord_utils import send_clean_embeds, confirm_action, send_summary, start_task_thread
+from approval_views import restore_approval_views
 from daily_once import run_daily
 from heavy_jobs import run_blocking
 from skills import run_skill, SkillResult, SKILLS
@@ -89,8 +91,8 @@ async def post_daily_briefing_if_due():
         return await asyncio.get_running_loop().run_in_executor(None, generate_morning_briefing)
 
     async def deliver(briefing_text):
-        await send_clean_embeds(
-            target=channel,
+        await send_summary(
+            channel=channel,
             title=f"🌅 Daily Executive Morning Briefing — {now.strftime('%A, %b %d')}",
             content=briefing_text,
             color=0xF472B6,
@@ -120,8 +122,8 @@ async def post_evening_rollup_if_due():
         return res["rollup_text"]
 
     async def deliver(rollup_text):
-        await send_clean_embeds(
-            target=channel,
+        await send_summary(
+            channel=channel,
             title=f"🌆 Evening Standup & Daily Rollup — {now.strftime('%A, %b %d')}",
             content=rollup_text,
             color=0x9B59B6,
@@ -169,7 +171,7 @@ def _read_letter(folder: Path) -> list:
 
 
 def build_job_card(meta: dict, letter: list = ()) -> discord.Embed:
-    """The #approvals card. The letter is shown in full (when it fits), so ✅ is given after reading it."""
+    """A short decision card; the attached files hold the full package."""
     lines = []
     if meta.get("status") == "needs_claude":
         lines.append("Chaewon could not tailor this one yet: " +
@@ -184,17 +186,17 @@ def build_job_card(meta: dict, letter: list = ()) -> discord.Embed:
     if meta.get("warnings"):
         lines.append("⚠️ **Check before sending:** " + "; ".join(meta["warnings"])[:600])
     if letter:
-        text = "\n\n".join(letter)
-        room = 4000 - len("\n".join(lines))  # Discord allows 4096 characters in a description
-        lines.append("\n**Cover letter**\n" + (text if len(text) <= room else text[:room - 40] + "… (full text in the PDF)"))
+        lines.append("**Cover letter:** prepared. Read the full text in the attached PDF before approving.")
+    lines.append("**Your choice:** Approve package records your intent to apply; Skip records a pass. "
+                 "Neither submits an application. Use View documents to review the attached files.")
     embed = discord.Embed(title=f"⭐ {meta.get('role', '')} · {meta.get('company', '')}"[:256],
-                          description="\n".join(lines) or None, url=meta.get("url") or None, color=0xF472B6)
+                          description="\n".join(lines)[:4096], url=meta.get("url") or None, color=0xF472B6)
     embed.add_field(name="Site", value=meta.get("site") or "?", inline=True)
     embed.add_field(name="Posted", value=meta.get("posted") or "?", inline=True)
     embed.add_field(name="Fit", value=str(meta["fit"]) if meta.get("fit") else "not tailored", inline=True)
     if meta.get("salary"):
         embed.add_field(name="Salary", value=meta["salary"][:100], inline=True)
-    embed.set_footer(text=f"✅ I'll apply · ❌ skip it · {meta.get('id', '')}"[:2048])
+    embed.set_footer(text=f"Approve package / Skip · ✅ / ❌ also work · {meta.get('id', '')}"[:2048])
     return embed
 
 
@@ -240,6 +242,7 @@ async def prepare_job_hunt(slot: str):
 
 async def send_job_card(channel, folder: Path):
     """One #approvals card with its PDFs and ✅/❌; its message id goes into meta.json."""
+    from approval_views import ApprovalView
     meta = _read_meta(folder)
     files = []
     try:  # open inside the cleanup scope: a second PDF that fails to open must not leak the first (Codex F3)
@@ -249,11 +252,12 @@ async def send_job_card(channel, folder: Path):
                     files.append(discord.File(str(p), filename=p.name))
                 except OSError as e:  # locked or unreadable: the card goes out without it
                     print(f"⚠️ [Sakura] could not attach {p.name}: {type(e).__name__}: {e}", flush=True)
-        msg = await channel.send(embed=build_job_card(meta, _read_letter(folder)), files=files)
+        msg = await channel.send(embed=build_job_card(meta, _read_letter(folder)), files=files,
+                                 view=ApprovalView(bot, handle_approval_action))
     finally:
         for f in files:  # a failed send would otherwise keep the PDFs locked on Windows
             f.close()
-    save_pending_proposal(msg.id, {"type": "job_hunt", "folder": str(folder)})
+    save_pending_proposal(msg.id, {"type": "job_hunt", "folder": str(folder), "channel_id": channel.id})
     # Re-read after the awaits: the Claude run may have changed meta.json while the card was uploading.
     # ponytail: the re-read narrows the race with the Claude run to one read/write, no file lock
     meta = _read_meta(folder)
@@ -425,6 +429,8 @@ def build_brain_embed(status: dict) -> discord.Embed:
 
 @bot.event
 async def on_ready():
+    discord_routing.register("sakura", bot.user)
+    restore_approval_views(bot, handle_approval_action)
     print("=" * 60, flush=True)
     print(f"🌸 SAKURA is ONLINE! Logged in as {bot.user.name} (ID: {bot.user.id})", flush=True)
     print(f"🌐 Connected to {len(bot.guilds)} server(s):", flush=True)
@@ -485,8 +491,9 @@ def format_proposal_qa_status(
         qa_summary_line = f"🛡️ **Eunchae (QA):** **{verdict} ({qa_score}%)** — Checked against past lessons\n"
         action_instructions = (
             "👉 **Next Action for Hans:**\n"
-            "• Click **✅** below to **Approve & Finalize** (marks status Approved in applications log)\n"
-            "• Click **❌** below to **Discard / Shelve** this application"
+            "• **Approve package** / ✅: Approve & Finalize records approval and copies files to #application-docs.\n"
+            "• **Skip** / ❌: shelve this package. **View documents**: review the attachments.\n"
+            "You still submit the application yourself; these choices never submit it."
         )
         proposal_color = default_score_color
     else:
@@ -494,8 +501,9 @@ def format_proposal_qa_status(
         action_instructions = (
             f"👉 **Next Action for Hans:**\n"
             f"• ⚠️ **QA WARNING**: Application package did not pass QA audit. Review issues in {handoffs_channel_mention}.\n"
-            f"• Click **✅** below to **Force Approve & Finalize** (overrides QA audit warning)\n"
-            f"• Click **❌** below to **Discard / Shelve** this application"
+            f"• **Override QA & approve** / ✅: Force Approve & Finalize overrides this warning and records approval.\n"
+            f"• **Skip** / ❌: shelve this package. **View documents**: review the attachments.\n"
+            f"You still submit the application yourself; these choices never submit it."
         )
         proposal_color = 0xED4245 if qa_score < 50 else 0xFEE75C
 
@@ -535,7 +543,14 @@ def _apply_files(tailor_res: dict) -> list:
     """Chaewon's package file and PDFs that exist, as fresh discord.File objects (a File can be sent once)."""
     paths = [(tailor_res.get("saved_file"), tailor_res.get("filename")),
              (tailor_res.get("resume_pdf"), None), (tailor_res.get("cover_pdf"), None)]
-    return [discord.File(p, filename=name or Path(p).name) for p, name in paths if p and Path(p).exists()]
+    files = []
+    for p, name in paths:
+        if p and Path(p).is_file():
+            try:
+                files.append(discord.File(p, filename=Path(name or p).name))
+            except OSError as exc:
+                print(f"[Sakura] could not attach {Path(p).name}: {type(exc).__name__}", flush=True)
+    return files
 
 
 async def handle_apply_orchestration(target_message, job_input: str = "", attachments = None):
@@ -561,6 +576,7 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
         )
         return
 
+    target_message = await start_task_thread(target_message, "Application package")
     company = "Target Company"
     role = "Design / Engineering Role"
 
@@ -603,7 +619,8 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
 
     # Resolve target channels in guild
     guild = target_message.guild
-    handoffs_ch = find_channel_by_name(guild, "agent-handoffs") or target_message.channel
+    handoffs_ch = (target_message.channel if isinstance(target_message.channel, discord.Thread)
+                   else find_channel_by_name(guild, "agent-handoffs") or target_message.channel)
     approvals_ch = find_channel_by_name(guild, "approvals") or target_message.channel
 
     await status_msg.edit(
@@ -762,14 +779,34 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
                     f"💻 **Kazuha (Frontend):** {kazuha_line}\n"
                     f"{qa_line}"
                     f"{pdf_line}"
-                    f"📁 **Package File:** `{tailor_res.get('filename', '')}`\n\n"
+                    f"📁 **Package File:** `{Path(tailor_res.get('filename') or 'Package pending').name}`\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{action_instructions}",
         color=proposal_color
     )
-    proposal_embed.set_footer(text="Sakura • Chief of Staff • React below to Approve or Discard")
+    proposal_embed.set_footer(text="Sakura • Choose Approve package or Skip • ✅ / ❌ also work")
 
-    proposal_msg = await approvals_ch.send(embed=proposal_embed, files=_apply_files(tailor_res))
+    from approval_views import ApprovalView
+    proposal_files = _apply_files(tailor_res)
+    try:
+        proposal_msg = await approvals_ch.send(embed=proposal_embed, files=proposal_files,
+                                               view=ApprovalView(bot, handle_approval_action,
+                                                                 qa_warning=bool(failed) or not qa_res.get("passed")))
+    finally:
+        for file in proposal_files:
+            file.close()
+
+    # Save before adding reactions: a quick click must find its pending package.
+    save_pending_proposal(proposal_msg.id, {
+        "company": company,
+        "role": role,
+        "score": score,
+        "channel_id": approvals_ch.id,
+        "filename": tailor_res.get("filename", ""),
+        "saved_file": str(tailor_res.get("saved_file", "")),
+        "resume_pdf": str(tailor_res.get("resume_pdf", "")) if tailor_res.get("resume_pdf") else "",
+        "cover_pdf": str(tailor_res.get("cover_pdf", "")) if tailor_res.get("cover_pdf") else ""
+    })
 
     # Add reaction buttons for Hans
     try:
@@ -778,86 +815,89 @@ async def handle_apply_orchestration(target_message, job_input: str = "", attach
     except Exception as e:
         print(f"⚠️ Could not add reactions: {e}", flush=True)
 
-    # Persist pending proposal state for reaction listener
-    save_pending_proposal(proposal_msg.id, {
-        "company": company,
-        "role": role,
-        "score": score,
-        "filename": tailor_res.get("filename", ""),
-        "saved_file": str(tailor_res.get("saved_file", "")),
-        "resume_pdf": str(tailor_res.get("resume_pdf", "")) if tailor_res.get("resume_pdf") else "",
-        "cover_pdf": str(tailor_res.get("cover_pdf", "")) if tailor_res.get("cover_pdf") else ""
-    })
-
     final_reply = (
         f"🌸 **Team Pipeline Complete!**\n"
         f"• Mission handoff cards posted in <#{handoffs_ch.id}>\n"
-        f"• Master Proposal awaiting your reaction in <#{approvals_ch.id}>!"
+        f"• Package awaiting your choice in <#{approvals_ch.id}>!"
     )
     await status_msg.edit(content=final_reply)
 
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    """Listens for Hans's ✅ or ❌ reaction on proposal cards in #approvals or #job-tailoring."""
-    if payload.user_id == bot.user.id:
+    """Legacy cards and buttons share one owner-gated, serialized decision path."""
+    if payload.user_id == bot.user.id or str(payload.emoji) not in ("✅", "❌"):
         return
+    if await owner_guard.allowed(bot, payload.user_id):
+        await handle_approval_action(payload.message_id, payload.channel_id, str(payload.emoji))
 
-    emoji_str = str(payload.emoji)
-    if emoji_str not in ["✅", "❌"]:
-        return
-    if not await owner_guard.allowed(bot, payload.user_id):  # only Hans approves or skips a card
-        return
 
-    data = get_pending_proposal(payload.message_id)
-    if not data:
-        return
+async def handle_approval_action(message_id, channel_id, emoji_str, target_msg=None):
+    from approval_views import action_lock
+    async with action_lock(message_id):
+        return await _handle_approval_action(message_id, channel_id, emoji_str, target_msg)
 
-    channel = bot.get_channel(payload.channel_id)
+
+async def _handle_approval_action(message_id, channel_id, emoji_str, target_msg=None):
+    if emoji_str not in ("✅", "❌", "documents"):
+        return "Unknown approval choice."
+    data = get_pending_proposal(message_id)
+    if not data and emoji_str != "documents":
+        return "This package has already been handled or is no longer available."
+    if data and data.get("channel_id") not in (None, channel_id):
+        return "This card does not match the pending package."
+    channel = bot.get_channel(channel_id)
     if not channel:
-        return
-
-    try:
-        target_msg = await channel.fetch_message(payload.message_id)
-    except Exception as _exc:
-        print(f"⚠️ [bot_sakura.on_raw_reaction_add] suppressed {type(_exc).__name__}: {_exc}", flush=True)
-        target_msg = None
+        return "The approval channel is no longer available."
+    if target_msg is None:
+        try:
+            target_msg = await channel.fetch_message(message_id)
+        except discord.HTTPException:
+            return "The approval card is no longer available. No decision was recorded."
+    author_id = target_msg.author.id
+    expected_author = data.get("author_id") if data else None
+    trusted_author = (author_id == expected_author if expected_author is not None else
+                      author_id == bot.user.id or discord_routing.agent_for(author_id) == "chaewon")
+    if target_msg.id != message_id or not trusted_author:
+        return "This is not a trusted team's approval card. No decision was recorded."
+    if emoji_str == "documents":
+        attachments = target_msg.attachments
+        if attachments:
+            return "Review these files before approving:\n" + "\n".join(
+                f"• [{a.filename}]({a.url})" for a in attachments)
+        return "No documents are attached to this card yet. Re-run !apply to prepare a package."
 
     if data.get("type") == "job_hunt":  # job hunt cards: only meta.json changes, never the !apply flow below
         new = apply_job_reaction(Path(data["folder"]), emoji_str)
+        label = {"approved": "Approved", "rejected": "Rejected", "withdrawn": "Withdrawn"}.get(new)
         if new and target_msg and target_msg.embeds:
             embed = target_msg.embeds[0]
-            label = {"approved": "Approved", "rejected": "Rejected",
-                     "withdrawn": "Withdrawn"}[new]
             embed.set_footer(text=f"{label} · {Path(data['folder']).name}"[:2048])
             await target_msg.edit(embed=embed)
-        return
+        return (f"{label}. No application was submitted." if new else
+                "This job no longer accepts that choice. Its current status was kept.")
 
     if emoji_str == "✅":
-        mark_proposal_status(payload.message_id, "Approved")
+        if not mark_proposal_status(message_id, "Approved"):
+            return "This package has already been handled."
 
         # Resolve #application-docs channel across guild
         docs_ch = None
         if target_msg and target_msg.guild:
             docs_ch = discord.utils.get(target_msg.guild.text_channels, name="application-docs")
-        if not docs_ch:
-            for guild in bot.guilds:
-                docs_ch = discord.utils.get(guild.text_channels, name="application-docs")
-                if docs_ch:
-                    break
 
         embed = discord.Embed(
             title="✅ Application Approved by Hans!",
             description=f"Package for **{data['role']}** at **{data['company']}** is **Approved**.\n"
-                        f"• Status has been logged as **Approved** in `memory/applications_log.md`.\n"
-                        + (f"• Finalized Resume & Cover Letter PDFs delivered to <#{docs_ch.id}>!" if docs_ch else "• Finalized documents saved in applications archive."),
+                        f"• Approval has been recorded. No application was submitted.\n"
+                        + (f"• Documents will be copied to <#{docs_ch.id}>." if docs_ch else "• Review the files attached to the approval card."),
             color=0x57F287
         )
         embed.set_footer(text="LE SSERAFIM AI HQ • Approved by Candidate")
-        if target_msg:
+        try:
             await target_msg.reply(embed=embed)
-        else:
-            await channel.send(embed=embed)
+        except discord.HTTPException as exc:
+            print(f"[Sakura] approval recorded; confirmation failed: {type(exc).__name__}", flush=True)
 
         # Dispatch both finalized Resume & Cover Letter PDFs to #application-docs
         if docs_ch:
@@ -865,27 +905,25 @@ async def on_raw_reaction_add(payload):
             safe_comp = re.sub(r'[^a-zA-Z0-9_-]', '_', data.get('company', '')).strip('_')
 
             resume_path = Path(data.get("resume_pdf", ""))
-            if not resume_path.exists():
-                matches = list(APPLICATIONS_DIR.glob(f"*{safe_comp}*Resume*.pdf"))
+            if not resume_path.is_file():
+                matches = list(APPLICATIONS_DIR.glob(f"*{safe_comp}*Resume*.pdf")) if safe_comp else []
                 if matches:
                     resume_path = matches[0]
 
             cover_path = Path(data.get("cover_pdf", ""))
-            if not cover_path.exists():
-                matches = list(APPLICATIONS_DIR.glob(f"*{safe_comp}*CoverLetter*.pdf"))
+            if not cover_path.is_file():
+                matches = list(APPLICATIONS_DIR.glob(f"*{safe_comp}*CoverLetter*.pdf")) if safe_comp else []
                 if matches:
                     cover_path = matches[0]
 
             saved_file = Path(data.get("saved_file", ""))
-            if not saved_file.exists() and data.get("filename"):
+            if not saved_file.is_file() and data.get("filename"):
                 saved_file = APPLICATIONS_DIR / data["filename"]
 
-            if resume_path.exists():
-                files_to_send.append(discord.File(str(resume_path), filename=resume_path.name))
-            if cover_path.exists():
-                files_to_send.append(discord.File(str(cover_path), filename=cover_path.name))
-            if saved_file.exists():
-                files_to_send.append(discord.File(str(saved_file), filename=saved_file.name))
+            files_to_send = _apply_files({
+                "resume_pdf": str(resume_path), "cover_pdf": str(cover_path),
+                "saved_file": str(saved_file)
+            })
 
             if files_to_send:
                 try:
@@ -904,9 +942,13 @@ async def on_raw_reaction_add(payload):
                     appr_doc_embed.set_footer(text="LE SSERAFIM AI HQ • Approved Application Vault")
                     await docs_ch.send(embed=appr_doc_embed, files=files_to_send)
                 except Exception as e:
-                    print(f"⚠️ Could not mirror approved package to #application-docs: {e}", flush=True)
+                    print(f"⚠️ Could not mirror approved package to #application-docs: {type(e).__name__}", flush=True)
+                finally:
+                    for file in files_to_send:
+                        file.close()
     elif emoji_str == "❌":
-        mark_proposal_status(payload.message_id, "Discarded")
+        if not mark_proposal_status(message_id, "Discarded"):
+            return "This package has already been handled."
         embed = discord.Embed(
             title="❌ Application Discarded & Noted in QA Memory",
             description=f"The application proposal for **{data['role']}** at **{data['company']}** has been shelved / discarded.\n\n"
@@ -922,23 +964,20 @@ async def on_raw_reaction_add(payload):
         else:
             await channel.send(embed=embed)
 
+    return "Package approved. No application was submitted." if emoji_str == "✅" else "Package skipped. No application was submitted."
+
 
 @bot.event
 async def on_message(message):
     if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
-    if message.content.startswith("!"):
-        await bot.process_commands(message)
+    clean_content = discord_routing.content_for(message, "sakura", bot)
+    if clean_content is None:
         return
-
-    channel_name = getattr(message.channel, "name", "").lower()
-    is_mentioned = bot.user in message.mentions
-    is_home_channel = any(k in channel_name for k in ["command-center", "daily-briefing", "commands-chat"])
-    if not (is_home_channel or is_mentioned):
+    if clean_content.startswith("!"):
+        await discord_routing.process_commands(bot, message, clean_content)
         return
-
-    clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
     if not clean_content and not message.attachments:
         await message.reply("🌸 Yes, Hans? I'm here. How can I help orchestrate today?")
         return
@@ -981,8 +1020,8 @@ async def on_message(message):
         async with message.channel.typing():
             try:
                 briefing_text = await loop.run_in_executor(None, generate_morning_briefing)
-                await send_clean_embeds(
-                    target=message,
+                await send_summary(
+                    channel=message.channel,
                     title="🌅 Daily Executive Morning Briefing",
                     content=briefing_text,
                     color=0xF472B6,
@@ -1157,8 +1196,8 @@ async def briefing(ctx):
         await status_msg.edit(content=f"❌ Failed to generate briefing: `{e}`")
         return
 
-    await send_clean_embeds(
-        target=ctx,
+    await send_summary(
+        channel=ctx.channel,
         title="🌅 Daily Executive Morning Briefing",
         content=briefing_text,
         color=0xF472B6,
@@ -1178,8 +1217,8 @@ async def rollup_command(ctx):
         await status_msg.edit(content=f"❌ Failed to compile evening rollup: `{e}`")
         return
 
-    await send_clean_embeds(
-        target=ctx,
+    await send_summary(
+        channel=ctx.channel,
         title=f"🌆 Evening Standup & Daily Rollup — {res['date_str']}",
         content=res["rollup_text"],
         color=0x9B59B6,

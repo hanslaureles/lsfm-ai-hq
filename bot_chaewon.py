@@ -6,6 +6,7 @@ from pathlib import Path
 import discord
 import health_recorder
 import owner_guard
+import discord_routing
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -33,7 +34,7 @@ owner_guard.install(bot)  # commands, chat and reactions: Hans only
 
 from scout import analyze_and_tailor, extract_job_meta, consult_career, answer_screening_questions, MEMORY_DIR
 from web_tools import find_url_in_text, scrape_job_url, get_portal_search_links
-from discord_utils import send_clean_embeds, confirm_action
+from discord_utils import send_clean_embeds, confirm_action, start_task_thread
 from daily_once import run_daily
 from pdf_engine import describe_portfolio_sync, OWNER_EMAIL
 import skills  # !rebuild_resume and !scout run the same skills as Ciel (ADR-001 R3)
@@ -108,6 +109,7 @@ async def scheduled_resume_loop():
 
 @bot.event
 async def on_ready():
+    discord_routing.register("chaewon", bot.user)
     print("=" * 60, flush=True)
     print(f"⭐ CHAEWON is ONLINE! Logged in as {bot.user.name} (ID: {bot.user.id})", flush=True)
     print(f"🌐 Connected to {len(bot.guilds)} server(s):", flush=True)
@@ -133,6 +135,7 @@ async def handle_tailoring(target_message, job_text: str = "", attachments = Non
         await target_message.reply("⭐ Drop a job link, paste a job description, or attach a `.txt` file!")
         return
 
+    target_message = await start_task_thread(target_message, "Job application tailoring")
     company = "Target Company"
     role = "Design / Engineering Role"
 
@@ -225,6 +228,8 @@ async def handle_tailoring(target_message, job_text: str = "", attachments = Non
     try:
         from sakura_engine import save_pending_proposal
         save_pending_proposal(sent_reply.id, {
+            "author_id": sent_reply.author.id,
+            "channel_id": target_message.channel.id,
             "company": result["company"],
             "role": result["role"],
             "score": score,
@@ -241,17 +246,12 @@ async def on_message(message):
     if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
-    if message.content.startswith("!"):
-        await bot.process_commands(message)
+    clean_content = discord_routing.content_for(message, "chaewon", bot)
+    if clean_content is None:
         return
-
-    channel_name = getattr(message.channel, "name", "").lower()
-    is_mentioned = bot.user in message.mentions
-    is_home_channel = any(k in channel_name for k in ["job-tailoring", "application-docs", "commands-chat"])
-    if not (is_home_channel or is_mentioned):
+    if clean_content.startswith("!"):
+        await discord_routing.process_commands(bot, message, clean_content)
         return
-
-    clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
     has_url = bool(find_url_in_text(clean_content))
     has_attachment = bool(message.attachments)
     is_job_posting = (

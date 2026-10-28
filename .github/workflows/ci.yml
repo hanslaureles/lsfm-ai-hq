@@ -46,3 +46,4 @@ jobs:
           test_job_package.py test_apply_pipeline.py test_file_search.py test_reminders.py
           test_wake_word.py
           test_bridge.py
+          test_discord_routing.py test_approval_views.py test_discord_delivery.py test_server_guide.py

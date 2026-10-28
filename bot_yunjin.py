@@ -6,6 +6,7 @@ from pathlib import Path
 import discord
 import health_recorder
 import owner_guard
+import discord_routing
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
@@ -29,7 +30,7 @@ owner_guard.install(bot)  # commands, chat and reactions: Hans only
 
 from yunjin_engine import critique_case_study, consult_yunjin, PORTFOLIO_DIR, MEMORY_DIR
 import skills  # the audit runs the same yunjin.audit skill Ciel uses (ADR-001 R2)
-from discord_utils import send_clean_embeds
+from discord_utils import send_clean_embeds, start_task_thread
 from daily_once import run_daily
 from llm_client import get_brain_status
 
@@ -101,6 +102,7 @@ async def scheduled_audit_loop():
 
 @bot.event
 async def on_ready():
+    discord_routing.register("yunjin", bot.user)
     print("=" * 60, flush=True)
     print(f"🎨 YUNJIN is ONLINE! Logged in as {bot.user.name} (ID: {bot.user.id})", flush=True)
     print(f"🌐 Connected to {len(bot.guilds)} server(s):", flush=True)
@@ -119,17 +121,12 @@ async def on_message(message):
     if message.author.bot or not await owner_guard.allowed(bot, message.author):
         return
 
-    if message.content.startswith("!"):
-        await bot.process_commands(message)
+    clean_content = discord_routing.content_for(message, "yunjin", bot)
+    if clean_content is None:
         return
-
-    channel_name = getattr(message.channel, "name", "").lower()
-    is_mentioned = bot.user in message.mentions
-    is_home_channel = any(k in channel_name for k in ["portfolio-audits", "project-status", "commands-chat"])
-    if not (is_home_channel or is_mentioned):
+    if clean_content.startswith("!"):
+        await discord_routing.process_commands(bot, message, clean_content)
         return
-
-    clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
     if not clean_content:
         await message.reply("🎨 Yes, Hans? Ask me for an audit, critique on a case study (LSFM, Lumina, Vellum, FinTrack, Aura, Memory), or design feedback!")
         return
@@ -139,6 +136,7 @@ async def on_message(message):
 
     # 1. Full portfolio audit trigger
     if any(k in lower for k in ["run audit", "portfolio audit", "check portfolio", "broken images", "audit full", "health check"]):
+        message = await start_task_thread(message, "Portfolio audit")
         status_msg = await message.reply("🎨 **Yunjin is scanning `portfolio-site/` assets, images, and UX layout...**")
         try:
             async with message.channel.typing():
@@ -163,6 +161,7 @@ async def on_message(message):
     # 2. Specific case study critique
     for proj in ["vellum", "lumina", "fintrack", "aura"]:
         if proj in lower:
+            message = await start_task_thread(message, f"Portfolio review · {proj}")
             status_msg = await message.reply(f"🔬 **Yunjin is reviewing the case study for {proj.upper()}...**")
             try:
                 async with message.channel.typing():
@@ -282,6 +281,7 @@ async def status(ctx):
 
 @bot.command(name="audit")
 async def audit(ctx):
+    ctx = await start_task_thread(ctx, "Portfolio audit")
     status_msg = await ctx.reply("🔍 **Yunjin is scanning your portfolio codebase...**\n*(Checking image assets, HTML markup, typography tokens, and recruiter heuristics)*")
     
     loop = asyncio.get_running_loop()
@@ -340,6 +340,7 @@ async def critique(ctx, project: str = None):
         await ctx.reply(embed=embed)
         return
 
+    ctx = await start_task_thread(ctx, f"Portfolio review · {project}")
     status_msg = await ctx.reply(f"🔬 **Yunjin is reading `app/case-{project.lower()}/page.tsx` through a Design Director lens...**")
 
     loop = asyncio.get_running_loop()
